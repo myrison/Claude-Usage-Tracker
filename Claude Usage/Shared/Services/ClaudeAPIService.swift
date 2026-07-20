@@ -732,26 +732,44 @@ class ClaudeAPIService: APIServiceProtocol {
                 }
             }
 
-            // Extract Opus weekly usage (seven_day_opus)
+            // The API is migrating per-model weekly breakdowns from fixed top-level keys
+            // (seven_day_opus/seven_day_sonnet) to a generic `limits` array where each entry
+            // carries `scope.model.display_name`. Prefer the legacy key when present (older
+            // accounts/API versions), falling back to the generic array otherwise. Fable has
+            // no legacy key at all — it only ever appears in the `limits` array.
+            let scopedLimits = json["limits"] as? [[String: Any]]
+
+            // Extract Opus weekly usage (seven_day_opus, falling back to limits[])
             var opusPercentage = 0.0
-            if let sevenDayOpus = json["seven_day_opus"] as? [String: Any] {
-                if let utilization = sevenDayOpus["utilization"] {
-                    opusPercentage = parseUtilization(utilization)
-                }
+            if let sevenDayOpus = json["seven_day_opus"] as? [String: Any],
+               let utilization = sevenDayOpus["utilization"] {
+                opusPercentage = parseUtilization(utilization)
+            } else if let opusLimit = UsageLimitParsing.parseWeeklyScopedLimit(from: scopedLimits, modelDisplayName: "Opus") {
+                opusPercentage = opusLimit.percentage
             }
 
-            // Extract Sonnet weekly usage (seven_day_sonnet)
+            // Extract Sonnet weekly usage (seven_day_sonnet, falling back to limits[])
             var sonnetPercentage = 0.0
             var sonnetResetTime: Date? = nil
-            if let sevenDaySonnet = json["seven_day_sonnet"] as? [String: Any] {
-                if let utilization = sevenDaySonnet["utilization"] {
-                    sonnetPercentage = parseUtilization(utilization)
-                }
+            if let sevenDaySonnet = json["seven_day_sonnet"] as? [String: Any],
+               let utilization = sevenDaySonnet["utilization"] {
+                sonnetPercentage = parseUtilization(utilization)
                 if let resetsAt = sevenDaySonnet["resets_at"] as? String {
                     let formatter = ISO8601DateFormatter()
                     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
                     sonnetResetTime = formatter.date(from: resetsAt)
                 }
+            } else if let sonnetLimit = UsageLimitParsing.parseWeeklyScopedLimit(from: scopedLimits, modelDisplayName: "Sonnet") {
+                sonnetPercentage = sonnetLimit.percentage
+                sonnetResetTime = sonnetLimit.resetTime
+            }
+
+            // Extract Fable weekly usage (limits[] only — no legacy top-level key exists)
+            var fablePercentage = 0.0
+            var fableResetTime: Date? = nil
+            if let fableLimit = UsageLimitParsing.parseWeeklyScopedLimit(from: scopedLimits, modelDisplayName: "Fable") {
+                fablePercentage = fableLimit.percentage
+                fableResetTime = fableLimit.resetTime
             }
 
             // We don't know user's plan, so we use 0 for limits we can't determine
@@ -763,6 +781,7 @@ class ClaudeAPIService: APIServiceProtocol {
             let weeklyTokens = Int(Double(weeklyLimit) * (weeklyPercentage / 100.0))
             let opusTokens = Int(Double(weeklyLimit) * (opusPercentage / 100.0))
             let sonnetTokens = Int(Double(weeklyLimit) * (sonnetPercentage / 100.0))
+            let fableTokens = Int(Double(weeklyLimit) * (fablePercentage / 100.0))
 
             let usage = ClaudeUsage(
                 sessionTokensUsed: sessionTokens,
@@ -778,6 +797,9 @@ class ClaudeAPIService: APIServiceProtocol {
                 sonnetWeeklyTokensUsed: sonnetTokens,
                 sonnetWeeklyPercentage: sonnetPercentage,
                 sonnetWeeklyResetTime: sonnetResetTime,
+                fableWeeklyTokensUsed: fableTokens,
+                fableWeeklyPercentage: fablePercentage,
+                fableWeeklyResetTime: fableResetTime,
                 costUsed: nil,
                 costLimit: nil,
                 costCurrency: nil,
@@ -860,6 +882,9 @@ class ClaudeAPIService: APIServiceProtocol {
             sonnetWeeklyTokensUsed: 0,
             sonnetWeeklyPercentage: 0,
             sonnetWeeklyResetTime: nil,
+            fableWeeklyTokensUsed: 0,
+            fableWeeklyPercentage: 0,
+            fableWeeklyResetTime: nil,
             costUsed: nil,
             costLimit: nil,
             costCurrency: nil,

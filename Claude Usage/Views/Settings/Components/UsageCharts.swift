@@ -548,6 +548,18 @@ struct SnapshotRow: View {
                         .foregroundColor(.secondary)
                 }
             }
+
+            if let fablePercentage = snapshot.fableWeeklyPercentage, fablePercentage > 0 {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("\(Int(fablePercentage))%")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+
+                    Text("Fable")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+            }
         }
     }
 
@@ -588,6 +600,8 @@ struct SnapshotRow: View {
             opusWeeklyPercentage: 30,
             sonnetWeeklyTokensUsed: 200000,
             sonnetWeeklyPercentage: 20,
+            fableWeeklyTokensUsed: 50000,
+            fableWeeklyPercentage: 5,
             triggeringResetTime: Date().addingTimeInterval(-7 * 24 * 60 * 60)
         ),
         UsageSnapshot(
