@@ -641,6 +641,18 @@ struct SmartUsageDashboard: View {
                 )
             }
 
+            if usage.fableWeeklyTokensUsed > 0 {
+                UsageRow(
+                    title: "menubar.fable_usage".localized,
+                    subtitle: nil,
+                    usedPercentage: usage.fableWeeklyPercentage,
+                    showRemaining: showRemainingPercentage,
+                    resetTime: usage.fableWeeklyResetTime,
+                    periodDuration: nil,
+                    timeDisplay: timeDisplay
+                )
+            }
+
             // Extra usage (cost-based)
             if let used = usage.costUsed, let limit = usage.costLimit, let currency = usage.costCurrency, limit > 0 {
                 let usedPercentage = (used / limit) * 100.0
