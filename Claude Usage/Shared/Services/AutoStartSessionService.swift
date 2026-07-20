@@ -272,7 +272,7 @@ final class AutoStartSessionService {
         if let sevenDayOpus = json["seven_day_opus"] as? [String: Any],
            let utilization = sevenDayOpus["utilization"] {
             opusPercentage = parseUtilization(utilization)
-        } else if let opusLimit = parseWeeklyScopedLimit(from: scopedLimits, modelDisplayName: "Opus") {
+        } else if let opusLimit = UsageLimitParsing.parseWeeklyScopedLimit(from: scopedLimits, modelDisplayName: "Opus") {
             opusPercentage = opusLimit.percentage
         }
 
@@ -287,7 +287,7 @@ final class AutoStartSessionService {
                 formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
                 sonnetResetTime = formatter.date(from: resetsAt)
             }
-        } else if let sonnetLimit = parseWeeklyScopedLimit(from: scopedLimits, modelDisplayName: "Sonnet") {
+        } else if let sonnetLimit = UsageLimitParsing.parseWeeklyScopedLimit(from: scopedLimits, modelDisplayName: "Sonnet") {
             sonnetPercentage = sonnetLimit.percentage
             sonnetResetTime = sonnetLimit.resetTime
         }
@@ -295,7 +295,7 @@ final class AutoStartSessionService {
         // Extract Fable weekly usage (limits[] only — no legacy top-level key exists)
         var fablePercentage = 0.0
         var fableResetTime: Date? = nil
-        if let fableLimit = parseWeeklyScopedLimit(from: scopedLimits, modelDisplayName: "Fable") {
+        if let fableLimit = UsageLimitParsing.parseWeeklyScopedLimit(from: scopedLimits, modelDisplayName: "Fable") {
             fablePercentage = fableLimit.percentage
             fableResetTime = fableLimit.resetTime
         }
@@ -329,35 +329,6 @@ final class AutoStartSessionService {
             lastUpdated: Date(),
             userTimezone: .current
         )
-    }
-
-    /// Finds a model-scoped weekly limit entry in the generic `limits` array by display name.
-    /// See ClaudeAPIService.parseWeeklyScopedLimit for the shape this reads.
-    private func parseWeeklyScopedLimit(
-        from limits: [[String: Any]]?,
-        modelDisplayName: String
-    ) -> (percentage: Double, resetTime: Date?)? {
-        guard let limits else { return nil }
-
-        for limit in limits {
-            guard let group = limit["group"] as? String, group == "weekly" else { continue }
-            guard let scope = limit["scope"] as? [String: Any],
-                  let model = scope["model"] as? [String: Any],
-                  let displayName = model["display_name"] as? String,
-                  displayName.caseInsensitiveCompare(modelDisplayName) == .orderedSame else { continue }
-            guard let percent = limit["percent"] else { continue }
-
-            let percentage = parseUtilization(percent)
-            var resetTime: Date? = nil
-            if let resetsAt = limit["resets_at"] as? String {
-                let formatter = ISO8601DateFormatter()
-                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                resetTime = formatter.date(from: resetsAt)
-            }
-            return (percentage, resetTime)
-        }
-
-        return nil
     }
 
     private func parseUtilization(_ value: Any) -> Double {
