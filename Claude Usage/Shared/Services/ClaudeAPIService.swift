@@ -772,6 +772,7 @@ class ClaudeAPIService: APIServiceProtocol {
                 fableWeeklyTokensUsed: fableTokens,
                 fableWeeklyPercentage: fablePercentage,
                 fableWeeklyResetTime: fableResetTime,
+                fableWeeklyLimitAvailable: fableUsage != nil,
                 costUsed: nil,
                 costLimit: nil,
                 costCurrency: nil,

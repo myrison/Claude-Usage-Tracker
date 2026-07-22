@@ -32,6 +32,10 @@ struct ClaudeUsage: Codable, Equatable {
     var fableWeeklyTokensUsed: Int
     var fableWeeklyPercentage: Double
     var fableWeeklyResetTime: Date?
+    /// Whether the usage API reported a Fable weekly limit for this account.
+    /// This distinguishes a supported account at 0% immediately after reset from one
+    /// whose response does not include a Fable limit.
+    var fableWeeklyLimitAvailable: Bool
 
     // Extra usage data
     var costUsed: Double?
@@ -63,6 +67,7 @@ struct ClaudeUsage: Codable, Equatable {
         fableWeeklyTokensUsed: Int,
         fableWeeklyPercentage: Double,
         fableWeeklyResetTime: Date?,
+        fableWeeklyLimitAvailable: Bool = false,
         costUsed: Double?,
         costLimit: Double?,
         costCurrency: String?,
@@ -87,6 +92,7 @@ struct ClaudeUsage: Codable, Equatable {
         self.fableWeeklyTokensUsed = fableWeeklyTokensUsed
         self.fableWeeklyPercentage = fableWeeklyPercentage
         self.fableWeeklyResetTime = fableWeeklyResetTime
+        self.fableWeeklyLimitAvailable = fableWeeklyLimitAvailable
         self.costUsed = costUsed
         self.costLimit = costLimit
         self.costCurrency = costCurrency
@@ -117,6 +123,7 @@ struct ClaudeUsage: Codable, Equatable {
         fableWeeklyTokensUsed = try container.decodeIfPresent(Int.self, forKey: .fableWeeklyTokensUsed) ?? 0
         fableWeeklyPercentage = try container.decodeIfPresent(Double.self, forKey: .fableWeeklyPercentage) ?? 0
         fableWeeklyResetTime = try container.decodeIfPresent(Date.self, forKey: .fableWeeklyResetTime)
+        fableWeeklyLimitAvailable = try container.decodeIfPresent(Bool.self, forKey: .fableWeeklyLimitAvailable) ?? false
         costUsed = try container.decodeIfPresent(Double.self, forKey: .costUsed)
         costLimit = try container.decodeIfPresent(Double.self, forKey: .costLimit)
         costCurrency = try container.decodeIfPresent(String.self, forKey: .costCurrency)

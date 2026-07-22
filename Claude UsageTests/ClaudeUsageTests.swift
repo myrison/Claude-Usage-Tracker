@@ -140,6 +140,17 @@ final class ClaudeUsageTests: XCTestCase {
         XCTAssertEqual(UsageLimitParsing.parseUtilization(42), 42.0)
     }
 
+    func testFableLimitAvailabilityPersistsAtZeroUsage() throws {
+        var usage = createUsage(sessionPercentage: 0)
+        usage.fableWeeklyLimitAvailable = true
+
+        let data = try JSONEncoder().encode(usage)
+        let decoded = try JSONDecoder().decode(ClaudeUsage.self, from: data)
+
+        XCTAssertEqual(decoded.fableWeeklyPercentage, 0)
+        XCTAssertTrue(decoded.fableWeeklyLimitAvailable)
+    }
+
     // MARK: - Helpers
 
     private func createUsage(sessionPercentage: Double) -> ClaudeUsage {
