@@ -732,27 +732,17 @@ class ClaudeAPIService: APIServiceProtocol {
                 }
             }
 
-            // Extract Opus weekly usage (seven_day_opus)
-            var opusPercentage = 0.0
-            if let sevenDayOpus = json["seven_day_opus"] as? [String: Any] {
-                if let utilization = sevenDayOpus["utilization"] {
-                    opusPercentage = parseUtilization(utilization)
-                }
-            }
-
-            // Extract Sonnet weekly usage (seven_day_sonnet)
-            var sonnetPercentage = 0.0
-            var sonnetResetTime: Date? = nil
-            if let sevenDaySonnet = json["seven_day_sonnet"] as? [String: Any] {
-                if let utilization = sevenDaySonnet["utilization"] {
-                    sonnetPercentage = parseUtilization(utilization)
-                }
-                if let resetsAt = sevenDaySonnet["resets_at"] as? String {
-                    let formatter = ISO8601DateFormatter()
-                    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                    sonnetResetTime = formatter.date(from: resetsAt)
-                }
-            }
+            let opusUsage = UsageLimitParsing.parseWeeklyModelUsage(
+                from: json, legacyKey: "seven_day_opus", modelDisplayName: "Opus")
+            let sonnetUsage = UsageLimitParsing.parseWeeklyModelUsage(
+                from: json, legacyKey: "seven_day_sonnet", modelDisplayName: "Sonnet")
+            let fableUsage = UsageLimitParsing.parseWeeklyModelUsage(
+                from: json, legacyKey: nil, modelDisplayName: "Fable")
+            let opusPercentage = opusUsage?.percentage ?? 0.0
+            let sonnetPercentage = sonnetUsage?.percentage ?? 0.0
+            let sonnetResetTime = sonnetUsage?.resetTime
+            let fablePercentage = fableUsage?.percentage ?? 0.0
+            let fableResetTime = fableUsage?.resetTime
 
             // We don't know user's plan, so we use 0 for limits we can't determine
             let weeklyLimit = Constants.weeklyLimit
@@ -763,6 +753,7 @@ class ClaudeAPIService: APIServiceProtocol {
             let weeklyTokens = Int(Double(weeklyLimit) * (weeklyPercentage / 100.0))
             let opusTokens = Int(Double(weeklyLimit) * (opusPercentage / 100.0))
             let sonnetTokens = Int(Double(weeklyLimit) * (sonnetPercentage / 100.0))
+            let fableTokens = Int(Double(weeklyLimit) * (fablePercentage / 100.0))
 
             let usage = ClaudeUsage(
                 sessionTokensUsed: sessionTokens,
@@ -778,6 +769,9 @@ class ClaudeAPIService: APIServiceProtocol {
                 sonnetWeeklyTokensUsed: sonnetTokens,
                 sonnetWeeklyPercentage: sonnetPercentage,
                 sonnetWeeklyResetTime: sonnetResetTime,
+                fableWeeklyTokensUsed: fableTokens,
+                fableWeeklyPercentage: fablePercentage,
+                fableWeeklyResetTime: fableResetTime,
                 costUsed: nil,
                 costLimit: nil,
                 costCurrency: nil,
@@ -860,6 +854,9 @@ class ClaudeAPIService: APIServiceProtocol {
             sonnetWeeklyTokensUsed: 0,
             sonnetWeeklyPercentage: 0,
             sonnetWeeklyResetTime: nil,
+            fableWeeklyTokensUsed: 0,
+            fableWeeklyPercentage: 0,
+            fableWeeklyResetTime: nil,
             costUsed: nil,
             costLimit: nil,
             costCurrency: nil,
@@ -876,30 +873,7 @@ class ClaudeAPIService: APIServiceProtocol {
     /// - Parameter value: The utilization value from API (can be Int, Double, or String)
     /// - Returns: Parsed percentage as Double, or 0.0 if parsing fails
     private func parseUtilization(_ value: Any) -> Double {
-        // Try Int first (most common)
-        if let intValue = value as? Int {
-            return Double(intValue)
-        }
-
-        // Try Double
-        if let doubleValue = value as? Double {
-            return doubleValue
-        }
-
-        // Try String
-        if let stringValue = value as? String {
-            // Remove any percentage symbols or whitespace
-            let cleaned = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "%", with: "")
-
-            if let parsed = Double(cleaned) {
-                return parsed
-            }
-        }
-
-        // Log warning if we couldn't parse
-        LoggingService.shared.logWarning("Failed to parse utilization value: \(value) (type: \(type(of: value)))")
-        return 0.0
+        UsageLimitParsing.parseUtilization(value)
     }
 
     // MARK: - Session Initialization

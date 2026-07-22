@@ -260,32 +260,23 @@ final class AutoStartSessionService {
             }
         }
 
-        // Extract Opus weekly usage (seven_day_opus)
-        var opusPercentage = 0.0
-        if let sevenDayOpus = json["seven_day_opus"] as? [String: Any] {
-            if let utilization = sevenDayOpus["utilization"] {
-                opusPercentage = parseUtilization(utilization)
-            }
-        }
-
-        // Extract Sonnet weekly usage (seven_day_sonnet)
-        var sonnetPercentage = 0.0
-        var sonnetResetTime: Date? = nil
-        if let sevenDaySonnet = json["seven_day_sonnet"] as? [String: Any] {
-            if let utilization = sevenDaySonnet["utilization"] {
-                sonnetPercentage = parseUtilization(utilization)
-            }
-            if let resetsAt = sevenDaySonnet["resets_at"] as? String {
-                let formatter = ISO8601DateFormatter()
-                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                sonnetResetTime = formatter.date(from: resetsAt)
-            }
-        }
+        let opusUsage = UsageLimitParsing.parseWeeklyModelUsage(
+            from: json, legacyKey: "seven_day_opus", modelDisplayName: "Opus")
+        let sonnetUsage = UsageLimitParsing.parseWeeklyModelUsage(
+            from: json, legacyKey: "seven_day_sonnet", modelDisplayName: "Sonnet")
+        let fableUsage = UsageLimitParsing.parseWeeklyModelUsage(
+            from: json, legacyKey: nil, modelDisplayName: "Fable")
+        let opusPercentage = opusUsage?.percentage ?? 0.0
+        let sonnetPercentage = sonnetUsage?.percentage ?? 0.0
+        let sonnetResetTime = sonnetUsage?.resetTime
+        let fablePercentage = fableUsage?.percentage ?? 0.0
+        let fableResetTime = fableUsage?.resetTime
 
         let weeklyLimit = Constants.weeklyLimit
         let weeklyTokens = Int(Double(weeklyLimit) * (weeklyPercentage / 100.0))
         let opusTokens = Int(Double(weeklyLimit) * (opusPercentage / 100.0))
         let sonnetTokens = Int(Double(weeklyLimit) * (sonnetPercentage / 100.0))
+        let fableTokens = Int(Double(weeklyLimit) * (fablePercentage / 100.0))
 
         return ClaudeUsage(
             sessionTokensUsed: 0,
@@ -301,6 +292,9 @@ final class AutoStartSessionService {
             sonnetWeeklyTokensUsed: sonnetTokens,
             sonnetWeeklyPercentage: sonnetPercentage,
             sonnetWeeklyResetTime: sonnetResetTime,
+            fableWeeklyTokensUsed: fableTokens,
+            fableWeeklyPercentage: fablePercentage,
+            fableWeeklyResetTime: fableResetTime,
             costUsed: nil,
             costLimit: nil,
             costCurrency: nil,
@@ -310,20 +304,7 @@ final class AutoStartSessionService {
     }
 
     private func parseUtilization(_ value: Any) -> Double {
-        if let intValue = value as? Int {
-            return Double(intValue)
-        }
-        if let doubleValue = value as? Double {
-            return doubleValue
-        }
-        if let stringValue = value as? String {
-            let cleaned = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "%", with: "")
-            if let parsed = Double(cleaned) {
-                return parsed
-            }
-        }
-        return 0.0
+        UsageLimitParsing.parseUtilization(value)
     }
 
     /// Parse the completion response (SSE format) to extract session reset time from messageLimit.windows.5h

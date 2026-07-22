@@ -229,6 +229,8 @@ class UsageHistoryService {
             opusWeeklyPercentage: usage.opusWeeklyPercentage,
             sonnetWeeklyTokensUsed: usage.sonnetWeeklyTokensUsed,
             sonnetWeeklyPercentage: usage.sonnetWeeklyPercentage,
+            fableWeeklyTokensUsed: usage.fableWeeklyTokensUsed,
+            fableWeeklyPercentage: usage.fableWeeklyPercentage,
             triggeringResetTime: now
         )
 

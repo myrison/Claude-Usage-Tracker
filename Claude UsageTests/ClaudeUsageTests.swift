@@ -69,6 +69,77 @@ final class ClaudeUsageTests: XCTestCase {
         XCTAssertEqual(original, decoded)
     }
 
+    // MARK: - UsageLimitParsing Tests
+
+    func testParseWeeklyScopedLimitMatchesFable() {
+        let limits: [[String: Any]] = [
+            [
+                "kind": "weekly_scoped",
+                "group": "weekly",
+                "percent": 32,
+                "resets_at": "2026-07-21T08:59:59.801278+00:00",
+                "scope": ["model": ["id": NSNull(), "display_name": "Fable"]]
+            ]
+        ]
+
+        let result = UsageLimitParsing.parseWeeklyScopedLimit(from: limits, modelDisplayName: "Fable")
+
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.percentage, 32)
+        XCTAssertNotNil(result?.resetTime)
+    }
+
+    func testParseWeeklyScopedLimitIsCaseInsensitive() {
+        let limits: [[String: Any]] = [
+            ["kind": "weekly_scoped", "group": "WEEKLY", "percent": 10,
+             "scope": ["model": ["display_name": "fable"]]]
+        ]
+
+        let result = UsageLimitParsing.parseWeeklyScopedLimit(from: limits, modelDisplayName: "Fable")
+        XCTAssertEqual(result?.percentage, 10)
+    }
+
+    func testParseWeeklyScopedLimitAcceptsWholeSecondResetTimeAndMissingKind() {
+        let limits: [[String: Any]] = [
+            ["group": "weekly", "percent": 25,
+             "resets_at": "2026-07-21T08:59:59Z",
+             "scope": ["model": ["display_name": "Fable"]]]
+        ]
+
+        let result = UsageLimitParsing.parseWeeklyScopedLimit(from: limits, modelDisplayName: "Fable")
+
+        XCTAssertEqual(result?.percentage, 25)
+        XCTAssertNotNil(result?.resetTime)
+    }
+
+    func testParseWeeklyScopedLimitIgnoresNonWeeklyScopedKind() {
+        let limits: [[String: Any]] = [
+            ["kind": "session", "group": "weekly", "percent": 90,
+             "scope": ["model": ["display_name": "Fable"]]]
+        ]
+
+        XCTAssertNil(UsageLimitParsing.parseWeeklyScopedLimit(from: limits, modelDisplayName: "Fable"))
+    }
+
+    func testParseWeeklyScopedLimitReturnsNilWhenAbsent() {
+        XCTAssertNil(UsageLimitParsing.parseWeeklyScopedLimit(from: nil, modelDisplayName: "Fable"))
+        XCTAssertNil(UsageLimitParsing.parseWeeklyScopedLimit(from: [], modelDisplayName: "Fable"))
+
+        let limits: [[String: Any]] = [
+            ["kind": "weekly_scoped", "group": "weekly", "percent": 50,
+             "scope": ["model": ["display_name": "Opus"]]]
+        ]
+        XCTAssertNil(UsageLimitParsing.parseWeeklyScopedLimit(from: limits, modelDisplayName: "Fable"))
+    }
+
+    func testParseUtilizationClampsOutOfRangeValues() {
+        XCTAssertEqual(UsageLimitParsing.parseUtilization(1e300), 100.0)
+        XCTAssertEqual(UsageLimitParsing.parseUtilization(-50), 0.0)
+        XCTAssertEqual(UsageLimitParsing.parseUtilization(Double.nan), 0.0)
+        XCTAssertEqual(UsageLimitParsing.parseUtilization(Double.infinity), 0.0)
+        XCTAssertEqual(UsageLimitParsing.parseUtilization(42), 42.0)
+    }
+
     // MARK: - Helpers
 
     private func createUsage(sessionPercentage: Double) -> ClaudeUsage {
@@ -86,6 +157,9 @@ final class ClaudeUsageTests: XCTestCase {
             sonnetWeeklyTokensUsed: 0,
             sonnetWeeklyPercentage: 0,
             sonnetWeeklyResetTime: nil,
+            fableWeeklyTokensUsed: 0,
+            fableWeeklyPercentage: 0,
+            fableWeeklyResetTime: nil,
             costUsed: nil,
             costLimit: nil,
             costCurrency: nil,
