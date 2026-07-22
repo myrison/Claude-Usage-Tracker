@@ -17,7 +17,6 @@ enum UsageLimitParsing {
         guard let limits else { return nil }
 
         for limit in limits {
-            guard let kind = limit["kind"] as? String, kind == "weekly_scoped" else { continue }
             guard let group = limit["group"] as? String,
                   group.caseInsensitiveCompare("weekly") == .orderedSame else { continue }
             guard let scope = limit["scope"] as? [String: Any],
@@ -32,6 +31,10 @@ enum UsageLimitParsing {
                 let formatter = ISO8601DateFormatter()
                 formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
                 resetTime = formatter.date(from: resetsAt)
+                if resetTime == nil {
+                    formatter.formatOptions = [.withInternetDateTime]
+                    resetTime = formatter.date(from: resetsAt)
+                }
             }
             return (percentage, resetTime)
         }

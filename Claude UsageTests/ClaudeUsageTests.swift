@@ -99,6 +99,19 @@ final class ClaudeUsageTests: XCTestCase {
         XCTAssertEqual(result?.percentage, 10)
     }
 
+    func testParseWeeklyScopedLimitAcceptsWholeSecondResetTimeAndMissingKind() {
+        let limits: [[String: Any]] = [
+            ["group": "weekly", "percent": 25,
+             "resets_at": "2026-07-21T08:59:59Z",
+             "scope": ["model": ["display_name": "Fable"]]]
+        ]
+
+        let result = UsageLimitParsing.parseWeeklyScopedLimit(from: limits, modelDisplayName: "Fable")
+
+        XCTAssertEqual(result?.percentage, 25)
+        XCTAssertNotNil(result?.resetTime)
+    }
+
     func testParseWeeklyScopedLimitIgnoresNonWeeklyScopedKind() {
         let limits: [[String: Any]] = [
             ["kind": "session", "group": "weekly", "percent": 90,
