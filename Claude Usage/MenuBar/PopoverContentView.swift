@@ -641,7 +641,7 @@ struct SmartUsageDashboard: View {
                 )
             }
 
-            if usage.fableWeeklyPercentage > 0 {
+            if usage.fableWeeklyLimitAvailable {
                 UsageRow(
                     title: "menubar.fable_usage".localized,
                     subtitle: nil,
