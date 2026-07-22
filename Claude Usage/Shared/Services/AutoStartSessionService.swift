@@ -260,45 +260,17 @@ final class AutoStartSessionService {
             }
         }
 
-        // The API is migrating per-model weekly breakdowns from fixed top-level keys
-        // (seven_day_opus/seven_day_sonnet) to a generic `limits` array where each entry
-        // carries `scope.model.display_name`. Prefer the legacy key when present, falling
-        // back to the generic array otherwise. Fable has no legacy key — it only ever
-        // appears in the `limits` array.
-        let scopedLimits = json["limits"] as? [[String: Any]]
-
-        // Extract Opus weekly usage (seven_day_opus, falling back to limits[])
-        var opusPercentage = 0.0
-        if let sevenDayOpus = json["seven_day_opus"] as? [String: Any],
-           let utilization = sevenDayOpus["utilization"] {
-            opusPercentage = parseUtilization(utilization)
-        } else if let opusLimit = UsageLimitParsing.parseWeeklyScopedLimit(from: scopedLimits, modelDisplayName: "Opus") {
-            opusPercentage = opusLimit.percentage
-        }
-
-        // Extract Sonnet weekly usage (seven_day_sonnet, falling back to limits[])
-        var sonnetPercentage = 0.0
-        var sonnetResetTime: Date? = nil
-        if let sevenDaySonnet = json["seven_day_sonnet"] as? [String: Any],
-           let utilization = sevenDaySonnet["utilization"] {
-            sonnetPercentage = parseUtilization(utilization)
-            if let resetsAt = sevenDaySonnet["resets_at"] as? String {
-                let formatter = ISO8601DateFormatter()
-                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                sonnetResetTime = formatter.date(from: resetsAt)
-            }
-        } else if let sonnetLimit = UsageLimitParsing.parseWeeklyScopedLimit(from: scopedLimits, modelDisplayName: "Sonnet") {
-            sonnetPercentage = sonnetLimit.percentage
-            sonnetResetTime = sonnetLimit.resetTime
-        }
-
-        // Extract Fable weekly usage (limits[] only — no legacy top-level key exists)
-        var fablePercentage = 0.0
-        var fableResetTime: Date? = nil
-        if let fableLimit = UsageLimitParsing.parseWeeklyScopedLimit(from: scopedLimits, modelDisplayName: "Fable") {
-            fablePercentage = fableLimit.percentage
-            fableResetTime = fableLimit.resetTime
-        }
+        let opusUsage = UsageLimitParsing.parseWeeklyModelUsage(
+            from: json, legacyKey: "seven_day_opus", modelDisplayName: "Opus")
+        let sonnetUsage = UsageLimitParsing.parseWeeklyModelUsage(
+            from: json, legacyKey: "seven_day_sonnet", modelDisplayName: "Sonnet")
+        let fableUsage = UsageLimitParsing.parseWeeklyModelUsage(
+            from: json, legacyKey: nil, modelDisplayName: "Fable")
+        let opusPercentage = opusUsage?.percentage ?? 0.0
+        let sonnetPercentage = sonnetUsage?.percentage ?? 0.0
+        let sonnetResetTime = sonnetUsage?.resetTime
+        let fablePercentage = fableUsage?.percentage ?? 0.0
+        let fableResetTime = fableUsage?.resetTime
 
         let weeklyLimit = Constants.weeklyLimit
         let weeklyTokens = Int(Double(weeklyLimit) * (weeklyPercentage / 100.0))
@@ -332,20 +304,7 @@ final class AutoStartSessionService {
     }
 
     private func parseUtilization(_ value: Any) -> Double {
-        if let intValue = value as? Int {
-            return Double(intValue)
-        }
-        if let doubleValue = value as? Double {
-            return doubleValue
-        }
-        if let stringValue = value as? String {
-            let cleaned = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "%", with: "")
-            if let parsed = Double(cleaned) {
-                return parsed
-            }
-        }
-        return 0.0
+        UsageLimitParsing.parseUtilization(value)
     }
 
     /// Parse the completion response (SSE format) to extract session reset time from messageLimit.windows.5h

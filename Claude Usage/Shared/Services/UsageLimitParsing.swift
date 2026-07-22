@@ -5,6 +5,25 @@ import Foundation
 /// `seven_day_opus`/`seven_day_sonnet` top-level keys. Shared by ClaudeAPIService and
 /// AutoStartSessionService, which both parse the same response shape independently.
 enum UsageLimitParsing {
+    /// Extracts a model's weekly usage from its legacy top-level entry when available,
+    /// otherwise from the generic model-scoped limits array.
+    static func parseWeeklyModelUsage(
+        from json: [String: Any],
+        legacyKey: String?,
+        modelDisplayName: String
+    ) -> (percentage: Double, resetTime: Date?)? {
+        if let legacyKey,
+           let legacyLimit = json[legacyKey] as? [String: Any],
+           let utilization = legacyLimit["utilization"] {
+            return (parseUtilization(utilization), parseResetTime(legacyLimit["resets_at"]))
+        }
+
+        return parseWeeklyScopedLimit(
+            from: json["limits"] as? [[String: Any]],
+            modelDisplayName: modelDisplayName
+        )
+    }
+
     /// Finds a model-scoped weekly limit entry by display name (e.g. "Opus", "Sonnet", "Fable").
     /// Entries look like:
     /// `{ "kind": "weekly_scoped", "group": "weekly", "percent": 32,
@@ -26,16 +45,7 @@ enum UsageLimitParsing {
             guard let percent = limit["percent"] else { continue }
 
             let percentage = parseUtilization(percent)
-            var resetTime: Date? = nil
-            if let resetsAt = limit["resets_at"] as? String {
-                let formatter = ISO8601DateFormatter()
-                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                resetTime = formatter.date(from: resetsAt)
-                if resetTime == nil {
-                    formatter.formatOptions = [.withInternetDateTime]
-                    resetTime = formatter.date(from: resetsAt)
-                }
-            }
+            let resetTime = parseResetTime(limit["resets_at"])
             return (percentage, resetTime)
         }
 
@@ -61,5 +71,16 @@ enum UsageLimitParsing {
 
         guard raw.isFinite else { return 0.0 }
         return min(max(raw, 0.0), 100.0)
+    }
+
+    private static func parseResetTime(_ value: Any?) -> Date? {
+        guard let resetsAt = value as? String else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: resetsAt) {
+            return date
+        }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: resetsAt)
     }
 }
