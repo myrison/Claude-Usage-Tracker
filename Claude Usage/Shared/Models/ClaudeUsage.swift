@@ -123,7 +123,8 @@ struct ClaudeUsage: Codable, Equatable {
         fableWeeklyTokensUsed = try container.decodeIfPresent(Int.self, forKey: .fableWeeklyTokensUsed) ?? 0
         fableWeeklyPercentage = try container.decodeIfPresent(Double.self, forKey: .fableWeeklyPercentage) ?? 0
         fableWeeklyResetTime = try container.decodeIfPresent(Date.self, forKey: .fableWeeklyResetTime)
-        fableWeeklyLimitAvailable = try container.decodeIfPresent(Bool.self, forKey: .fableWeeklyLimitAvailable) ?? false
+        fableWeeklyLimitAvailable = try container.decodeIfPresent(Bool.self, forKey: .fableWeeklyLimitAvailable)
+            ?? (fableWeeklyPercentage > 0)
         costUsed = try container.decodeIfPresent(Double.self, forKey: .costUsed)
         costLimit = try container.decodeIfPresent(Double.self, forKey: .costLimit)
         costCurrency = try container.decodeIfPresent(String.self, forKey: .costCurrency)
