@@ -13,17 +13,33 @@ class ProfileManager: ObservableObject {
     static let shared = ProfileManager()
 
     @Published var profiles: [Profile] = []
-    @Published var activeProfile: Profile?
+    @Published var activeProfile: Profile? {
+        didSet {
+            if oldValue?.id != activeProfile?.id {
+                activeProfileIdentityGeneration &+= 1
+            }
+        }
+    }
+    private(set) var activeProfileIdentityGeneration: UInt64 = 0
     @Published var displayMode: ProfileDisplayMode = .single
     @Published var multiProfileConfig: MultiProfileDisplayConfig = .default
     @Published var isSwitchingProfile: Bool = false
 
-    private let profileStore = ProfileStore.shared
-    private let cliSyncService = ClaudeCodeSyncService.shared
+    private let profileStore: ProfileStore
+    private let cliSyncService: ClaudeCodeSyncService
+    private let historyService: any ProfileHistoryDeleting
 
     private var switchingSemaphore = false
 
-    private init() {}
+    init(
+        profileStore: ProfileStore? = nil,
+        cliSyncService: ClaudeCodeSyncService? = nil,
+        historyService: (any ProfileHistoryDeleting)? = nil
+    ) {
+        self.profileStore = profileStore ?? .shared
+        self.cliSyncService = cliSyncService ?? .shared
+        self.historyService = historyService ?? UsageHistoryService.shared
+    }
 
     // MARK: - Initialization
 
@@ -83,24 +99,65 @@ class ProfileManager: ObservableObject {
     }
 
     func updateProfile(_ profile: Profile) {
-        if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
-            profiles[index] = profile
+        do {
+            try updateProfileThrowing(profile)
+        } catch {
+            LoggingService.shared.logError(
+                "ProfileManager.updateProfile: Update was not verified",
+                error: error
+            )
+        }
+    }
 
-            if activeProfile?.id == profile.id {
-                activeProfile = profile
+    /// Credential-aware update for workflows that must not report success
+    /// unless secure storage and profile metadata have both been verified.
+    func updateProfileThrowing(_ profile: Profile) throws {
+        guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else {
+            throw ProfileStoreError.profileNotFound(profile.id)
+        }
 
-                // Detailed logging for credential state
-                LoggingService.shared.log("ProfileManager.updateProfile: Updated ACTIVE profile '\(profile.name)'")
-                LoggingService.shared.log("  - claudeSessionKey: \(profile.claudeSessionKey == nil ? "NIL" : "EXISTS (len: \(profile.claudeSessionKey!.count))")")
-                LoggingService.shared.log("  - organizationId: \(profile.organizationId == nil ? "NIL" : "EXISTS")")
-                LoggingService.shared.log("  - hasClaudeAI: \(profile.hasClaudeAI)")
-                LoggingService.shared.log("  - hasAnyCredentials: \(profile.hasAnyCredentials)")
-                LoggingService.shared.log("  - claudeUsage: \(profile.claudeUsage == nil ? "NIL" : "EXISTS")")
-            } else {
-                LoggingService.shared.log("Updated profile: \(profile.name) (not active)")
-            }
+        let previous = profiles[index]
+        let claudeSecretChanged = previous.claudeSessionKey != profile.claudeSessionKey
+        let apiSecretChanged = previous.apiSessionKey != profile.apiSessionKey
+        let cliSecretChanged = previous.cliCredentialsJSON != profile.cliCredentialsJSON
+        let changedComponent = credentialChangeComponent(
+            claudeChanged:
+                claudeSecretChanged
+                || previous.organizationId != profile.organizationId
+                || previous.checkOverageLimitEnabled
+                    != profile.checkOverageLimitEnabled,
+            apiChanged:
+                apiSecretChanged
+                || previous.apiOrganizationId != profile.apiOrganizationId,
+            cliChanged: cliSecretChanged
+        )
 
-            profileStore.saveProfiles(profiles)
+        if cliSecretChanged && !claudeSecretChanged && !apiSecretChanged {
+            try profileStore.saveCLIProfileUpdate(profile)
+        } else if claudeSecretChanged || apiSecretChanged || cliSecretChanged {
+            try profileStore.saveProfileUpdate(profile)
+        } else {
+            var candidate = profiles
+            candidate[index] = profile
+            try profileStore.saveProfilesThrowing(candidate)
+        }
+
+        profiles[index] = profile
+
+        if activeProfile?.id == profile.id {
+            activeProfile = profile
+            LoggingService.shared.log(
+                "ProfileManager.updateProfile: Updated active profile"
+            )
+        } else {
+            LoggingService.shared.log("ProfileManager.updateProfile: Updated profile")
+        }
+
+        if let changedComponent {
+            postCredentialChange(
+                profileID: profile.id,
+                component: changedComponent
+            )
         }
     }
 
@@ -111,13 +168,29 @@ class ProfileManager: ObservableObject {
 
         let profileName = profiles.first(where: { $0.id == id })?.name ?? "unknown"
 
-        // Clean up usage history for this profile
-        UsageHistoryService.shared.deleteHistory(for: id)
+        guard profiles.contains(where: { $0.id == id }) else {
+            throw ProfileStoreError.profileNotFound(id)
+        }
+
+        // Atomically retain a scrubbed marker before any destructive cleanup.
+        // On failure or relaunch, identity remains for retry without allowing
+        // migration envelopes or surviving stores to rehydrate deleted data.
+        let scrubbedProfile = try profileStore.beginProfileDeletion(id)
+        if let index = profiles.firstIndex(where: { $0.id == id }) {
+            profiles[index] = scrubbedProfile
+            if activeProfile?.id == id {
+                activeProfile = scrubbedProfile
+            }
+        }
+
+        try profileStore.deleteProfileSecrets(for: id)
+        try historyService.deleteHistoryThrowing(for: id)
+        try profileStore.deleteProfileUsageData(for: id)
         LoggingService.shared.log("Successfully deleted usage history for profile: \(profileName)")
 
-        profiles.removeAll { $0.id == id }
-
-        // Credentials are deleted automatically with the profile
+        let remainingProfiles = profiles.filter { $0.id != id }
+        try profileStore.saveProfilesThrowing(remainingProfiles)
+        profiles = remainingProfiles
 
         // Switch to first profile if deleted active
         if activeProfile?.id == id {
@@ -128,7 +201,6 @@ class ProfileManager: ObservableObject {
             }
         }
 
-        profileStore.saveProfiles(profiles)
         LoggingService.shared.log("Deleted profile: \(profileName)")
     }
 
@@ -296,124 +368,260 @@ class ProfileManager: ObservableObject {
     }
 
     func saveCredentials(for profileId: UUID, credentials: ProfileCredentials) throws {
+        guard let index = profiles.firstIndex(where: { $0.id == profileId }) else {
+            throw ProfileStoreError.profileNotFound(profileId)
+        }
+        let previous = profiles[index]
+        let requestInputsChanged =
+            previous.claudeSessionKey != credentials.claudeSessionKey
+            || previous.organizationId != credentials.organizationId
+            || previous.apiSessionKey != credentials.apiSessionKey
+            || previous.apiOrganizationId != credentials.apiOrganizationId
+            || previous.cliCredentialsJSON != credentials.cliCredentialsJSON
+
         try profileStore.saveProfileCredentials(profileId, credentials: credentials)
 
-        // Update profile in memory
-        if let index = profiles.firstIndex(where: { $0.id == profileId }) {
-            profiles[index].claudeSessionKey = credentials.claudeSessionKey
-            profiles[index].organizationId = credentials.organizationId
-            profiles[index].apiSessionKey = credentials.apiSessionKey
-            profiles[index].apiOrganizationId = credentials.apiOrganizationId
-            profiles[index].cliCredentialsJSON = credentials.cliCredentialsJSON
+        profiles[index].claudeSessionKey = credentials.claudeSessionKey
+        profiles[index].organizationId = credentials.organizationId
+        profiles[index].apiSessionKey = credentials.apiSessionKey
+        profiles[index].apiOrganizationId = credentials.apiOrganizationId
+        profiles[index].apiSessionKeyExpiry = credentials.apiSessionKeyExpiry
+        profiles[index].cliCredentialsJSON = credentials.cliCredentialsJSON
 
-            if activeProfile?.id == profileId {
-                activeProfile = profiles[index]
-            }
+        if activeProfile?.id == profileId {
+            activeProfile = profiles[index]
+        }
+        if requestInputsChanged {
+            postCredentialChange(profileID: profileId, component: .all)
         }
     }
 
     /// Removes Claude.ai credentials for a profile
     func removeClaudeAICredentials(for profileId: UUID) throws {
-        // Load and clear credentials from Keychain
-        var creds = try profileStore.loadProfileCredentials(profileId)
-        creds.claudeSessionKey = nil
-        creds.organizationId = nil
-        try profileStore.saveProfileCredentials(profileId, credentials: creds)
-
-        // Update Profile model in memory
-        if let index = profiles.firstIndex(where: { $0.id == profileId }) {
-            profiles[index].claudeSessionKey = nil
-            profiles[index].organizationId = nil
-            profiles[index].claudeUsage = nil  // Clear saved usage data
-
-            if activeProfile?.id == profileId {
-                activeProfile = profiles[index]
+        do {
+            try profileStore.unlinkClaudeAI(for: profileId)
+        } catch {
+            if let storeError = error as? ProfileStoreError,
+               case .credentialUsageUnlinkRollbackFailed = storeError {
+                failCloseCredentialUsageRuntime(
+                    for: profileId,
+                    component: .claude
+                )
+                postCredentialChange(
+                    profileID: profileId,
+                    component: .claude
+                )
             }
-
-            profileStore.saveProfiles(profiles)
+            throw error
         }
+        failCloseCredentialUsageRuntime(
+            for: profileId,
+            component: .claude
+        )
 
         LoggingService.shared.log("ProfileManager: Removed Claude.ai credentials for profile \(profileId)")
-
-        // Post single notification for credential change
-        NotificationCenter.default.post(name: .credentialsChanged, object: nil)
+        postCredentialChange(profileID: profileId, component: .claude)
     }
 
     /// Removes API Console credentials for a profile
     func removeAPICredentials(for profileId: UUID) throws {
-        // Load and clear credentials from Keychain
-        var creds = try profileStore.loadProfileCredentials(profileId)
-        creds.apiSessionKey = nil
-        creds.apiOrganizationId = nil
-        try profileStore.saveProfileCredentials(profileId, credentials: creds)
-
-        // Update Profile model in memory
-        if let index = profiles.firstIndex(where: { $0.id == profileId }) {
-            profiles[index].apiSessionKey = nil
-            profiles[index].apiOrganizationId = nil
-            profiles[index].apiUsage = nil  // Clear saved usage data
-
-            if activeProfile?.id == profileId {
-                activeProfile = profiles[index]
+        do {
+            try profileStore.unlinkAPIConsole(for: profileId)
+        } catch {
+            if let storeError = error as? ProfileStoreError,
+               case .credentialUsageUnlinkRollbackFailed = storeError {
+                failCloseCredentialUsageRuntime(
+                    for: profileId,
+                    component: .api
+                )
+                postCredentialChange(
+                    profileID: profileId,
+                    component: .api
+                )
             }
-
-            profileStore.saveProfiles(profiles)
+            throw error
         }
+        failCloseCredentialUsageRuntime(
+            for: profileId,
+            component: .api
+        )
 
         LoggingService.shared.log("ProfileManager: Removed API credentials for profile \(profileId)")
+        postCredentialChange(profileID: profileId, component: .api)
+    }
 
-        // Post single notification for credential change
-        NotificationCenter.default.post(name: .credentialsChanged, object: nil)
+    private enum CredentialUsageComponent: String {
+        case claude
+        case api
+    }
+
+    private enum CredentialChangeComponent: String {
+        case claude
+        case api
+        case cli
+        case all
+    }
+
+    private func failCloseCredentialUsageRuntime(
+        for profileID: UUID,
+        component: CredentialUsageComponent
+    ) {
+        guard let index = profiles.firstIndex(where: {
+            $0.id == profileID
+        }) else {
+            return
+        }
+
+        let targetField: ProfileSecretField =
+            component == .claude
+                ? .claudeSessionKey
+                : .apiSessionKey
+        profiles[index].credentialMigrationRetry.setValue(
+            nil,
+            for: targetField
+        )
+        if var usageRetry =
+            profiles[index].currentUsageMigrationRetry {
+            if component == .claude {
+                usageRetry.claudeUsage = nil
+            } else {
+                usageRetry.apiUsage = nil
+            }
+            profiles[index].currentUsageMigrationRetry =
+                usageRetry.isEmpty ? nil : usageRetry
+        }
+
+        if component == .claude {
+            profiles[index].claudeSessionKey = nil
+            profiles[index].organizationId = nil
+            profiles[index].claudeUsage = nil
+        } else {
+            profiles[index].apiSessionKey = nil
+            profiles[index].apiOrganizationId = nil
+            profiles[index].apiSessionKeyExpiry = nil
+            profiles[index].apiUsage = nil
+        }
+
+        if activeProfile?.id == profileID {
+            activeProfile = profiles[index]
+        }
+    }
+
+    private func postCredentialChange(
+        profileID: UUID,
+        component: CredentialChangeComponent
+    ) {
+        NotificationCenter.default.post(
+            name: .credentialsChanged,
+            object: profileID,
+            userInfo: [
+                "profileID": profileID,
+                "component": component.rawValue
+            ]
+        )
+    }
+
+    private func credentialChangeComponent(
+        claudeChanged: Bool,
+        apiChanged: Bool,
+        cliChanged: Bool
+    ) -> CredentialChangeComponent? {
+        let changes = [
+            claudeChanged ? .claude : nil,
+            apiChanged ? .api : nil,
+            cliChanged ? .cli : nil
+        ] as [CredentialChangeComponent?]
+        let resolvedChanges = changes.compactMap { $0 }
+        guard resolvedChanges.count == 1 else {
+            return resolvedChanges.isEmpty ? nil : .all
+        }
+        return resolvedChanges[0]
     }
 
     // MARK: - Usage Data
 
     /// Saves Claude usage data for a specific profile
-    func saveClaudeUsage(_ usage: ClaudeUsage, for profileId: UUID) {
+    @discardableResult
+    func saveClaudeUsage(
+        _ usage: ClaudeUsage,
+        for profileId: UUID,
+        publishToActiveProfile: Bool = true
+    ) -> Bool {
         guard let index = profiles.firstIndex(where: { $0.id == profileId }) else {
             LoggingService.shared.logError("saveClaudeUsage: Profile not found with ID: \(profileId)")
-            return
+            return false
+        }
+
+        do {
+            try profileStore.saveClaudeUsage(usage, for: profileId)
+        } catch {
+            LoggingService.shared.logStorageError("saveClaudeUsage", error: error)
+            return false
         }
 
         profiles[index].claudeUsage = usage
 
         // Update activeProfile reference if it's the same profile
-        if activeProfile?.id == profileId {
+        if publishToActiveProfile, activeProfile?.id == profileId {
             activeProfile = profiles[index]
         }
 
-        // Save to persistent storage
-        profileStore.saveProfiles(profiles)
         LoggingService.shared.log("Saved Claude usage for profile: \(profiles[index].name)")
+        return true
     }
 
     /// Loads Claude usage data for a specific profile
     func loadClaudeUsage(for profileId: UUID) -> ClaudeUsage? {
-        return profiles.first(where: { $0.id == profileId })?.claudeUsage
+        do {
+            let usage = try profileStore.loadClaudeUsage(for: profileId)
+            updateClaudeUsageInMemory(usage, for: profileId)
+            return usage
+        } catch {
+            LoggingService.shared.logStorageError("loadClaudeUsage", error: error)
+            return profiles.first(where: { $0.id == profileId })?.claudeUsage
+        }
     }
 
     /// Saves API usage data for a specific profile
-    func saveAPIUsage(_ usage: APIUsage, for profileId: UUID) {
+    @discardableResult
+    func saveAPIUsage(
+        _ usage: APIUsage,
+        for profileId: UUID,
+        publishToActiveProfile: Bool = true
+    ) -> Bool {
         guard let index = profiles.firstIndex(where: { $0.id == profileId }) else {
             LoggingService.shared.logError("saveAPIUsage: Profile not found with ID: \(profileId)")
-            return
+            return false
+        }
+
+        do {
+            try profileStore.saveAPIUsage(usage, for: profileId)
+        } catch {
+            LoggingService.shared.logStorageError("saveAPIUsage", error: error)
+            return false
         }
 
         profiles[index].apiUsage = usage
 
         // Update activeProfile reference if it's the same profile
-        if activeProfile?.id == profileId {
+        if publishToActiveProfile, activeProfile?.id == profileId {
             activeProfile = profiles[index]
         }
 
-        // Save to persistent storage
-        profileStore.saveProfiles(profiles)
         LoggingService.shared.log("Saved API usage for profile: \(profiles[index].name)")
+        return true
     }
 
     /// Loads API usage data for a specific profile
     func loadAPIUsage(for profileId: UUID) -> APIUsage? {
-        return profiles.first(where: { $0.id == profileId })?.apiUsage
+        do {
+            let usage = try profileStore.loadAPIUsage(for: profileId)
+            updateAPIUsageInMemory(usage, for: profileId)
+            return usage
+        } catch {
+            LoggingService.shared.logStorageError("loadAPIUsage", error: error)
+            return profiles.first(where: { $0.id == profileId })?.apiUsage
+        }
     }
 
     // MARK: - Profile Settings
@@ -459,15 +667,11 @@ class ProfileManager: ObservableObject {
 
     /// Updates check overage limit setting for a profile
     func updateCheckOverageLimitEnabled(_ enabled: Bool, for profileId: UUID) {
-        if let index = profiles.firstIndex(where: { $0.id == profileId }) {
-            profiles[index].checkOverageLimitEnabled = enabled
-
-            if activeProfile?.id == profileId {
-                activeProfile = profiles[index]
-            }
-
-            profileStore.saveProfiles(profiles)
+        guard var profile = profiles.first(where: { $0.id == profileId }) else {
+            return
         }
+        profile.checkOverageLimitEnabled = enabled
+        updateProfile(profile)
     }
 
     /// Updates notification settings for a profile
@@ -485,28 +689,20 @@ class ProfileManager: ObservableObject {
 
     /// Updates organization ID for a profile
     func updateOrganizationId(_ orgId: String?, for profileId: UUID) {
-        if let index = profiles.firstIndex(where: { $0.id == profileId }) {
-            profiles[index].organizationId = orgId
-
-            if activeProfile?.id == profileId {
-                activeProfile = profiles[index]
-            }
-
-            profileStore.saveProfiles(profiles)
+        guard var profile = profiles.first(where: { $0.id == profileId }) else {
+            return
         }
+        profile.organizationId = orgId
+        updateProfile(profile)
     }
 
     /// Updates API organization ID for a profile
     func updateAPIOrganizationId(_ orgId: String?, for profileId: UUID) {
-        if let index = profiles.firstIndex(where: { $0.id == profileId }) {
-            profiles[index].apiOrganizationId = orgId
-
-            if activeProfile?.id == profileId {
-                activeProfile = profiles[index]
-            }
-
-            profileStore.saveProfiles(profiles)
+        guard var profile = profiles.first(where: { $0.id == profileId }) else {
+            return
         }
+        profile.apiOrganizationId = orgId
+        updateProfile(profile)
     }
 
     // MARK: - Private Helpers
@@ -556,6 +752,26 @@ class ProfileManager: ObservableObject {
             checkOverageLimitEnabled: true,
             notificationSettings: NotificationSettings()
         )
+    }
+
+    private func updateClaudeUsageInMemory(_ usage: ClaudeUsage?, for profileID: UUID) {
+        guard let index = profiles.firstIndex(where: { $0.id == profileID }) else {
+            return
+        }
+        profiles[index].claudeUsage = usage
+        if activeProfile?.id == profileID {
+            activeProfile = profiles[index]
+        }
+    }
+
+    private func updateAPIUsageInMemory(_ usage: APIUsage?, for profileID: UUID) {
+        guard let index = profiles.firstIndex(where: { $0.id == profileID }) else {
+            return
+        }
+        profiles[index].apiUsage = usage
+        if activeProfile?.id == profileID {
+            activeProfile = profiles[index]
+        }
     }
 
 }
