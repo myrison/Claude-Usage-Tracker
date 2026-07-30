@@ -242,6 +242,111 @@ All decisions below were settled during planning and approved before implementat
 - Rationale: A failed attempt to stage protection for a new value must never take the currently readable value offline.
 - Status: RESOLVED — proceeded 2026-07-30
 
+### D035 — Use one app-server session per complete provider refresh
+- Context: Opening a process for each account, rate-limit, and optional usage RPC triples startup cost and overall-timeout budgets.
+- Options: One process per RPC / One initialized request-scoped process for the refresh
+- **Decision: Run the complete Codex refresh in one initialized session with one overall deadline, then close and prove the child reaped.**
+- Rationale: This preserves the no-pool boundary while making refresh snapshots coherent and truly bounded.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D036 — Require every mandatory usage endpoint for healthy status
+- Context: `account/read` can succeed while required `account/rateLimits/read` is missing or malformed, leaving every real usage refresh unusable.
+- Options: Treat identity alone as healthy / Probe identity and required rate limits together
+- **Decision: Codex health requires both account and rate-limit reads in one health-scoped session; optional usage history remains non-fatal.**
+- Rationale: A provider that cannot produce its minimum usage report must not be labeled healthy.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D037 — Keep provider kind stable while modeling an unlinked Codex profile
+- Context: Unlink and delete are separate operations, but a Codex UUID cannot retain a valid home reference after unlink or change provider kind.
+- Options: Delete/convert the profile or store an invalid path / Make the verified linked-home reference optional
+- **Decision: A profile UUID's provider kind is immutable; Codex configuration retains `linkedHome = nil` after unlink and accepts only a verified canonical home when linked.**
+- Rationale: The profile and settings survive unlink without an invalid sentinel or any Codex-owned credential mutation.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D038 — Permit a zero-profile first-run bootstrap
+- Context: Persisting an implicit Claude profile before onboarding conflicts with immutable provider kind when the user chooses Codex first.
+- Options: Privileged provider conversion / Create no profile until provider selection
+- **Decision: First-run setup may have zero profiles and creates the selected provider with a new UUID only after setup commits.**
+- Rationale: This avoids orphan placeholders, premature Claude side effects, and a provider-conversion loophole.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D039 — Publish one profile-keyed presentation snapshot
+- Context: Independent global Claude usage/loading/error fields can combine state from different profiles in a mixed-provider UI.
+- Options: Reconstruct view state from legacy globals / Publish atomic snapshots keyed by profile UUID and provider revision
+- **Decision: P09 owns profile-keyed snapshots containing identity, revision, capabilities, normalized report, refresh activity, last success, and typed failure.**
+- Rationale: Popover, settings, menus, and status items need one captured source of truth that stale work cannot partially mutate.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D040 — Fetch provider and optional API components concurrently
+- Context: Claude core usage and API billing have independent latency and failure behavior, but unordered independent presentation can lose a component.
+- Options: Wait for both fetches before committing / Fetch concurrently and serialize completed component transactions
+- **Decision: Fetch both concurrently, serialize each completed component's durable commit and guarded presentation, and finish the batch only after both child operations quiesce.**
+- Rationale: Fast data becomes durable immediately without allowing presentation order to corrupt the merged current-usage envelope.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D041 — Issue latest-wins order before asynchronous engine entry
+- Context: Consecutive MainActor refresh calls create tasks whose actor arrival order is not guaranteed.
+- Options: Use engine arrival order / Issue and register a monotonic order synchronously at Runtime invocation
+- **Decision: Runtime issues the authoritative order before task creation; the input ledger, engine slots, commits, failures, status, activity, and batches all enforce it.**
+- Rationale: A delayed older multi-profile enqueue can never replace work from a newer user-visible invocation.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D042 — Bind loading state to ordered request ownership
+- Context: Actor-to-MainActor suspension can let an older loading publication arrive after its request completed or after a newer request queued.
+- Options: Infer precedence from loading enum cases / Track invocation order, request UUID, and terminal request ownership
+- **Decision: Loading state has one ordered request owner; completion clears only that owner, records it terminal, and lower, different, or already-completed publications are rejected.**
+- Rationale: This prevents idle flicker, stale spinner resurrection, and loss of queued-to-refreshing transitions.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D043 — Make deletion and shutdown terminal presentation boundaries
+- Context: Suspended hydration, activity, status, or result calls can resume after a profile is deleting or the app has purged presentation state.
+- Options: Rely on cancellation/context mismatch / Install explicit profile and store terminal fences
+- **Decision: Deletion preserves an idle tombstone and rejects all older profile mutations until verified removal; shutdown synchronously purges and permanently rejects every later presentation mutation.**
+- Rationale: Neither deleted profiles nor a terminated runtime can be resurrected by delayed work.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D044 — Supersede a durable result whose guarded presentation is stale
+- Context: A component can commit and emit its accepted event before an invalidation makes its presentation ineligible.
+- Options: Mark every durable commit accepted / Preserve the durable event but supersede the terminal request outcome when its presentation is rejected
+- **Decision: A guarded presentation rejection makes the request and batch superseded while retaining the durable accepted event and history; a result already committed and presented before later sibling cancellation remains accepted.**
+- Rationale: Latest-batch UI side effects must not run for work the current presentation context rejected.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D045 — Coalesce Claude status by identity and authoritative order
+- Context: A delayed status begin can follow its own completion, while A→B→A overlap can leave stale B work queued.
+- Options: Fetch every status request / Reuse the running fetch while transferring ordered ownership
+- **Decision: Install status ownership before suspension, reject a begin after the same order completed, re-begin on same-context order upgrade, and clear stale different-context pending work on A→B→A.**
+- Rationale: One reusable fetch produces the newest eligible status without stuck loading, stale publication, or redundant follow-up.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D046 — Serialize a small shared B04 bootstrap
+- Context: P10 needs the refresh provider factory, and P11/P12 otherwise contend for MenuBarManager and legacy Claude-only presentation fields.
+- Options: Let each UI phase create private seams / Establish shared factory and normalized projection seams first
+- **Decision: Before parallel B04 implementation, expose one reusable fresh Codex provider/executable resolver and one profile-keyed normalized presentation projection from MenuBarManager.**
+- Rationale: P10 can then own setup/settings, P11 popover content, P12 menu/status/icon surfaces, and the PM can serialize localization catalogs without overlapping edits.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D047 — Make stream teardown independent of process-wait success
+- Context: A blocked-write abort killed the owned tree, but the later close path could throw a termination timeout before removing readability handlers and closing pipe descriptors.
+- Options: Return immediately on the wait error / Preserve the wait error while making local stream cleanup unconditional
+- **Decision: Run local handler, descriptor, and termination-handler cleanup on every close exit while preserving the original bounded-wait result.**
+- Rationale: Process-lifecycle failure must not create a second resource-lifecycle failure or defer cleanup to deinitialization.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D048 — Drain routed protocol input before terminal failure
+- Context: Valid responses and notifications could be routed immediately before EOF, then removed by terminal cleanup before their consumers registered.
+- Options: Let terminal state invalidate all unconsumed input / Distinguish terminal input from explicit discard
+- **Decision: Terminal input rejects only operations requiring future bytes; completed responses and queued notifications remain consumable exactly once before the stored terminal error.**
+- Rationale: Actor scheduling must not decide whether already-accepted protocol frames are delivered.
+- Status: RESOLVED — proceeded 2026-07-30
+
+### D049 — Let explicit close win atomically
+- Context: Queue-first terminal draining could otherwise let a concurrent notification or continuation-less request escape after a caller explicitly began closing the session.
+- Options: Wait for process teardown before discarding / Mark closed and discard synchronously before the first teardown suspension
+- **Decision: Explicit close atomically rejects and discards routed input before awaiting process cleanup; a request whose send crosses that boundary receives its exact typed cancellation cause, not a protocol error.**
+- Rationale: Reader termination preserves accepted input, but caller-directed close is an intentional local discard boundary and must be deterministic.
+- Status: RESOLVED — proceeded 2026-07-30
+
 ---
 
 ## Open Decisions

@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		056C52802F017E50007E2A48 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = SPARKLE_PRODUCT_DEP /* Sparkle */; };
+		CODEX_PROVIDER_APP_BUILD_FILE /* CodexUsageProvider in Frameworks */ = {isa = PBXBuildFile; productRef = CODEX_PROVIDER_APP_PRODUCT_DEP /* CodexUsageProvider */; };
+		USAGECORE_APP_BUILD_FILE /* UsageCore in Frameworks */ = {isa = PBXBuildFile; productRef = USAGECORE_APP_PRODUCT_DEP /* UsageCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,6 +46,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				056C52802F017E50007E2A48 /* Sparkle in Frameworks */,
+				CODEX_PROVIDER_APP_BUILD_FILE /* CodexUsageProvider in Frameworks */,
+				USAGECORE_APP_BUILD_FILE /* UsageCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -96,6 +100,8 @@
 			name = "Claude Usage";
 			packageProductDependencies = (
 				SPARKLE_PRODUCT_DEP /* Sparkle */,
+				CODEX_PROVIDER_APP_PRODUCT_DEP /* CodexUsageProvider */,
+				USAGECORE_APP_PRODUCT_DEP /* UsageCore */,
 			);
 			productName = "Claude Usage";
 			productReference = 05CD2CB22EA985A100004C83 /* Claude Usage.app */;
@@ -163,6 +169,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				SPARKLE_PACKAGE_REF /* XCRemoteSwiftPackageReference "Sparkle" */,
+				USAGEKIT_PACKAGE_REF /* XCLocalSwiftPackageReference "UsageKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 05CD2CB32EA985A100004C83 /* Products */;
@@ -518,6 +525,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		USAGEKIT_PACKAGE_REF /* XCLocalSwiftPackageReference "UsageKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/UsageKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		SPARKLE_PACKAGE_REF /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -534,6 +548,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = SPARKLE_PACKAGE_REF /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		CODEX_PROVIDER_APP_PRODUCT_DEP /* CodexUsageProvider */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = USAGEKIT_PACKAGE_REF /* XCLocalSwiftPackageReference "UsageKit" */;
+			productName = CodexUsageProvider;
+		};
+		USAGECORE_APP_PRODUCT_DEP /* UsageCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = USAGEKIT_PACKAGE_REF /* XCLocalSwiftPackageReference "UsageKit" */;
+			productName = UsageCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -1,8 +1,226 @@
 import Cocoa
 import SwiftUI
 import Combine
+import UsageCore
 
+nonisolated struct RefreshTimingPolicy: Equatable, Sendable {
+    struct TimerFire: Equatable, Sendable {
+        let occurredAt: Date
+        let trigger: UsageRefreshTrigger
+    }
+
+    static let networkDebounce: TimeInterval = 2
+    static let wakeDebounce: TimeInterval = 10
+    static let wakeDelay: TimeInterval = 3
+    static let timerToleranceFraction = 0.1
+
+    let interval: TimeInterval
+    let tolerance: TimeInterval
+
+    init(interval: TimeInterval) {
+        self.interval = interval
+        tolerance = interval * Self.timerToleranceFraction
+    }
+
+    static func shouldRefreshForNetworkAvailability(
+        hasRefreshableProfile: Bool,
+        elapsedSinceLastTrigger: TimeInterval
+    ) -> Bool {
+        hasRefreshableProfile
+            && elapsedSinceLastTrigger > networkDebounce
+    }
+
+    static func shouldRefreshAfterWake(
+        elapsedSinceLastAutomaticRefresh: TimeInterval
+    ) -> Bool {
+        elapsedSinceLastAutomaticRefresh > wakeDebounce
+    }
+
+    static func timerFired(at date: Date) -> TimerFire {
+        TimerFire(occurredAt: date, trigger: .timer)
+    }
+}
+
+@MainActor
 class MenuBarManager: NSObject, ObservableObject {
+    enum UsageProjectionTarget: Equatable {
+        case primary
+        case clickedProfile
+    }
+
+    final class RefreshSideEffectRouter {
+        struct Hooks {
+            let recordClaude:
+                (AcceptedUsageRefreshEvent, ClaudeUsage) -> Void
+            let writeStatusline:
+                (AcceptedUsageRefreshEvent, ClaudeUsage) -> Void
+            let notify:
+                (AcceptedUsageRefreshEvent, ClaudeUsage) -> Void
+            let autoSwitch:
+                (
+                    AcceptedUsageRefreshEvent,
+                    ClaudeUsage,
+                    Profile
+                ) -> Void
+            let recordAPI:
+                (AcceptedUsageRefreshEvent, APIUsage) -> Void
+            let finalizeBatch: (UsageRefreshBatchResult) -> Void
+            let recordBatchSuccess:
+                (UsageRefreshBatchResult) -> Void
+            let recordClaudeBatchSuccess:
+                (UsageRefreshBatchResult) -> Void
+            let showBatchSuccess:
+                (UsageRefreshBatchResult) -> Void
+            let autoSwitchBatch:
+                (
+                    UsageRefreshBatchResult,
+                    ClaudeUsage,
+                    Profile
+                ) -> Void
+            let logFailure:
+                (UsageRefreshFailureEvent, AppError) -> Void
+            let recordInteractiveFailure:
+                (UsageRefreshFailureEvent, AppError) -> Void
+            let showInteractiveFailure:
+                (UsageRefreshFailureEvent, AppError) -> Void
+        }
+
+        private let hooks: Hooks
+
+        init(hooks: Hooks) {
+            self.hooks = hooks
+        }
+
+        func committed(_ event: AcceptedUsageRefreshEvent) {
+            guard event.identity.providerID == .claude else {
+                return
+            }
+            if event.acceptedComponents.contains(.providerUsage),
+               let usage = event.currentUsage.claudeUsage {
+                hooks.recordClaude(event, usage)
+            }
+            if event.acceptedComponents.contains(.claudeAPI),
+               let usage = event.currentUsage.apiUsage {
+                hooks.recordAPI(event, usage)
+            }
+        }
+
+        func presented(
+            _ event: AcceptedUsageRefreshEvent,
+            currentContext: UsagePresentationContext,
+            activeProfile: Profile?
+        ) {
+            guard event.identity.providerID == .claude,
+                  event.acceptedComponents.contains(.providerUsage),
+                  let usage = event.currentUsage.claudeUsage,
+                  let activeProfile,
+                  MenuBarManager
+                    .shouldApplyInteractiveRefreshSideEffects(
+                        eventContext: event.presentationContext,
+                        currentContext: currentContext,
+                        eventProfileID: event.identity.profileID,
+                        activeProfileID: activeProfile.id
+                    ) else {
+                return
+            }
+            if event.capabilities.supports(
+                .statusLineIntegration
+            ) {
+                hooks.writeStatusline(event, usage)
+            }
+            hooks.notify(event, usage)
+            hooks.autoSwitch(event, usage, activeProfile)
+        }
+
+        func finished(
+            _ result: UsageRefreshBatchResult,
+            currentContext: UsagePresentationContext,
+            latestInvocationOrder: UInt64,
+            activeProfile: Profile?,
+            activeSnapshot: PresentationSnapshot?
+        ) {
+            guard result.isLatestBatch,
+                  result.invocationOrder == latestInvocationOrder,
+                  result.presentationContext == currentContext else {
+                return
+            }
+            hooks.finalizeBatch(result)
+            guard result.outcomes.values.contains(where: {
+                if case .accepted = $0 { return true }
+                return false
+            }) else {
+                return
+            }
+            if result.presentationContext.mode == .single {
+                guard let focusedProfileID =
+                        result.presentationContext.focusedProfileID,
+                      activeProfile?.id == focusedProfileID,
+                      case .accepted =
+                        result.outcomes[focusedProfileID],
+                      let activeSnapshot,
+                      activeSnapshot.profileID == focusedProfileID,
+                      activeSnapshot.presentationEpoch
+                        == result.presentationContext.epoch,
+                      activeSnapshot.providerID
+                        == activeProfile?.providerID,
+                      activeSnapshot.providerRevision
+                        == activeProfile?.providerRevision else {
+                    return
+                }
+                hooks.recordBatchSuccess(result)
+                if activeSnapshot.providerID == .claude {
+                    hooks.recordClaudeBatchSuccess(result)
+                }
+                if result.trigger.isUserInitiated {
+                    hooks.showBatchSuccess(result)
+                }
+                return
+            }
+            guard let activeProfile,
+                  let outcome = result.outcomes[activeProfile.id],
+                  case .accepted = outcome,
+                  let activeSnapshot,
+                  activeSnapshot.providerID == .claude,
+                  let usage = activeSnapshot.claudeUsage else {
+                return
+            }
+            hooks.autoSwitchBatch(
+                result,
+                usage,
+                activeProfile
+            )
+        }
+
+        func failed(
+            _ event: UsageRefreshFailureEvent,
+            error: AppError,
+            currentContext: UsagePresentationContext,
+            activeProfileID: UUID?
+        ) {
+            hooks.logFailure(event, error)
+            guard event.component != .claudeAPI,
+                  event.identity.providerID == .claude,
+                  MenuBarManager
+                    .shouldApplyInteractiveRefreshSideEffects(
+                        eventContext: event.presentationContext,
+                        currentContext: currentContext,
+                        eventProfileID: event.identity.profileID,
+                        activeProfileID: activeProfileID
+                    ) else {
+                return
+            }
+            hooks.recordInteractiveFailure(event, error)
+            if event.trigger.isUserInitiated {
+                hooks.showInteractiveFailure(event, error)
+            }
+        }
+    }
+
+    nonisolated enum PeriodicHistoryComponent: Hashable {
+        case session
+        case weekly
+    }
+
     private var statusItem: NSStatusItem?  // Legacy - kept for backwards compatibility
     private var statusBarUIManager: StatusBarUIManager?
     private var refreshTimer: Timer?
@@ -58,195 +276,575 @@ class MenuBarManager: NSObject, ObservableObject {
     // Track which button is currently showing the popover
     private weak var currentPopoverButton: NSStatusBarButton?
 
-    private let apiService = ClaudeAPIService()
-    private let statusService = ClaudeStatusService()
     private let dataStore = DataStore.shared
     private let networkMonitor = NetworkMonitor.shared
-    private let profileManager = ProfileManager.shared
+    private let profileManager: ProfileManager
     private let autoStartService = AutoStartSessionService.shared
+    private let refreshRuntime: UsageRefreshRuntime
+    private var refreshEventObserver: UUID?
+    private var refreshPresentedEventObserver: UUID?
+    private var refreshFailureObserver: UUID?
+    private var refreshBatchObserver: UUID?
+    private var presentationEpoch: UInt64 = 0
+    private var hasCleanedUpResources = false
+    private lazy var refreshSideEffectRouter =
+        RefreshSideEffectRouter(
+            hooks: .init(
+                recordClaude: { [weak self] event, usage in
+                    self?.recordAcceptedClaude(
+                        event,
+                        usage: usage
+                    )
+                },
+                writeStatusline: { event, usage in
+                    guard StatuslineService.shared.isInstalled else {
+                        return
+                    }
+                    StatuslineService.shared.writeUsageCache(
+                        usage: usage,
+                        profileName: event.profileName
+                    )
+                },
+                notify: { event, usage in
+                    NotificationManager.shared.checkAndNotify(
+                        usage: usage,
+                        profileName: event.profileName,
+                        settings: event.notificationSettings
+                    )
+                },
+                autoSwitch: { [weak self] event, usage, profile in
+                    self?.checkAutoSwitchIfNeeded(
+                        usage: usage,
+                        currentProfile: profile,
+                        expectedProfileID:
+                            event.identity.profileID,
+                        expectedPresentationEpoch:
+                            event.presentationContext.epoch
+                    )
+                },
+                recordAPI: { [weak self] event, usage in
+                    self?.recordAcceptedAPI(
+                        event,
+                        usage: usage
+                    )
+                },
+                finalizeBatch: { [weak self] _ in
+                    self?.updateAllStatusBarIcons()
+                },
+                recordBatchSuccess: { [weak self] _ in
+                    self?.recordSuccessfulSingleBatch()
+                },
+                recordClaudeBatchSuccess: { _ in
+                    ErrorRecovery.shared.recordSuccess(for: .api)
+                },
+                showBatchSuccess: { [weak self] _ in
+                    self?.showSuccessNotification()
+                },
+                autoSwitchBatch: {
+                    [weak self] result, usage, profile in
+                    self?.checkAutoSwitchIfNeeded(
+                        usage: usage,
+                        currentProfile: profile,
+                        expectedProfileID: profile.id,
+                        expectedPresentationEpoch:
+                            result.presentationContext.epoch
+                    )
+                },
+                logFailure: { event, error in
+                    Self.logRefreshFailure(event, error: error)
+                },
+                recordInteractiveFailure: { _, _ in
+                    ErrorRecovery.shared.recordFailure(for: .api)
+                },
+                showInteractiveFailure: { _, error in
+                    ErrorPresenter.shared.showAlert(for: error)
+                }
+            )
+        )
 
-    private lazy var refreshSideEffectSink = RefreshSideEffectSink(
-        hooks: .init(
-            isProfileWritable: { [weak self] profileID in
-                self?.isRefreshProfileWritable(profileID) ?? false
-            },
-            recordClaude: { [weak self] plan, usage in
-                self?.recordClaudeRefresh(plan: plan, usage: usage)
-            },
-            saveClaude: { [weak self] plan, usage, shouldPresent in
-                self?.saveClaudeRefresh(
-                    plan: plan,
-                    usage: usage,
-                    shouldPresent: shouldPresent
-                ) ?? false
-            },
-            publishClaude: { [weak self] _, usage in
-                self?.usage = usage
-            },
-            writeStatusline: { [weak self] plan, usage in
-                self?.writeStatuslineRefresh(plan: plan, usage: usage)
-            },
-            notify: { [weak self] plan, usage in
-                self?.notifyForRefresh(plan: plan, usage: usage)
-            },
-            isAutoSwitchPresentationCurrent: { [weak self] plan in
-                guard let self else { return false }
-                return Self.autoSwitchProfile(
-                    for: plan,
-                    profiles: self.profileManager.profiles,
-                    activeProfileID:
-                        self.profileManager.activeProfile?.id,
-                    presentationIdentity:
-                        self.currentRefreshPresentationIdentity
-                ) != nil
-            },
-            autoSwitch: { [weak self] plan, usage in
-                guard let self,
-                      let capturedProfile =
-                        Self.autoSwitchProfile(
-                            for: plan,
-                            profiles: self.profileManager.profiles,
-                            activeProfileID:
-                                self.profileManager.activeProfile?.id,
-                            presentationIdentity:
-                                self.currentRefreshPresentationIdentity
-                        ) else {
+    init(
+        apiService: ClaudeAPIService,
+        statusService: ClaudeStatusService,
+        profileManager: ProfileManager,
+        refreshRuntime: UsageRefreshRuntime? = nil
+    ) {
+        self.profileManager = profileManager
+        self.refreshRuntime = refreshRuntime
+            ?? UsageRefreshRuntime.live(
+                profileManager: profileManager,
+                apiService: apiService,
+                statusService: statusService
+            )
+        super.init()
+        refreshEventObserver = self.refreshRuntime.eventHub.observe {
+            [weak self] event in
+            self?.handleCommittedRefresh(event)
+        }
+        refreshPresentedEventObserver =
+            self.refreshRuntime.eventHub.observePresented {
+                [weak self] event in
+                self?.handlePresentedRefresh(event)
+        }
+        refreshFailureObserver =
+            self.refreshRuntime.eventHub.observeFailures {
+                [weak self] event in
+                self?.handleFailedRefresh(event)
+            }
+        refreshBatchObserver =
+            self.refreshRuntime.eventHub.observeBatches {
+                [weak self] result in
+                self?.handleCompletedRefreshBatch(result)
+            }
+        bindRefreshPresentation()
+    }
+
+    private func bindRefreshPresentation() {
+        refreshRuntime.presentationStore.$snapshots
+            .sink { [weak self] snapshots in
+                guard let self else { return }
+                let profileID =
+                    self.profileManager.displayMode == .multi
+                        ? self.clickedProfileId
+                            ?? self.profileManager.activeProfile?.id
+                        : self.profileManager.activeProfile?.id
+                guard let profileID,
+                      let snapshot = snapshots[profileID] else {
+                    self.resetVisibleRefreshProjection()
                     return
                 }
-                self.checkAutoSwitchIfNeeded(
-                    usage: usage,
-                    currentProfile: capturedProfile,
-                    expectedPresentationIdentity:
-                        plan.presentationIdentity
+                if Self.usageProjectionTarget(
+                    displayMode: self.profileManager.displayMode,
+                    clickedProfileID: self.clickedProfileId,
+                    snapshotProfileID: profileID
+                ) == .clickedProfile {
+                    self.clickedProfileUsage =
+                        snapshot.claudeUsage
+                    self.clickedProfileAPIUsage =
+                        snapshot.claudeAPIUsage
+                } else {
+                    self.usage = snapshot.claudeUsage ?? .empty
+                    self.apiUsage = snapshot.claudeAPIUsage
+                }
+                self.isRefreshing = snapshot.activity.isInFlight
+                self.lastSuccessfulRefreshTime =
+                    snapshot.lastSuccessfulAt
+                self.consecutiveRefreshFailures =
+                    snapshot.currentFailure?.consecutiveCount ?? 0
+                self.hasCredentialError =
+                    snapshot.currentFailure?.isCredentialFailure ?? false
+                self.lastRefreshError = snapshot.currentFailure.map {
+                    String(describing: $0.kind)
+                }
+                self.updateAllStatusBarIcons()
+            }
+            .store(in: &cancellables)
+
+        refreshRuntime.presentationStore.$claudeStatus
+            .map(\.status)
+            .sink { [weak self] in
+                self?.status = $0
+            }
+            .store(in: &cancellables)
+
+        refreshRuntime.presentationStore.$claudeStatus
+            .compactMap {
+                presentation
+                    -> (UInt64, ProviderRefreshFailure)? in
+                presentation.failure.map {
+                    (presentation.presentationEpoch, $0)
+                }
+            }
+            .removeDuplicates {
+                $0.0 == $1.0 && $0.1 == $1.1
+            }
+            .sink { [weak self] epoch, failure in
+                guard let self,
+                      self.refreshRuntime.presentationContext.epoch
+                        == epoch else {
+                    return
+                }
+                let error = Self.appError(for: failure)
+                ErrorLogger.shared.log(error, severity: .info)
+                LoggingService.shared.log(
+                    "MenuBarManager: Claude status refresh failed"
                 )
-            },
-            recordAPI: { [weak self] plan, usage in
-                self?.recordAPIRefresh(plan: plan, usage: usage)
-            },
-            saveAPI: { [weak self] plan, usage, shouldPresent in
-                self?.saveAPIRefresh(
-                    plan: plan,
-                    usage: usage,
-                    shouldPresent: shouldPresent
-                ) ?? false
-            },
-            publishAPI: { [weak self] _, usage in
-                self?.apiUsage = usage
-            },
-            claudeFailed: { [weak self] plan, error, shouldPresent in
-                self?.handleClaudeRefreshFailure(
-                    plan: plan,
-                    error: error,
-                    shouldPresent: shouldPresent
+            }
+            .store(in: &cancellables)
+    }
+
+    private func activateRefreshPresentation() {
+        presentationEpoch &+= 1
+        let visibleProfiles: [Profile]
+        if profileManager.displayMode == .multi {
+            visibleProfiles = profileManager.profiles.filter(
+                \.isSelectedForDisplay
+            )
+        } else {
+            visibleProfiles = [profileManager.activeProfile]
+                .compactMap { $0 }
+            clickedProfileId = nil
+            clickedProfileUsage = nil
+            clickedProfileAPIUsage = nil
+        }
+        let visibleProfileIDs = Set(visibleProfiles.map(\.id))
+        if profileManager.displayMode == .multi,
+           let clickedProfileId,
+           !visibleProfileIDs.contains(clickedProfileId) {
+            self.clickedProfileId = nil
+            clickedProfileUsage = nil
+            clickedProfileAPIUsage = nil
+        }
+        refreshRuntime.activate(
+            profiles: profileManager.profiles,
+            focusedProfileID:
+                profileManager.displayMode == .multi
+                    ? clickedProfileId
+                        ?? profileManager.activeProfile?.id
+                    : profileManager.activeProfile?.id,
+            visibleProfileIDs: visibleProfileIDs,
+            epoch: presentationEpoch,
+            mode: profileManager.displayMode == .multi
+                ? .multi
+                : .single
+        )
+    }
+
+    private func resetVisibleRefreshProjection() {
+        if profileManager.displayMode == .multi,
+           clickedProfileId != nil {
+            clickedProfileUsage = nil
+            clickedProfileAPIUsage = nil
+        } else {
+            usage = .empty
+            apiUsage = nil
+        }
+        isRefreshing = false
+        lastSuccessfulRefreshTime = nil
+        consecutiveRefreshFailures = 0
+        hasCredentialError = false
+        lastRefreshError = nil
+    }
+
+    private func canAttemptUsageRefresh(_ profile: Profile) -> Bool {
+        switch profile.providerConfiguration {
+        case .claude:
+            return profile.hasUsageCredentials
+        case .codex(let configuration):
+            return configuration.linkedHome != nil
+                && refreshRuntime.registry.isRefreshEnabled(
+                    for: .codex
                 )
-            },
-            apiFailed: { [weak self] plan, error, _ in
-                self?.handleAPIRefreshFailure(plan: plan, error: error)
-            },
-            presentStatus: { [weak self] status in
-                self?.status = status
-            },
-            statusFailed: { error in
-                let appError = AppError.wrap(error)
+        }
+    }
+
+    nonisolated static func usageProjectionTarget(
+        displayMode: ProfileDisplayMode,
+        clickedProfileID: UUID?,
+        snapshotProfileID: UUID
+    ) -> UsageProjectionTarget {
+        displayMode == .multi
+            && clickedProfileID == snapshotProfileID
+            ? .clickedProfile
+            : .primary
+    }
+
+    static func popoverUsage(
+        clickedProfileID: UUID?,
+        clickedProfileUsage: ClaudeUsage?,
+        activeProfileUsage: ClaudeUsage
+    ) -> ClaudeUsage {
+        guard clickedProfileID != nil else {
+            return activeProfileUsage
+        }
+        return clickedProfileUsage ?? .empty
+    }
+
+    static func popoverAPIUsage(
+        clickedProfileID: UUID?,
+        clickedProfileAPIUsage: APIUsage?,
+        activeProfileAPIUsage: APIUsage?
+    ) -> APIUsage? {
+        guard clickedProfileID != nil else {
+            return activeProfileAPIUsage
+        }
+        return clickedProfileAPIUsage
+    }
+
+    private var hasRefreshableVisibleProfile: Bool {
+        if profileManager.displayMode == .multi {
+            return profileManager.profiles.contains {
+                $0.isSelectedForDisplay
+                    && canAttemptUsageRefresh($0)
+            }
+        }
+        return profileManager.activeProfile.map(
+            canAttemptUsageRefresh
+        ) ?? false
+    }
+
+    private func handleCommittedRefresh(
+        _ event: AcceptedUsageRefreshEvent
+    ) {
+        refreshSideEffectRouter.committed(event)
+    }
+
+    private func handlePresentedRefresh(
+        _ event: AcceptedUsageRefreshEvent
+    ) {
+        guard Self.isCurrentRefreshInput(
+            eventInputGeneration: event.inputGeneration,
+            eventInvocationOrder: event.invocationOrder,
+            currentInputGeneration:
+                refreshRuntime.inputLedger.generation(
+                    for: event.identity.profileID
+                ),
+            currentInvocationOrder:
+                refreshRuntime.inputLedger.invocationOrder(
+                    for: event.identity.profileID
+                )
+        ) else {
+            return
+        }
+        refreshSideEffectRouter.presented(
+            event,
+            currentContext: refreshRuntime.presentationContext,
+            activeProfile: profileManager.activeProfile
+        )
+    }
+
+    private func handleCompletedRefreshBatch(
+        _ result: UsageRefreshBatchResult
+    ) {
+        let activeProfile = profileManager.activeProfile
+        refreshSideEffectRouter.finished(
+            result,
+            currentContext: refreshRuntime.presentationContext,
+            latestInvocationOrder:
+                refreshRuntime.inputLedger.latestInvocationOrder,
+            activeProfile: activeProfile,
+            activeSnapshot: activeProfile.flatMap {
+                refreshRuntime.presentationStore.snapshot(
+                    for: $0.id
+                )
+            }
+        )
+    }
+
+    private func handleFailedRefresh(
+        _ event: UsageRefreshFailureEvent
+    ) {
+        guard Self.isCurrentRefreshInput(
+            eventInputGeneration: event.inputGeneration,
+            eventInvocationOrder: event.invocationOrder,
+            currentInputGeneration:
+                refreshRuntime.inputLedger.generation(
+                    for: event.identity.profileID
+                ),
+            currentInvocationOrder:
+                refreshRuntime.inputLedger.invocationOrder(
+                    for: event.identity.profileID
+                )
+        ) else {
+            return
+        }
+        let appError = Self.appError(for: event.failure)
+        refreshSideEffectRouter.failed(
+            event,
+            error: appError,
+            currentContext: refreshRuntime.presentationContext,
+            activeProfileID: profileManager.activeProfile?.id
+        )
+    }
+
+    private func recordAcceptedClaude(
+        _ event: AcceptedUsageRefreshEvent,
+        usage newUsage: ClaudeUsage
+    ) {
+        let previous = event.previousUsage?.claudeUsage
+        checkAndRecordSessionReset(
+            profileId: event.identity.profileID,
+            previousUsage: previous,
+            newUsage: newUsage
+        )
+        checkAndRecordWeeklyReset(
+            profileId: event.identity.profileID,
+            previousUsage: previous,
+            newUsage: newUsage
+        )
+        let resetFlags =
+            resetJustRecorded[event.identity.profileID]
+            ?? (session: false, weekly: false)
+        let periodicComponents =
+            Self.periodicHistoryComponents(
+                sessionResetRecorded: resetFlags.session,
+                weeklyResetRecorded: resetFlags.weekly
+            )
+        if periodicComponents.contains(.session) {
+            UsageHistoryService.shared.recordSessionPeriodic(
+                for: event.identity.profileID,
+                usage: newUsage
+            )
+        }
+        if periodicComponents.contains(.weekly) {
+            UsageHistoryService.shared.recordWeeklyPeriodic(
+                for: event.identity.profileID,
+                usage: newUsage
+            )
+        }
+        resetJustRecorded[event.identity.profileID] = (
+            session: false,
+            weekly: false
+        )
+    }
+
+    private func recordAcceptedAPI(
+        _ event: AcceptedUsageRefreshEvent,
+        usage newUsage: APIUsage
+    ) {
+        checkAndRecordBillingCycleReset(
+            profileId: event.identity.profileID,
+            previousUsage: event.previousUsage?.apiUsage,
+            newUsage: newUsage
+        )
+    }
+
+    private func recordSuccessfulSingleBatch() {
+        consecutiveRefreshFailures = 0
+        lastRefreshError = nil
+        hasCredentialError = false
+        lastSuccessfulRefreshTime = Date()
+    }
+
+    private static func logRefreshFailure(
+        _ event: UsageRefreshFailureEvent,
+        error appError: AppError
+    ) {
+        switch event.component {
+        case .claudeAPI:
+            ErrorLogger.shared.log(appError, severity: .info)
+            LoggingService.shared.log(
+                "MenuBarManager: Claude API billing refresh failed"
+            )
+        case .providerUsage, .capture, .persistence:
+            guard event.identity.providerID == .claude else {
                 ErrorLogger.shared.log(appError, severity: .info)
                 LoggingService.shared.log(
-                    "MenuBarManager: Failed to fetch status - [\(appError.code.rawValue)] \(appError.message)"
+                    "MenuBarManager: Provider refresh failed (\(event.failure.kind))"
                 )
-            },
-            batchFinalized: { [weak self] result in
-                self?.finalizeRefreshBatch(result)
-            },
-            batchSucceeded: { [weak self] result in
-                self?.recordSuccessfulRefreshBatch(result)
+                return
             }
-        )
-    )
+            ErrorLogger.shared.log(appError, severity: .error)
+            LoggingService.shared.logError(
+                "MenuBarManager: Claude usage refresh failed (\(event.failure.kind))"
+            )
+        }
+    }
 
-    private lazy var refreshExecutor = TransitionalRefreshExecutor(
-        hooks: TransitionalRefreshExecutor.Hooks(
-            currentPresentationIdentity: { [weak self] in
-                self?.currentRefreshPresentationIdentity
-            },
-            isProfileWritable: { [weak self] profileID in
-                self?.refreshSideEffectSink
-                    .isProfileWritable(profileID) ?? false
-            },
-            setLoading: { [weak self] isLoading in
-                self?.isRefreshing = isLoading
-            },
-            fetchClaude: { [weak self] request in
-                guard let self else {
-                    throw CancellationError()
-                }
-                return try await self.apiService.fetchUsageData(
-                    using: request
-                )
-            },
-            fetchAPI: { [weak self] request in
-                guard let self else {
-                    throw CancellationError()
-                }
-                return try await self.apiService.fetchAPIUsageData(
-                    using: request
-                )
-            },
-            fetchStatus: { [weak self] in
-                guard let self else {
-                    throw CancellationError()
-                }
-                return try await self.statusService.fetchStatus()
-            },
-            commitClaude: { [weak self] plan, newUsage, shouldPresent in
-                self?.refreshSideEffectSink.commitClaude(
-                    plan,
-                    usage: newUsage,
-                    shouldPresent: shouldPresent
-                ) ?? false
-            },
-            presentClaude: { [weak self] plan, newUsage in
-                self?.refreshSideEffectSink.presentClaude(
-                    plan,
-                    usage: newUsage
-                )
-            },
-            commitAPI: { [weak self] plan, newUsage, shouldPresent in
-                self?.refreshSideEffectSink.commitAPI(
-                    plan,
-                    usage: newUsage,
-                    shouldPresent: shouldPresent
-                ) ?? false
-            },
-            presentAPI: { [weak self] plan, newUsage in
-                self?.refreshSideEffectSink.presentAPI(
-                    plan,
-                    usage: newUsage
-                )
-            },
-            claudeFailed: { [weak self] plan, error, shouldPresent in
-                self?.refreshSideEffectSink.claudeFailed(
-                    plan,
-                    error: error,
-                    shouldPresent: shouldPresent
-                )
-            },
-            apiFailed: { [weak self] plan, error, shouldPresent in
-                self?.refreshSideEffectSink.apiFailed(
-                    plan,
-                    error: error,
-                    shouldPresent: shouldPresent
-                )
-            },
-            presentStatus: { [weak self] status in
-                self?.refreshSideEffectSink.presentStatus(status)
-            },
-            statusFailed: { [weak self] error in
-                self?.refreshSideEffectSink.statusFailed(error)
-            },
-            batchFinished: { [weak self] result in
-                self?.refreshSideEffectSink.finishBatch(result)
+    nonisolated static func isCurrentFailureEvent(
+        _ event: UsageRefreshFailureEvent,
+        presentationContext: UsagePresentationContext,
+        activeProfileID: UUID?
+    ) -> Bool {
+        event.presentationContext == presentationContext
+            && event.identity.profileID == activeProfileID
+    }
+
+    nonisolated static func isCurrentRefreshInput(
+        eventInputGeneration: UInt64,
+        eventInvocationOrder: UInt64,
+        currentInputGeneration: UInt64,
+        currentInvocationOrder: UInt64
+    ) -> Bool {
+        eventInputGeneration == currentInputGeneration
+            && eventInvocationOrder == currentInvocationOrder
+    }
+
+    nonisolated static func
+        shouldApplyInteractiveRefreshSideEffects(
+            eventContext: UsagePresentationContext,
+            currentContext: UsagePresentationContext,
+            eventProfileID: UUID,
+            activeProfileID: UUID?
+        ) -> Bool {
+        eventContext.mode == .single
+            && eventContext == currentContext
+            && eventProfileID == activeProfileID
+    }
+
+    nonisolated static func periodicHistoryComponents(
+        sessionResetRecorded: Bool,
+        weeklyResetRecorded: Bool
+    ) -> Set<PeriodicHistoryComponent> {
+        var components = Set<PeriodicHistoryComponent>()
+        if !sessionResetRecorded {
+            components.insert(.session)
+        }
+        if !weeklyResetRecorded {
+            components.insert(.weekly)
+        }
+        return components
+    }
+
+    static func appError(
+        for failure: ProviderRefreshFailure
+    ) -> AppError {
+        let code: ErrorCode
+        if let legacyErrorCode = failure.legacyErrorCode {
+            code = legacyErrorCode
+        } else {
+            switch failure.kind {
+            case .unauthenticated:
+                code = .apiUnauthorized
+            case .timedOut:
+                code = .networkTimeout
+            case .malformedResponse, .protocolMismatch:
+                code = .apiInvalidResponse
+            case .persistence:
+                code = .storageWriteFailed
+            default:
+                code = .apiGenericError
             }
-        )
-    )
+        }
+        switch code {
+        case .sessionKeyNotFound:
+            return .sessionKeyNotFound()
+        case .sessionKeyInvalid:
+            return .sessionKeyInvalid(
+                reason: "Typed refresh credential validation failed"
+            )
+        case .sessionKeyExpired:
+            return AppError(
+                code: .sessionKeyExpired,
+                message: "error.session_key_invalid".localized,
+                technicalDetails:
+                    "Typed refresh credential validation expired",
+                isRecoverable: true,
+                recoverySuggestion:
+                    "error.session_key_not_found.suggestion".localized
+            )
+        case .apiUnauthorized:
+            return .apiUnauthorized()
+        case .apiRateLimited:
+            return .apiRateLimited()
+        case .apiServerError:
+            // The typed refresh boundary deliberately discards raw HTTP
+            // payloads. Use a canonical safe representative status.
+            return .apiServerError(statusCode: 500)
+        case .networkTimeout:
+            return .networkTimeout()
+        case .networkUnavailable:
+            return .networkUnavailable()
+        case .storageWriteFailed:
+            return .storageWriteFailed()
+        default:
+            return AppError(
+                code: code,
+                message:
+                    "Usage refresh failed (\(failure.kind))",
+                isRecoverable: failure.isRecoverable
+            )
+        }
+    }
 
     // Combine cancellables for profile observation
     private var cancellables = Set<AnyCancellable>()
@@ -268,6 +866,11 @@ class MenuBarManager: NSObject, ObservableObject {
 
     // Observer for credential changes (add, remove, update)
     private var credentialsObserver: NSObjectProtocol?
+
+    // Observers for provider relinking and profile deletion fences
+    private var providerConfigurationObserver: NSObjectProtocol?
+    private var profileDeletionStartedObserver: NSObjectProtocol?
+    private var profileDeletionCompletedObserver: NSObjectProtocol?
 
     // Observer for display mode changes (single/multi profile)
     private var displayModeObserver: NSObjectProtocol?
@@ -294,6 +897,7 @@ class MenuBarManager: NSObject, ObservableObject {
 
         // Observe profile changes - CRITICAL: Set up before anything else
         observeProfileChanges()
+        activateRefreshPresentation()
 
         // Initialize status bar UI manager
         statusBarUIManager = StatusBarUIManager()
@@ -302,15 +906,17 @@ class MenuBarManager: NSObject, ObservableObject {
         // Check if we should use multi-profile mode
         if profileManager.displayMode == .multi {
             // Multi-profile mode - setup with selected profiles
-            setupMultiProfileMode()
+            setupMultiProfileMode(refreshTrigger: nil)
         } else {
             // Single profile mode - setup with active profile's config
             let config = profileManager.activeProfile?.iconConfig ?? .default
-            let hasUsageCredentials = profileManager.activeProfile?.hasUsageCredentials ?? false
+            let canRefresh = profileManager.activeProfile.map(
+                canAttemptUsageRefresh
+            ) ?? false
 
             // If no usage credentials, create empty config to show default logo
             let displayConfig: MenuBarIconConfiguration
-            if !hasUsageCredentials {
+            if !canRefresh {
                 displayConfig = MenuBarIconConfiguration(
                     colorMode: config.colorMode,
                     singleColorHex: config.singleColorHex,
@@ -334,7 +940,7 @@ class MenuBarManager: NSObject, ObservableObject {
         // Load saved data from active profile first (provides immediate feedback)
         // BUT only if profile has usage credentials - CLI alone can't show usage
         if let profile = profileManager.activeProfile {
-            if profile.hasUsageCredentials {
+            if canAttemptUsageRefresh(profile) {
                 // Profile has usage credentials - show saved usage data if available
                 if let savedUsage = profile.claudeUsage {
                     usage = savedUsage
@@ -356,26 +962,37 @@ class MenuBarManager: NSObject, ObservableObject {
             // Only refresh if we haven't refreshed recently (avoid duplicate on startup)
             guard let self = self else { return }
 
-            // Skip if profile has no usage credentials (CLI alone can't be used)
-            guard let profile = self.profileManager.activeProfile, profile.hasUsageCredentials else {
-                LoggingService.shared.log("Skipping network-available refresh (no usage credentials)")
+            let elapsed = Date().timeIntervalSince(
+                self.lastRefreshTriggerTime
+            )
+            let hasRefreshableProfile =
+                self.hasRefreshableVisibleProfile
+            guard RefreshTimingPolicy
+                    .shouldRefreshForNetworkAvailability(
+                        hasRefreshableProfile:
+                            hasRefreshableProfile,
+                        elapsedSinceLastTrigger: elapsed
+                    ) else {
+                if !hasRefreshableProfile {
+                    LoggingService.shared.log(
+                        "Skipping network-available refresh (no usage credentials)"
+                    )
+                } else {
+                    LoggingService.shared.log(
+                        "Skipping network-available refresh (too soon after last refresh)"
+                    )
+                }
                 return
             }
-
-            let timeSinceLastRefresh = Date().timeIntervalSince(self.lastRefreshTriggerTime)
-            if timeSinceLastRefresh > 2.0 {  // At least 2 seconds since last refresh
-                self.refreshUsage()
-            } else {
-                LoggingService.shared.log("Skipping network-available refresh (too soon after last refresh)")
-            }
+            self.refreshUsage(trigger: .networkAvailable)
         }
         networkMonitor.startMonitoring()
 
         // Initial data fetch (with small delay for launch-at-login scenarios)
         // Only if profile has usage credentials (not just CLI)
-        if let profile = profileManager.activeProfile, profile.hasUsageCredentials {
+        if hasRefreshableVisibleProfile {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.refreshUsage()
+                self?.refreshUsage(trigger: .startup)
             }
         } else {
             LoggingService.shared.log("Skipping initial refresh (no usage credentials)")
@@ -392,6 +1009,7 @@ class MenuBarManager: NSObject, ObservableObject {
 
         // Observe session key updates
         observeCredentialChanges()
+        observeProviderLifecycleChanges()
 
         // Observe display mode changes (single/multi profile)
         observeDisplayModeChanges()
@@ -413,7 +1031,7 @@ class MenuBarManager: NSObject, ObservableObject {
             self?.togglePopover(nil)
         }
         shortcutManager.onRefresh = { [weak self] in
-            self?.refreshUsage()
+            self?.refreshUsage(trigger: .manual)
         }
         shortcutManager.onOpenSettings = { [weak self] in
             self?.preferencesClicked()
@@ -425,6 +1043,20 @@ class MenuBarManager: NSObject, ObservableObject {
     }
 
     func cleanup() {
+        cleanupResources()
+        refreshRuntime.shutdown(profiles: profileManager.profiles)
+    }
+
+    func cleanupAndWaitForTermination() async {
+        cleanupResources()
+        await refreshRuntime.shutdownAndWait(
+            profiles: profileManager.profiles
+        )
+    }
+
+    private func cleanupResources() {
+        guard !hasCleanedUpResources else { return }
+        hasCleanedUpResources = true
         ShortcutManager.shared.stopListening()
         refreshTimer?.invalidate()
         refreshTimer = nil
@@ -444,6 +1076,24 @@ class MenuBarManager: NSObject, ObservableObject {
         if let credentialsObserver = credentialsObserver {
             NotificationCenter.default.removeObserver(credentialsObserver)
             self.credentialsObserver = nil
+        }
+        if let providerConfigurationObserver {
+            NotificationCenter.default.removeObserver(
+                providerConfigurationObserver
+            )
+            self.providerConfigurationObserver = nil
+        }
+        if let profileDeletionStartedObserver {
+            NotificationCenter.default.removeObserver(
+                profileDeletionStartedObserver
+            )
+            self.profileDeletionStartedObserver = nil
+        }
+        if let profileDeletionCompletedObserver {
+            NotificationCenter.default.removeObserver(
+                profileDeletionCompletedObserver
+            )
+            self.profileDeletionCompletedObserver = nil
         }
         if let displayModeObserver = displayModeObserver {
             NotificationCenter.default.removeObserver(displayModeObserver)
@@ -476,6 +1126,28 @@ class MenuBarManager: NSObject, ObservableObject {
         lastKnownWeeklyResetTime.removeAll()
         lastKnownAPIResetTime.removeAll()
         resetJustRecorded.removeAll()
+        if let refreshEventObserver {
+            refreshRuntime.eventHub.removeObserver(refreshEventObserver)
+            self.refreshEventObserver = nil
+        }
+        if let refreshPresentedEventObserver {
+            refreshRuntime.eventHub.removeObserver(
+                refreshPresentedEventObserver
+            )
+            self.refreshPresentedEventObserver = nil
+        }
+        if let refreshFailureObserver {
+            refreshRuntime.eventHub.removeObserver(
+                refreshFailureObserver
+            )
+            self.refreshFailureObserver = nil
+        }
+        if let refreshBatchObserver {
+            refreshRuntime.eventHub.removeObserver(
+                refreshBatchObserver
+            )
+            self.refreshBatchObserver = nil
+        }
     }
 
     /// Cleans up tracking data for a specific profile (called when profile is deleted)
@@ -507,16 +1179,7 @@ class MenuBarManager: NSObject, ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] newProfile in
                 guard let self else { return }
-                self.refreshExecutor.presentationIdentityDidChange(
-                    to: newProfile.map {
-                        TransitionalRefreshExecutor.PresentationIdentity(
-                            profileID: $0.id,
-                            generation:
-                                self.profileManager
-                                    .activeProfileIdentityGeneration
-                        )
-                    }
-                )
+                self.activateRefreshPresentation()
                 guard let profile = newProfile else { return }
 
                 // Skip ONLY if this is the startup profile AND we haven't switched yet
@@ -579,9 +1242,9 @@ class MenuBarManager: NSObject, ObservableObject {
         recreatePopover()
 
         // 5. Trigger immediate refresh ONLY if profile has usage credentials
-        if profile.hasUsageCredentials {
+        if canAttemptUsageRefresh(profile) {
             self.lastRefreshTriggerTime = Date()
-            refreshUsage()
+            refreshUsage(trigger: .profileActivation)
         } else {
             LoggingService.shared.log("MenuBarManager: Skipping refresh for profile without usage credentials")
         }
@@ -616,11 +1279,13 @@ class MenuBarManager: NSObject, ObservableObject {
         }
 
         // Check if active profile has usage credentials (not just CLI)
-        let hasUsageCredentials = profileManager.activeProfile?.hasUsageCredentials ?? false
+        let canRefresh = profileManager.activeProfile.map(
+            canAttemptUsageRefresh
+        ) ?? false
 
         // If no usage credentials, use an empty config (will show default logo)
         let displayConfig: MenuBarIconConfiguration
-        if !hasUsageCredentials {
+        if !canRefresh {
             // Create config with no enabled metrics (will trigger default logo)
             displayConfig = MenuBarIconConfiguration(
                 colorMode: config.colorMode,
@@ -652,9 +1317,16 @@ class MenuBarManager: NSObject, ObservableObject {
         refreshTimer?.invalidate()
         refreshTimer = nil
 
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.refreshUsage()
+        let timing = RefreshTimingPolicy(interval: interval)
+        refreshTimer = Timer.scheduledTimer(
+            withTimeInterval: timing.interval,
+            repeats: true
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleAutomaticTimerFire()
+            }
         }
+        refreshTimer?.tolerance = timing.tolerance
 
         LoggingService.shared.log("Updated refresh interval to \(interval)s")
     }
@@ -715,16 +1387,18 @@ class MenuBarManager: NSObject, ObservableObject {
         if statusBarUIManager?.isInMultiProfileMode == true,
            let profileId = statusBarUIManager?.profileId(for: button),
            let profile = profileManager.profiles.first(where: { $0.id == profileId }) {
-            // Set the clicked profile data
             clickedProfileId = profileId
-            clickedProfileUsage = profile.claudeUsage ?? .empty
-            clickedProfileAPIUsage = profile.apiUsage
+            let snapshot = refreshRuntime.presentationStore.snapshot(
+                for: profileId
+            )
+            clickedProfileUsage = snapshot?.claudeUsage
+            clickedProfileAPIUsage = snapshot?.claudeAPIUsage
             LoggingService.shared.log("Multi-profile popover: showing data for '\(profile.name)'")
         } else {
             // Single profile mode - use active profile
-            clickedProfileId = profileManager.activeProfile?.id
-            clickedProfileUsage = nil  // Will use manager.usage
-            clickedProfileAPIUsage = nil  // Will use manager.apiUsage
+            clickedProfileId = nil
+            clickedProfileUsage = nil
+            clickedProfileAPIUsage = nil
         }
 
         // If there's a detached window, close it
@@ -920,12 +1594,23 @@ class MenuBarManager: NSObject, ObservableObject {
 
     private func startAutoRefresh() {
         let interval = profileManager.activeProfile?.refreshInterval ?? 30.0
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.lastAutoRefreshTime = Date()
-            self?.refreshUsage()
+        let timing = RefreshTimingPolicy(interval: interval)
+        refreshTimer = Timer.scheduledTimer(
+            withTimeInterval: timing.interval,
+            repeats: true
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleAutomaticTimerFire()
+            }
         }
-        refreshTimer?.tolerance = interval * 0.1  // 10% tolerance for energy efficiency
+        refreshTimer?.tolerance = timing.tolerance
         LoggingService.shared.log("Started auto-refresh with interval: \(interval)s")
+    }
+
+    private func handleAutomaticTimerFire(at date: Date = Date()) {
+        let fire = RefreshTimingPolicy.timerFired(at: date)
+        lastAutoRefreshTime = fire.occurredAt
+        refreshUsage(trigger: fire.trigger)
     }
 
     private func setupWakeObserver() {
@@ -934,17 +1619,31 @@ class MenuBarManager: NSObject, ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self = self else { return }
-            // Debounce: only refresh if at least 10 seconds since last auto-refresh
-            let timeSinceLastRefresh = Date().timeIntervalSince(self.lastAutoRefreshTime)
-            guard timeSinceLastRefresh > 10 else {
-                LoggingService.shared.log("MenuBarManager: Skipping wake refresh (debounce)")
-                return
-            }
-            LoggingService.shared.log("MenuBarManager: Wake from sleep detected, refreshing after delay")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-                self?.lastAutoRefreshTime = Date()
-                self?.refreshUsage()
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let timeSinceLastRefresh =
+                    Date().timeIntervalSince(
+                        self.lastAutoRefreshTime
+                    )
+                guard RefreshTimingPolicy.shouldRefreshAfterWake(
+                    elapsedSinceLastAutomaticRefresh:
+                        timeSinceLastRefresh
+                ) else {
+                    LoggingService.shared.log(
+                        "MenuBarManager: Skipping wake refresh (debounce)"
+                    )
+                    return
+                }
+                LoggingService.shared.log(
+                    "MenuBarManager: Wake from sleep detected, refreshing after delay"
+                )
+                DispatchQueue.main.asyncAfter(
+                    deadline: .now()
+                        + RefreshTimingPolicy.wakeDelay
+                ) { [weak self] in
+                    self?.lastAutoRefreshTime = Date()
+                    self?.refreshUsage(trigger: .wake)
+                }
             }
         }
     }
@@ -976,10 +1675,11 @@ class MenuBarManager: NSObject, ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self = self else { return }
-            // Clear cache to force redraw with new style
-            self.cachedImageKey = ""
-            self.updateAllStatusBarIcons()
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.cachedImageKey = ""
+                self.updateAllStatusBarIcons()
+            }
         }
     }
 
@@ -1012,17 +1712,22 @@ class MenuBarManager: NSObject, ObservableObject {
                 )
                 switch routing.invalidation {
                 case .profile(let profileID):
-                    self.refreshExecutor.invalidate(profileID: profileID)
+                    self.refreshRuntime.invalidate(profileID: profileID)
                 case .allCapturedProfiles:
-                    self.refreshExecutor.invalidateAllCapturedProfiles()
+                    self.refreshRuntime.invalidateAll(
+                        profiles: self.profileManager.profiles
+                    )
                 }
+                self.activateRefreshPresentation()
                 return routing
             }
 
             guard routing.shouldRefreshVisibleProfiles else {
-                LoggingService.shared.logInfo(
-                    "Credentials changed for an inactive profile - captured work invalidated without refreshing visible profiles"
-                )
+                MainActor.assumeIsolated {
+                    LoggingService.shared.logInfo(
+                        "Credentials changed for an inactive profile - captured work invalidated without refreshing visible profiles"
+                    )
+                }
                 return
             }
 
@@ -1045,18 +1750,19 @@ class MenuBarManager: NSObject, ObservableObject {
                     return
                 }
 
-                if self.profileManager.displayMode == .multi {
+            if self.profileManager.displayMode == .multi {
                     LoggingService.shared.logInfo(
                         "Credentials changed for a visible profile - refreshing selected profiles"
                     )
                     self.updateMultiProfileDisplay()
                     self.lastRefreshTriggerTime = Date()
-                    self.refreshUsage()
+                    self.refreshUsage(trigger: .credentialsChanged)
                     return
                 }
 
                 // Check if active profile has usage credentials
-                guard let profile = self.profileManager.activeProfile, profile.hasUsageCredentials else {
+                guard let profile = self.profileManager.activeProfile,
+                      self.canAttemptUsageRefresh(profile) else {
                     LoggingService.shared.logInfo("Credentials changed but no usage credentials - showing default logo")
 
                     // Reconfigure menu bar to show default logo
@@ -1074,12 +1780,91 @@ class MenuBarManager: NSObject, ObservableObject {
                 // Mark this as user-triggered
                 self.lastRefreshTriggerTime = Date()
 
-                self.refreshUsage()
+                self.refreshUsage(trigger: .credentialsChanged)
             }
         }
     }
 
-    struct CredentialChangeRouting: Equatable, Sendable {
+    private func observeProviderLifecycleChanges() {
+        providerConfigurationObserver =
+            NotificationCenter.default.addObserver(
+                forName: .providerConfigurationChanged,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                let profileID = Self.credentialChangeProfileID(
+                    from: notification
+                )
+                MainActor.assumeIsolated {
+                    guard let self, let profileID else {
+                        return
+                    }
+                    self.refreshRuntime.invalidate(
+                        profileID: profileID
+                    )
+                    self.refreshRuntime.presentationStore.purge(
+                        profileID: profileID
+                    )
+                    self.activateRefreshPresentation()
+
+                    let isVisible =
+                        self.profileManager.displayMode == .multi
+                            ? self.profileManager.profiles.contains {
+                                $0.id == profileID
+                                    && $0.isSelectedForDisplay
+                            }
+                            : self.profileManager.activeProfile?.id
+                                == profileID
+                    guard isVisible else { return }
+                    self.refreshUsage(
+                        trigger:
+                            .providerConfigurationChanged
+                    )
+                }
+            }
+
+        profileDeletionStartedObserver =
+            NotificationCenter.default.addObserver(
+                forName: .profileDeletionStarted,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                let profileID = Self.credentialChangeProfileID(
+                    from: notification
+                )
+                MainActor.assumeIsolated {
+                    guard let self, let profileID else {
+                        return
+                    }
+                    self.refreshRuntime.beginDeletion(
+                        profileID: profileID
+                    )
+                    self.cleanupProfile(profileID)
+                }
+            }
+
+        profileDeletionCompletedObserver =
+            NotificationCenter.default.addObserver(
+                forName: .profileDeletionCompleted,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                let profileID = Self.credentialChangeProfileID(
+                    from: notification
+                )
+                MainActor.assumeIsolated {
+                    guard let self, let profileID else {
+                        return
+                    }
+                    self.refreshRuntime.completeDeletion(
+                        profileID: profileID
+                    )
+                    self.activateRefreshPresentation()
+                }
+            }
+    }
+
+    nonisolated struct CredentialChangeRouting: Equatable, Sendable {
         enum Invalidation: Equatable, Sendable {
             case profile(UUID)
             case allCapturedProfiles
@@ -1095,7 +1880,7 @@ class MenuBarManager: NSObject, ObservableObject {
         let invalidation: Invalidation
         let refreshScope: RefreshScope
 
-        var shouldRefreshVisibleProfiles: Bool {
+        nonisolated var shouldRefreshVisibleProfiles: Bool {
             refreshScope != .none
         }
     }
@@ -1199,7 +1984,9 @@ class MenuBarManager: NSObject, ObservableObject {
         ) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
+                self.activateRefreshPresentation()
                 self.updateMultiProfileDisplay()
+                self.refreshUsage(trigger: .displayChanged)
             }
         }
     }
@@ -1223,6 +2010,7 @@ class MenuBarManager: NSObject, ObservableObject {
         let displayMode = profileManager.displayMode
 
         LoggingService.shared.log("MenuBarManager: Display mode changed to \(displayMode.rawValue)")
+        activateRefreshPresentation()
 
         if displayMode == .multi {
             // Switch to multi-profile mode
@@ -1230,6 +2018,7 @@ class MenuBarManager: NSObject, ObservableObject {
         } else {
             // Switch back to single profile mode
             setupSingleProfileMode()
+            refreshUsage(trigger: .displayChanged)
         }
     }
 
@@ -1244,7 +2033,9 @@ class MenuBarManager: NSObject, ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleScreenChange()
+            MainActor.assumeIsolated {
+                self?.handleScreenChange()
+            }
         }
     }
 
@@ -1266,7 +2057,9 @@ class MenuBarManager: NSObject, ObservableObject {
         return statusBarUIManager?.hasValidStatusBar ?? false
     }
 
-    private func setupMultiProfileMode() {
+    private func setupMultiProfileMode(
+        refreshTrigger: UsageRefreshTrigger? = .displayChanged
+    ) {
         let selectedProfiles = profileManager.getSelectedProfiles()
         let config = profileManager.multiProfileConfig
 
@@ -1284,8 +2077,9 @@ class MenuBarManager: NSObject, ObservableObject {
 
         LoggingService.shared.log("MenuBarManager: Multi-profile mode enabled with \(selectedProfiles.count) profiles, style=\(config.iconStyle.rawValue)")
 
-        // Refresh data for all selected profiles that have credentials
-        refreshAllSelectedProfiles()
+        if let refreshTrigger {
+            refreshAllSelectedProfiles(trigger: refreshTrigger)
+        }
     }
 
     /// Applies multi-profile selection and visual changes without recreating
@@ -1312,8 +2106,12 @@ class MenuBarManager: NSObject, ObservableObject {
     }
 
     /// Refreshes usage data for all profiles selected for multi-profile display
-    private func refreshAllSelectedProfiles() {
-        let selectedProfiles = profileManager.profiles.filter { $0.isSelectedForDisplay && $0.hasUsageCredentials }
+    private func refreshAllSelectedProfiles(
+        trigger: UsageRefreshTrigger
+    ) {
+        let selectedProfiles = profileManager.profiles.filter {
+            $0.isSelectedForDisplay && canAttemptUsageRefresh($0)
+        }
 
         guard !selectedProfiles.isEmpty else {
             LoggingService.shared.log("MenuBarManager: No selected profiles with usage credentials to refresh")
@@ -1321,32 +2119,22 @@ class MenuBarManager: NSObject, ObservableObject {
             return
         }
 
-        let generation = profileManager.activeProfileIdentityGeneration
-        let plans = selectedProfiles.map { profile in
-            TransitionalRefreshExecutor.Plan.capture(
-                profile: profile,
-                mode: .multi,
-                presentationGeneration: generation,
-                apiService: apiService
-            )
-        }
-
         LoggingService.shared.log("MenuBarManager: Refreshing \(selectedProfiles.count) selected profiles for multi-profile mode")
-        refreshExecutor.start(
-            plans,
-            loadingIdentity: currentRefreshPresentationIdentity
+        refreshRuntime.refresh(
+            profiles: selectedProfiles,
+            trigger: trigger
         )
     }
 
     private func setupSingleProfileMode() {
         guard let profile = profileManager.activeProfile else { return }
 
-        let hasUsageCredentials = profile.hasUsageCredentials
+        let canRefresh = canAttemptUsageRefresh(profile)
         let config = profile.iconConfig
 
         // If no usage credentials, create empty config to show default logo
         let displayConfig: MenuBarIconConfiguration
-        if !hasUsageCredentials {
+        if !canRefresh {
             displayConfig = MenuBarIconConfiguration(
                 colorMode: config.colorMode,
                 singleColorHex: config.singleColorHex,
@@ -1371,10 +2159,12 @@ class MenuBarManager: NSObject, ObservableObject {
         LoggingService.shared.log("MenuBarManager: Single profile mode enabled")
     }
 
-    func refreshUsage() {
+    func refreshUsage(
+        trigger: UsageRefreshTrigger = .manual
+    ) {
         // In multi-profile mode, refresh ALL selected profiles
         if profileManager.displayMode == .multi {
-            refreshAllSelectedProfiles()
+            refreshAllSelectedProfiles(trigger: trigger)
             return
         }
 
@@ -1387,10 +2177,12 @@ class MenuBarManager: NSObject, ObservableObject {
         // Detailed logging
         LoggingService.shared.log("MenuBarManager.refreshUsage called:")
         LoggingService.shared.log("  - Profile: '\(profile.name)'")
-        LoggingService.shared.log("  - hasUsageCredentials: \(profile.hasUsageCredentials)")
+        LoggingService.shared.log(
+            "  - canAttemptUsageRefresh: \(canAttemptUsageRefresh(profile))"
+        )
 
         // Check for usage credentials (Claude.ai or API Console, not just CLI)
-        guard profile.hasUsageCredentials else {
+        guard canAttemptUsageRefresh(profile) else {
             LoggingService.shared.log("MenuBarManager: Skipping refresh - no usage credentials")
             // Update icons to show default logo if needed
             updateAllStatusBarIcons()
@@ -1398,269 +2190,10 @@ class MenuBarManager: NSObject, ObservableObject {
         }
 
         LoggingService.shared.log("MenuBarManager: Proceeding with refresh")
-        let plan = TransitionalRefreshExecutor.Plan.capture(
-            profile: profile,
-            mode: .single,
-            presentationGeneration:
-                profileManager.activeProfileIdentityGeneration,
-            apiService: apiService
+        refreshRuntime.refresh(
+            profiles: [profile],
+            trigger: trigger
         )
-        refreshExecutor.start(plan)
-    }
-
-    private var currentRefreshPresentationIdentity:
-        TransitionalRefreshExecutor.PresentationIdentity? {
-        profileManager.activeProfile.map {
-            TransitionalRefreshExecutor.PresentationIdentity(
-                profileID: $0.id,
-                generation: profileManager.activeProfileIdentityGeneration
-            )
-        }
-    }
-
-    static func autoSwitchProfile(
-        for plan: TransitionalRefreshExecutor.Plan,
-        profiles: [Profile],
-        activeProfileID: UUID?,
-        presentationIdentity:
-            TransitionalRefreshExecutor.PresentationIdentity?
-    ) -> Profile? {
-        guard activeProfileID == plan.profileID,
-              presentationIdentity == plan.presentationIdentity else {
-            return nil
-        }
-        return profiles.first { $0.id == plan.profileID }
-    }
-
-    private func isRefreshProfileWritable(_ profileID: UUID) -> Bool {
-        profileManager.profiles.contains {
-            $0.id == profileID && !$0.deletionInProgress
-        }
-    }
-
-    private func recordClaudeRefresh(
-        plan: TransitionalRefreshExecutor.Plan,
-        usage newUsage: ClaudeUsage
-    ) {
-        checkAndRecordSessionReset(
-            profileId: plan.profileID,
-            previousUsage: plan.previousClaudeUsage,
-            newUsage: newUsage
-        )
-        checkAndRecordWeeklyReset(
-            profileId: plan.profileID,
-            previousUsage: plan.previousClaudeUsage,
-            newUsage: newUsage
-        )
-
-        switch plan.mode {
-        case .single:
-            UsageHistoryService.shared.recordSessionPeriodic(
-                for: plan.profileID,
-                usage: newUsage
-            )
-            UsageHistoryService.shared.recordWeeklyPeriodic(
-                for: plan.profileID,
-                usage: newUsage
-            )
-        case .multi:
-            let flags = resetJustRecorded[plan.profileID]
-                ?? (session: false, weekly: false)
-            if !flags.session {
-                UsageHistoryService.shared.recordSessionPeriodic(
-                    for: plan.profileID,
-                    usage: newUsage
-                )
-            }
-            if !flags.weekly {
-                UsageHistoryService.shared.recordWeeklyPeriodic(
-                    for: plan.profileID,
-                    usage: newUsage
-                )
-            }
-            resetJustRecorded[plan.profileID] = (
-                session: false,
-                weekly: false
-            )
-        }
-    }
-
-    private func saveClaudeRefresh(
-        plan: TransitionalRefreshExecutor.Plan,
-        usage newUsage: ClaudeUsage,
-        shouldPresent: Bool
-    ) -> Bool {
-        guard isRefreshProfileWritable(plan.profileID) else {
-            return false
-        }
-        guard profileManager.saveClaudeUsage(
-            newUsage,
-            for: plan.profileID,
-            publishToActiveProfile: shouldPresent
-        ) else {
-            return false
-        }
-        LoggingService.shared.log(
-            "MenuBarManager: Saved usage for profile '\(plan.profileName)' - session: \(newUsage.sessionPercentage)%"
-        )
-        return true
-    }
-
-    private func writeStatuslineRefresh(
-        plan: TransitionalRefreshExecutor.Plan,
-        usage newUsage: ClaudeUsage
-    ) {
-        if StatuslineService.shared.isInstalled {
-            StatuslineService.shared.writeUsageCache(
-                usage: newUsage,
-                profileName: plan.profileName
-            )
-        }
-        updateAllStatusBarIcons()
-    }
-
-    private func notifyForRefresh(
-        plan: TransitionalRefreshExecutor.Plan,
-        usage newUsage: ClaudeUsage
-    ) {
-        NotificationManager.shared.checkAndNotify(
-            usage: newUsage,
-            profileName: plan.profileName,
-            settings: plan.notificationSettings
-        )
-    }
-
-    private func recordAPIRefresh(
-        plan: TransitionalRefreshExecutor.Plan,
-        usage newUsage: APIUsage
-    ) {
-        checkAndRecordBillingCycleReset(
-            profileId: plan.profileID,
-            previousUsage: plan.previousAPIUsage,
-            newUsage: newUsage
-        )
-    }
-
-    private func saveAPIRefresh(
-        plan: TransitionalRefreshExecutor.Plan,
-        usage newUsage: APIUsage,
-        shouldPresent: Bool
-    ) -> Bool {
-        guard isRefreshProfileWritable(plan.profileID) else {
-            return false
-        }
-        guard profileManager.saveAPIUsage(
-            newUsage,
-            for: plan.profileID,
-            publishToActiveProfile: shouldPresent
-        ) else {
-            return false
-        }
-        return true
-    }
-
-    private func handleClaudeRefreshFailure(
-        plan: TransitionalRefreshExecutor.Plan,
-        error: Error,
-        shouldPresent: Bool
-    ) {
-        switch plan.mode {
-        case .multi:
-            LoggingService.shared.logError(
-                "Failed to refresh profile '\(plan.profileName)': \(error.localizedDescription)"
-            )
-        case .single:
-            let appError = AppError.wrap(error)
-            ErrorLogger.shared.log(appError, severity: .error)
-            guard shouldPresent else { return }
-
-            ErrorRecovery.shared.recordFailure(for: .api)
-            consecutiveRefreshFailures += 1
-            lastRefreshError = appError.message
-            if appError.code == .apiUnauthorized
-                || appError.code == .sessionKeyExpired {
-                hasCredentialError = true
-            }
-            if abs(lastRefreshTriggerTime.timeIntervalSinceNow) < 5 {
-                ErrorPresenter.shared.showAlert(for: appError)
-            } else {
-                LoggingService.shared.logError(
-                    "MenuBarManager: Failed to fetch usage - [\(appError.code.rawValue)] \(appError.message)"
-                )
-            }
-        }
-    }
-
-    private func handleAPIRefreshFailure(
-        plan: TransitionalRefreshExecutor.Plan,
-        error: Error
-    ) {
-        switch plan.mode {
-        case .multi:
-            LoggingService.shared.logError(
-                "Failed to refresh API usage for profile '\(plan.profileName)': \(error.localizedDescription)"
-            )
-        case .single:
-            let appError = AppError.wrap(error)
-            ErrorLogger.shared.log(appError, severity: .info)
-            LoggingService.shared.log(
-                "MenuBarManager: Failed to fetch API usage - [\(appError.code.rawValue)] \(appError.message)"
-            )
-        }
-    }
-
-    private func finalizeRefreshBatch(
-        _ result: TransitionalRefreshExecutor.BatchResult
-    ) {
-        guard let first = result.outcomes.first,
-              case .multi = first.plan.mode else {
-            return
-        }
-        let config = profileManager.multiProfileConfig
-        statusBarUIManager?.updateMultiProfileButtons(
-            profiles: profileManager.profiles,
-            config: config,
-            activeProfileId: profileManager.activeProfile?.id
-        )
-    }
-
-    private func recordSuccessfulRefreshBatch(
-        _ result: TransitionalRefreshExecutor.BatchResult
-    ) {
-        guard let first = result.outcomes.first else { return }
-        switch first.plan.mode {
-        case .single:
-            ErrorRecovery.shared.recordSuccess(for: .api)
-            consecutiveRefreshFailures = 0
-            lastRefreshError = nil
-            hasCredentialError = false
-            lastSuccessfulRefreshTime = Date()
-            if abs(lastRefreshTriggerTime.timeIntervalSinceNow) < 5 {
-                showSuccessNotification()
-            }
-        case .multi:
-            consecutiveRefreshFailures = 0
-            lastRefreshError = nil
-            hasCredentialError = false
-            lastSuccessfulRefreshTime = Date()
-
-            guard let activeProfile = profileManager.activeProfile,
-                  let activeOutcome = result.outcomes.first(where: {
-                      $0.plan.profileID == activeProfile.id
-                          && $0.claude == .success
-                  }),
-                  activeOutcome.plan.presentationIdentity
-                    == currentRefreshPresentationIdentity,
-                  let activeUsage = activeProfile.claudeUsage else {
-                return
-            }
-            checkAutoSwitchIfNeeded(
-                usage: activeUsage,
-                currentProfile: activeProfile,
-                expectedPresentationIdentity:
-                    activeOutcome.plan.presentationIdentity
-            )
-        }
     }
 
     /// Shows a brief success notification for user-triggered refreshes
@@ -1674,13 +2207,13 @@ class MenuBarManager: NSObject, ObservableObject {
     private func checkAutoSwitchIfNeeded(
         usage: ClaudeUsage,
         currentProfile: Profile,
-        expectedPresentationIdentity:
-            TransitionalRefreshExecutor.PresentationIdentity
+        expectedProfileID: UUID,
+        expectedPresentationEpoch: UInt64
     ) {
-        guard currentRefreshPresentationIdentity
-                == expectedPresentationIdentity,
-              currentProfile.id
-                == expectedPresentationIdentity.profileID else {
+        guard profileManager.activeProfile?.id == expectedProfileID,
+              currentProfile.id == expectedProfileID,
+              refreshRuntime.presentationContext.epoch
+                == expectedPresentationEpoch else {
             return
         }
 
@@ -1721,8 +2254,10 @@ class MenuBarManager: NSObject, ObservableObject {
         let toName = nextProfile.name
         Task { @MainActor [weak self] in
             guard let self,
-                  self.currentRefreshPresentationIdentity
-                    == expectedPresentationIdentity else {
+                  self.profileManager.activeProfile?.id
+                    == expectedProfileID,
+                  self.refreshRuntime.presentationContext.epoch
+                    == expectedPresentationEpoch else {
                 self?.autoSwitchedProfileIds.remove(profileId)
                 return
             }
@@ -1749,7 +2284,10 @@ class MenuBarManager: NSObject, ObservableObject {
             let candidate = profiles[index]
 
             // Must have usage credentials
-            guard candidate.hasUsageCredentials else { continue }
+            guard candidate.providerID == .claude,
+                  candidate.hasUsageCredentials else {
+                continue
+            }
 
             // If no saved usage data, treat as available
             guard let candidateUsage = candidate.claudeUsage else { return candidate }
@@ -1796,13 +2334,11 @@ class MenuBarManager: NSObject, ObservableObject {
             // Reset detected! Record snapshot of the previous usage
             LoggingService.shared.log("History: Session reset detected for profile \(profileId.uuidString.prefix(8)). Old: \(normalizedLastKnown), New: \(newResetTime)")
             if let prevUsage = previousUsage {
-                Task { @MainActor in
-                    UsageHistoryService.shared.recordSessionReset(
-                        for: profileId,
-                        previousUsage: prevUsage,
-                        resetTime: prevUsage.sessionResetTime  // Use original reset time, not normalized
-                    )
-                }
+                UsageHistoryService.shared.recordSessionReset(
+                    for: profileId,
+                    previousUsage: prevUsage,
+                    resetTime: prevUsage.sessionResetTime
+                )
             }
 
             // Mark that session reset was just recorded to prevent duplicate periodic snapshot
@@ -1840,13 +2376,11 @@ class MenuBarManager: NSObject, ObservableObject {
             // Reset detected! Record snapshot of the previous usage
             LoggingService.shared.log("History: Weekly reset detected for profile \(profileId.uuidString.prefix(8)). Old: \(normalizedLastKnown), New: \(newResetTime)")
             if let prevUsage = previousUsage {
-                Task { @MainActor in
-                    UsageHistoryService.shared.recordWeeklyReset(
-                        for: profileId,
-                        previousUsage: prevUsage,
-                        resetTime: prevUsage.weeklyResetTime  // Use original reset time, not normalized
-                    )
-                }
+                UsageHistoryService.shared.recordWeeklyReset(
+                    for: profileId,
+                    previousUsage: prevUsage,
+                    resetTime: prevUsage.weeklyResetTime
+                )
             }
 
             // Mark that weekly reset was just recorded to prevent duplicate periodic snapshot
@@ -1884,13 +2418,11 @@ class MenuBarManager: NSObject, ObservableObject {
             // Reset detected! Record snapshot of the previous usage
             LoggingService.shared.log("History: Billing cycle reset detected for profile \(profileId.uuidString.prefix(8)). Old: \(normalizedLastKnown), New: \(newResetTime)")
             if let prevUsage = previousUsage {
-                Task { @MainActor in
-                    UsageHistoryService.shared.recordBillingCycleReset(
-                        for: profileId,
-                        previousUsage: prevUsage,
-                        resetTime: prevUsage.resetsAt  // Use original reset time, not normalized
-                    )
-                }
+                UsageHistoryService.shared.recordBillingCycleReset(
+                    for: profileId,
+                    previousUsage: prevUsage,
+                    resetTime: prevUsage.resetsAt
+                )
             }
         }
 

@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import UsageCore
 
 protocol ProfileDefaultsStore: AnyObject {
     func data(forKey defaultName: String) -> Data?
@@ -18,12 +19,14 @@ extension UserDefaults: ProfileDefaultsStore {}
 
 enum ProfileStoreError: Error, LocalizedError {
     case profileNotFound(UUID)
+    case profileDeletionInProgress(UUID)
     case credentialReadUnresolved(ProfileSecretLocator)
     case credentialTransactionFailed(UUID, [ProfileSecretField])
     case credentialRollbackFailed(UUID, [ProfileSecretField], metadata: Bool)
     case credentialUsageUnlinkFailed(UUID)
     case credentialUsageUnlinkRollbackFailed(UUID, credentials: Bool, usage: Bool)
     case credentialUsageUnlinkMarkerVerificationFailed
+    case currentUsageCommitRollbackFailed(UUID)
     case profileWriteVerificationFailed
     case profileRestoreVerificationFailed
 
@@ -31,6 +34,8 @@ enum ProfileStoreError: Error, LocalizedError {
         switch self {
         case .profileNotFound(let id):
             return "Profile \(id.uuidString.prefix(8)) was not found."
+        case .profileDeletionInProgress(let id):
+            return "Profile \(id.uuidString.prefix(8)) is pending deletion."
         case .credentialReadUnresolved(let locator):
             return "Secure credential state is unresolved for \(locator.safeDescription)."
         case .credentialTransactionFailed(let profileID, let fields):
@@ -57,6 +62,9 @@ enum ProfileStoreError: Error, LocalizedError {
                 + "\(usage ? "unresolved" : "restored")."
         case .credentialUsageUnlinkMarkerVerificationFailed:
             return "Credential unlink recovery state could not be verified."
+        case .currentUsageCommitRollbackFailed(let profileID):
+            return "Current usage rollback is unresolved for profile "
+                + "\(profileID.uuidString.prefix(8))."
         case .profileWriteVerificationFailed:
             return "The profile record could not be verified after writing."
         case .profileRestoreVerificationFailed:
@@ -84,6 +92,8 @@ class ProfileStore {
         static let multiProfileConfig = "multiProfileDisplayConfig"
         static let pendingCredentialUsageUnlinks =
             "profileCredentialUsageUnlinks_v1"
+        static let pendingCodexConfigurationMutations =
+            "profileCodexConfigurationMutations_v1"
     }
 
     init(
@@ -98,6 +108,49 @@ class ProfileStore {
     }
 
     // MARK: - Profile Management
+
+    func createInitialProfile(_ profile: Profile) throws {
+        try recoverPendingCredentialUsageUnlinks()
+        try recoverPendingCodexConfigurationMutations()
+        guard try decodeStoredProfiles().isEmpty else {
+            throw ProfileProviderConfigurationError
+                .initialProfileAlreadyExists
+        }
+        guard !profile.deletionInProgress else {
+            throw ProfileProviderConfigurationError
+                .deletionStateChangeRequiresLifecycle(profile.id)
+        }
+        try profile.validateProviderIsolation()
+        try persistProfiles([profile])
+    }
+
+    func appendProfile(
+        _ profile: Profile,
+        expectedExistingIDs: Set<UUID>
+    ) throws {
+        try recoverPendingCredentialUsageUnlinks()
+        try recoverPendingCodexConfigurationMutations()
+        let stored = try decodeStoredProfiles()
+        try validateProfileSet(stored)
+        let storedIDs = Set(stored.map(\.id))
+        guard storedIDs == expectedExistingIDs,
+              stored.count == expectedExistingIDs.count else {
+            throw ProfileProviderConfigurationError.profileSetChanged
+        }
+        guard !storedIDs.contains(profile.id) else {
+            throw ProfileProviderConfigurationError
+                .duplicateProfileID(profile.id)
+        }
+        guard !profile.deletionInProgress else {
+            throw ProfileProviderConfigurationError
+                .deletionStateChangeRequiresLifecycle(profile.id)
+        }
+        let prepared = try prepareForOrdinarySave(
+            profile,
+            stored: nil
+        )
+        try persistProfiles(stored + [prepared])
+    }
 
     /// Compatibility entry point for existing metadata/usage call sites.
     ///
@@ -116,7 +169,15 @@ class ProfileStore {
         // A durable unlink marker is authoritative. Complete or surface its
         // recovery before an ordinary save can replay a stored target retry.
         try recoverPendingCredentialUsageUnlinks()
+        try recoverPendingCodexConfigurationMutations()
+        try validateProfileSet(profiles)
         let storedProfiles = try decodeStoredProfiles()
+        try validateProfileSet(storedProfiles)
+        guard profiles.count == storedProfiles.count,
+              Set(profiles.map(\.id))
+                == Set(storedProfiles.map(\.id)) else {
+            throw ProfileProviderConfigurationError.profileSetChanged
+        }
         let storedByID = Dictionary(uniqueKeysWithValues: storedProfiles.map { ($0.id, $0) })
         var prepared: [Profile] = []
         prepared.reserveCapacity(profiles.count)
@@ -156,7 +217,9 @@ class ProfileStore {
     /// Migration coordinators use the throwing form before marking completion.
     func loadProfilesWithVerifiedMigration() throws -> [Profile] {
         try recoverPendingCredentialUsageUnlinks()
+        try recoverPendingCodexConfigurationMutations()
         var profiles = try decodeStoredProfiles()
+        try validateProfileSet(profiles)
         guard !profiles.isEmpty else {
             LoggingService.shared.log("ProfileStore: No profiles found in storage")
             return []
@@ -180,6 +243,38 @@ class ProfileStore {
                 profiles[profileIndex].claudeUsage = nil
                 profiles[profileIndex].apiUsage = nil
                 needsRewrite = needsRewrite || hadRetryData
+                continue
+            }
+
+            if profiles[profileIndex].providerConfiguration.kind == .codex {
+                // A Codex profile owns no Claude credential locators. Merely
+                // loading or editing it must never consult secure storage.
+                try profiles[profileIndex].validateProviderIsolation()
+                do {
+                    if let currentUsage = try usageFileStore.loadCurrentUsage(
+                        for: profiles[profileIndex].id
+                    ) {
+                        try currentUsage.validate(
+                            expectedProviderID:
+                                profiles[profileIndex].providerID,
+                            expectedProviderRevision:
+                                profiles[profileIndex].providerRevision
+                        )
+                    }
+                    unresolvedUsageProfileIDs.remove(
+                        profiles[profileIndex].id
+                    )
+                } catch {
+                    unresolvedUsageProfileIDs.insert(
+                        profiles[profileIndex].id
+                    )
+                    LoggingService.shared.logError(
+                        "ProfileStore: Codex current usage read is unresolved "
+                            + "for profile "
+                            + "\(profiles[profileIndex].id.uuidString.prefix(8))",
+                        error: error
+                    )
+                }
                 continue
             }
 
@@ -237,8 +332,20 @@ class ProfileStore {
                         // A previous migration may have installed the file and
                         // terminated before scrubbing preferences. A later
                         // refresh can make that file newer than this retry.
+                        try existingUsage.validate(
+                            expectedProviderID:
+                                profiles[profileIndex].providerID,
+                            expectedProviderRevision:
+                                profiles[profileIndex].providerRevision
+                        )
                         authoritativeUsage = existingUsage
                     } else {
+                        try retryUsage.validate(
+                            expectedProviderID:
+                                profiles[profileIndex].providerID,
+                            expectedProviderRevision:
+                                profiles[profileIndex].providerRevision
+                        )
                         try usageFileStore.saveCurrentUsage(retryUsage, for: profileID)
                         authoritativeUsage = retryUsage
                     }
@@ -264,6 +371,11 @@ class ProfileStore {
                 let currentUsage = try usageFileStore.loadCurrentUsage(
                     for: profiles[profileIndex].id
                 )
+                try currentUsage?.validate(
+                    expectedProviderID: profiles[profileIndex].providerID,
+                    expectedProviderRevision:
+                        profiles[profileIndex].providerRevision
+                )
                 profiles[profileIndex].claudeUsage = currentUsage?.claudeUsage
                 profiles[profileIndex].apiUsage = currentUsage?.apiUsage
                 unresolvedUsageProfileIDs.remove(profiles[profileIndex].id)
@@ -284,6 +396,7 @@ class ProfileStore {
             LoggingService.shared.log("ProfileStore: Verified profile credential migration rewrite")
         }
 
+        try validateProfileSet(profiles)
         LoggingService.shared.log("ProfileStore: Loaded \(profiles.count) profile(s)")
         return profiles
     }
@@ -345,6 +458,12 @@ class ProfileStore {
         guard let index = profiles.firstIndex(where: { $0.id == profileId }) else {
             throw ProfileStoreError.profileNotFound(profileId)
         }
+        guard !profiles[index].deletionInProgress else {
+            throw ProfileStoreError.profileDeletionInProgress(profileId)
+        }
+        guard profiles[index].providerConfiguration.kind == .claude else {
+            throw ProfileProviderConfigurationError.claudeProfileRequired(profileId)
+        }
         profiles[index].claudeSessionKey = credentials.claudeSessionKey
         profiles[index].organizationId = credentials.organizationId
         profiles[index].apiSessionKey = credentials.apiSessionKey
@@ -371,6 +490,24 @@ class ProfileStore {
         var profiles = try loadProfilesWithVerifiedMigration()
         guard let index = profiles.firstIndex(where: { $0.id == updatedProfile.id }) else {
             throw ProfileStoreError.profileNotFound(updatedProfile.id)
+        }
+        guard !profiles[index].deletionInProgress else {
+            throw ProfileStoreError
+                .profileDeletionInProgress(updatedProfile.id)
+        }
+        try validateProviderIdentity(
+            candidate: updatedProfile,
+            stored: profiles[index]
+        )
+        try validateDeletionState(
+            candidate: updatedProfile,
+            stored: profiles[index]
+        )
+
+        if profiles[index].providerConfiguration.kind == .codex {
+            profiles[index] = updatedProfile
+            try saveProfilesThrowing(profiles)
+            return
         }
 
         var candidate = updatedProfile
@@ -414,6 +551,13 @@ class ProfileStore {
         guard let profile = profiles.first(where: { $0.id == profileId }) else {
             throw ProfileStoreError.profileNotFound(profileId)
         }
+        guard !profile.deletionInProgress else {
+            throw ProfileStoreError.profileDeletionInProgress(profileId)
+        }
+        guard profile.providerConfiguration.kind == .claude else {
+            throw ProfileProviderConfigurationError
+                .claudeProfileRequired(profileId)
+        }
         try ensureCredentialReadsResolved(for: profileId)
 
         return ProfileCredentials(
@@ -438,6 +582,7 @@ class ProfileStore {
                 credentials.organizationId = nil
             },
             clearUsage: { usage in
+                usage.report = nil
                 usage.claudeUsage = nil
             }
         )
@@ -460,6 +605,142 @@ class ProfileStore {
         )
     }
 
+    /// Dedicated provider-identity mutation. Link, relink, and unlink all
+    /// invalidate app-owned current usage and advance the request-identity
+    /// revision only after the complete transaction succeeds.
+    @discardableResult
+    func replaceCodexLinkedHome(
+        _ linkedHome: CanonicalCodexHome?,
+        for profileID: UUID
+    ) throws -> Profile {
+        try recoverPendingCodexConfigurationMutations()
+        let previousProfileData = defaults.data(forKey: Keys.profiles)
+        var profiles = try decodeStoredProfiles()
+        try validateProfileSet(profiles)
+        guard let index = profiles.firstIndex(where: { $0.id == profileID }) else {
+            throw ProfileStoreError.profileNotFound(profileID)
+        }
+        guard profiles[index].providerConfiguration.kind == .codex else {
+            throw ProfileProviderConfigurationError
+                .codexProfileRequired(profileID)
+        }
+        guard !profiles[index].deletionInProgress else {
+            throw ProfileStoreError.profileDeletionInProgress(profileID)
+        }
+        if profiles[index].providerConfiguration.codexConfiguration?
+            .linkedHome == linkedHome {
+            return profiles[index]
+        }
+        if let linkedHome,
+           let duplicate = profiles.first(where: {
+               $0.id != profileID
+                   && $0.providerConfiguration.codexConfiguration?
+                       .linkedHome == linkedHome
+           }) {
+            throw ProfileProviderConfigurationError
+                .duplicateCodexHome(duplicate.id)
+        }
+        let previousUsage = try usageFileStore.loadCurrentUsage(for: profileID)
+        try previousUsage?.validate(
+            expectedProviderID: profiles[index].providerID,
+            expectedProviderRevision: profiles[index].providerRevision
+        )
+        guard profiles[index].providerRevision < UInt64.max else {
+            throw ProfileProviderConfigurationError
+                .providerRevisionExhausted(profileID)
+        }
+
+        let targetRevision = profiles[index].providerRevision + 1
+        let marker = PendingCodexConfigurationMutation(
+            profileID: profileID,
+            linkedHome: linkedHome,
+            targetRevision: targetRevision
+        )
+        try persistPendingCodexConfigurationMutation(marker)
+
+        do {
+            try usageFileStore.deleteCurrentUsage(for: profileID)
+            unresolvedUsageProfileIDs.remove(profileID)
+            profiles[index].providerConfiguration = .codex(
+                CodexProfileConfiguration(linkedHome: linkedHome)
+            )
+            profiles[index].providerRevision = targetRevision
+            try persistProfiles(profiles)
+            try removePendingCodexConfigurationMutation(for: profileID)
+            return profiles[index]
+        } catch {
+            var metadataRollbackFailed = false
+            var usageRollbackFailed = false
+
+            do {
+                try restoreProfiles(previousProfileData)
+            } catch {
+                metadataRollbackFailed = true
+            }
+            do {
+                if let previousUsage {
+                    try usageFileStore.saveCurrentUsage(
+                        previousUsage,
+                        for: profileID
+                    )
+                } else {
+                    try usageFileStore.deleteCurrentUsage(for: profileID)
+                }
+                unresolvedUsageProfileIDs.remove(profileID)
+            } catch {
+                usageRollbackFailed = true
+                unresolvedUsageProfileIDs.insert(profileID)
+            }
+
+            // The durable target intent remains authoritative until both
+            // independent prior-state restorations are verified. If either is
+            // unresolved, relaunch deterministically completes the target
+            // forward instead of preserving a split state.
+            if !metadataRollbackFailed && !usageRollbackFailed {
+                do {
+                    try removePendingCodexConfigurationMutation(
+                        for: profileID
+                    )
+                } catch {
+                    metadataRollbackFailed = true
+                }
+            }
+
+            if metadataRollbackFailed || usageRollbackFailed {
+                throw ProfileProviderConfigurationError
+                    .codexConfigurationRollbackFailed(
+                        profileID,
+                        metadata: metadataRollbackFailed,
+                        usage: usageRollbackFailed
+                    )
+            }
+            throw ProfileProviderConfigurationError
+                .codexConfigurationMutationFailed(profileID)
+        }
+    }
+
+    /// Activation metadata has a deliberately narrow storage path. In
+    /// particular, selecting a Codex profile does not hydrate or migrate any
+    /// Claude credentials.
+    @discardableResult
+    func updateActivationMetadata(
+        for profileID: UUID,
+        at timestamp: Date
+    ) throws -> Profile {
+        try recoverPendingCodexConfigurationMutations()
+        var profiles = try decodeStoredProfiles()
+        try validateProfileSet(profiles)
+        guard let index = profiles.firstIndex(where: { $0.id == profileID }) else {
+            throw ProfileStoreError.profileNotFound(profileID)
+        }
+        guard !profiles[index].deletionInProgress else {
+            throw ProfileStoreError.profileDeletionInProgress(profileID)
+        }
+        profiles[index].lastUsedAt = timestamp
+        try persistProfiles(profiles)
+        return profiles[index]
+    }
+
     /// Explicit single-field API used by CLI synchronization. It avoids
     /// reinterpreting unrelated secure-read errors as credential deletions.
     func saveCLIProfileCredential(
@@ -470,6 +751,12 @@ class ProfileStore {
         var profiles = try loadProfilesWithVerifiedMigration()
         guard let index = profiles.firstIndex(where: { $0.id == profileId }) else {
             throw ProfileStoreError.profileNotFound(profileId)
+        }
+        guard !profiles[index].deletionInProgress else {
+            throw ProfileStoreError.profileDeletionInProgress(profileId)
+        }
+        guard profiles[index].providerConfiguration.kind == .claude else {
+            throw ProfileProviderConfigurationError.claudeProfileRequired(profileId)
         }
         profiles[index].cliCredentialsJSON = value
         profiles[index].cliAccountSyncedAt = syncedAt ?? profiles[index].cliAccountSyncedAt
@@ -492,6 +779,22 @@ class ProfileStore {
         guard let index = profiles.firstIndex(where: { $0.id == updatedProfile.id }) else {
             throw ProfileStoreError.profileNotFound(updatedProfile.id)
         }
+        guard !profiles[index].deletionInProgress else {
+            throw ProfileStoreError
+                .profileDeletionInProgress(updatedProfile.id)
+        }
+        guard profiles[index].providerConfiguration.kind == .claude else {
+            throw ProfileProviderConfigurationError
+                .claudeProfileRequired(updatedProfile.id)
+        }
+        try validateProviderIdentity(
+            candidate: updatedProfile,
+            stored: profiles[index]
+        )
+        try validateDeletionState(
+            candidate: updatedProfile,
+            stored: profiles[index]
+        )
 
         var candidate = updatedProfile
         candidate.credentialMigrationRetry = profiles[index].credentialMigrationRetry
@@ -521,6 +824,19 @@ class ProfileStore {
     /// Verifies removal of all app-owned profile credentials. Callers must keep
     /// the profile identity until this method and subsequent file cleanup pass.
     func deleteProfileSecrets(for profileId: UUID) throws {
+        try recoverPendingCredentialUsageUnlinks()
+        try recoverPendingCodexConfigurationMutations()
+        let profiles = try decodeStoredProfiles()
+        try validateProfileSet(profiles)
+        guard let profile = profiles.first(where: {
+            $0.id == profileId
+        }) else {
+            throw ProfileStoreError.profileNotFound(profileId)
+        }
+        guard profile.providerConfiguration.kind == .claude else {
+            throw ProfileProviderConfigurationError
+                .claudeProfileRequired(profileId)
+        }
         for field in ProfileSecretField.allCases {
             let locator = ProfileSecretLocator(profileID: profileId, field: field)
             try secretStore.delete(locator)
@@ -533,7 +849,13 @@ class ProfileStore {
     /// cleanup. This prevents persisted migration envelopes from recreating
     /// credentials or usage if deletion later fails and the app relaunches.
     func beginProfileDeletion(_ profileId: UUID) throws -> Profile {
+        // Resolve every durable mutation intent before the deletion tombstone
+        // is committed. No recovery may recreate profile-owned files after
+        // destructive cleanup and before verified identity removal.
+        try recoverPendingCredentialUsageUnlinks()
+        try recoverPendingCodexConfigurationMutations()
         var profiles = try decodeStoredProfiles()
+        try validateProfileSet(profiles)
         guard let index = profiles.firstIndex(where: { $0.id == profileId }) else {
             throw ProfileStoreError.profileNotFound(profileId)
         }
@@ -551,46 +873,234 @@ class ProfileStore {
         return profiles[index]
     }
 
+    /// Removes a previously tombstoned identity using an authoritative
+    /// compare-and-swap over the complete remaining profile set.
+    func finalizeProfileDeletion(
+        _ profileId: UUID,
+        expectedRemainingIDs: Set<UUID>
+    ) throws {
+        try recoverPendingCredentialUsageUnlinks()
+        try recoverPendingCodexConfigurationMutations()
+        let profiles = try decodeStoredProfiles()
+        try validateProfileSet(profiles)
+        guard let target = profiles.first(where: {
+            $0.id == profileId
+        }) else {
+            throw ProfileStoreError.profileNotFound(profileId)
+        }
+        guard target.deletionInProgress else {
+            throw ProfileProviderConfigurationError.profileSetChanged
+        }
+        let remaining = profiles.filter { $0.id != profileId }
+        guard remaining.count == expectedRemainingIDs.count,
+              Set(remaining.map(\.id)) == expectedRemainingIDs else {
+            throw ProfileProviderConfigurationError.profileSetChanged
+        }
+        try persistProfiles(remaining)
+    }
+
     // MARK: - Current Usage
 
     func saveClaudeUsage(_ usage: ClaudeUsage, for profileID: UUID) throws {
-        _ = try loadCurrentUsageResolvingMigration(for: profileID)
-        _ = try usageFileStore.updateCurrentUsage(for: profileID) { current in
-            current.claudeUsage = usage
-        }
-        unresolvedUsageProfileIDs.remove(profileID)
+        let profile = try requireClaudeProfile(profileID)
+        var current = try loadCurrentUsageResolvingMigration(
+            for: profileID
+        )
+        current.claudeUsage = usage
+        _ = try commitCurrentUsage(
+            current,
+            for: profileID,
+            expectedProviderID: profile.providerID,
+            expectedProviderRevision: profile.providerRevision
+        )
     }
 
     func clearClaudeUsage(for profileID: UUID) throws {
-        _ = try loadCurrentUsageResolvingMigration(for: profileID)
-        _ = try usageFileStore.updateCurrentUsage(for: profileID) { current in
-            current.claudeUsage = nil
-        }
-        unresolvedUsageProfileIDs.remove(profileID)
+        let profile = try requireClaudeProfile(profileID)
+        var current = try loadCurrentUsageResolvingMigration(
+            for: profileID
+        )
+        current.report = nil
+        current.claudeUsage = nil
+        _ = try commitCurrentUsage(
+            current,
+            for: profileID,
+            expectedProviderID: profile.providerID,
+            expectedProviderRevision: profile.providerRevision
+        )
     }
 
     func loadClaudeUsage(for profileID: UUID) throws -> ClaudeUsage? {
-        try loadCurrentUsageResolvingMigration(for: profileID).claudeUsage
+        try requireClaudeProfile(profileID)
+        return try loadCurrentUsageResolvingMigration(for: profileID)
+            .claudeUsage
     }
 
     func saveAPIUsage(_ usage: APIUsage, for profileID: UUID) throws {
-        _ = try loadCurrentUsageResolvingMigration(for: profileID)
-        _ = try usageFileStore.updateCurrentUsage(for: profileID) { current in
-            current.apiUsage = usage
-        }
-        unresolvedUsageProfileIDs.remove(profileID)
+        let profile = try requireClaudeProfile(profileID)
+        var current = try loadCurrentUsageResolvingMigration(
+            for: profileID
+        )
+        current.apiUsage = usage
+        _ = try commitCurrentUsage(
+            current,
+            for: profileID,
+            expectedProviderID: profile.providerID,
+            expectedProviderRevision: profile.providerRevision
+        )
     }
 
     func clearAPIUsage(for profileID: UUID) throws {
-        _ = try loadCurrentUsageResolvingMigration(for: profileID)
-        _ = try usageFileStore.updateCurrentUsage(for: profileID) { current in
-            current.apiUsage = nil
-        }
-        unresolvedUsageProfileIDs.remove(profileID)
+        let profile = try requireClaudeProfile(profileID)
+        var current = try loadCurrentUsageResolvingMigration(
+            for: profileID
+        )
+        current.apiUsage = nil
+        _ = try commitCurrentUsage(
+            current,
+            for: profileID,
+            expectedProviderID: profile.providerID,
+            expectedProviderRevision: profile.providerRevision
+        )
     }
 
     func loadAPIUsage(for profileID: UUID) throws -> APIUsage? {
-        try loadCurrentUsageResolvingMigration(for: profileID).apiUsage
+        try requireClaudeProfile(profileID)
+        return try loadCurrentUsageResolvingMigration(for: profileID)
+            .apiUsage
+    }
+
+    /// Loads usage only for the exact request identity captured by a refresh.
+    /// An existing file for another provider or revision fails closed.
+    func loadCurrentUsage(
+        for profileID: UUID,
+        expectedProviderID: ProviderID,
+        expectedProviderRevision: UInt64
+    ) throws -> ProfileCurrentUsage? {
+        try recoverPendingCredentialUsageUnlinks()
+        try recoverPendingCodexConfigurationMutations()
+        try validateCurrentUsageFence(
+            profileID: profileID,
+            expectedProviderID: expectedProviderID,
+            expectedProviderRevision: expectedProviderRevision
+        )
+        _ = try loadCurrentUsageResolvingMigration(for: profileID)
+        let usage = try usageFileStore.loadCurrentUsage(for: profileID)
+        try usage?.validate(
+            expectedProviderID: expectedProviderID,
+            expectedProviderRevision: expectedProviderRevision
+        )
+        return usage
+    }
+
+    /// Commits one complete provider result through a provider/revision/
+    /// deletion fence. The installed payload and live identity are read back
+    /// before success is returned, so callers may publish only after this
+    /// method completes.
+    @discardableResult
+    func commitCurrentUsage(
+        _ usage: ProfileCurrentUsage,
+        for profileID: UUID,
+        expectedProviderID: ProviderID,
+        expectedProviderRevision: UInt64
+    ) throws -> (
+        previous: ProfileCurrentUsage?,
+        current: ProfileCurrentUsage
+    ) {
+        try usage.validate(
+            expectedProviderID: expectedProviderID,
+            expectedProviderRevision: expectedProviderRevision
+        )
+        try recoverPendingCredentialUsageUnlinks()
+        try recoverPendingCodexConfigurationMutations()
+        try validateCurrentUsageFence(
+            profileID: profileID,
+            expectedProviderID: expectedProviderID,
+            expectedProviderRevision: expectedProviderRevision
+        )
+
+        // Resolve a legacy retry before capturing the rollback value. A valid
+        // installed destination remains authoritative under D031.
+        _ = try loadCurrentUsageResolvingMigration(for: profileID)
+        let previousUsage = try usageFileStore.loadCurrentUsage(
+            for: profileID
+        )
+        try previousUsage?.validate(
+            expectedProviderID: expectedProviderID,
+            expectedProviderRevision: expectedProviderRevision
+        )
+
+        do {
+            let updated = try usageFileStore.updateCurrentUsage(
+                for: profileID
+            ) { current in
+                current = usage
+            }
+            guard updated == usage else {
+                throw ProfileUsageFileStoreError
+                    .currentUsageWriteVerificationFailed(profileID)
+            }
+            let installed = try usageFileStore.loadCurrentUsage(
+                for: profileID
+            )
+            guard installed == usage else {
+                throw ProfileUsageFileStoreError
+                    .currentUsageWriteVerificationFailed(profileID)
+            }
+            try validateCurrentUsageFence(
+                profileID: profileID,
+                expectedProviderID: expectedProviderID,
+                expectedProviderRevision: expectedProviderRevision
+            )
+            unresolvedUsageProfileIDs.remove(profileID)
+            return (previous: previousUsage, current: usage)
+        } catch {
+            let commitError = error
+            do {
+                let installedAfterFailure =
+                    try usageFileStore.loadCurrentUsage(for: profileID)
+                if currentUsageFenceMatches(
+                    profileID: profileID,
+                    expectedProviderID: expectedProviderID,
+                    expectedProviderRevision: expectedProviderRevision
+                ) {
+                    if installedAfterFailure != previousUsage {
+                        if let previousUsage {
+                            try usageFileStore.saveCurrentUsage(
+                                previousUsage,
+                                for: profileID
+                            )
+                        } else {
+                            try usageFileStore.deleteCurrentUsage(
+                                for: profileID
+                            )
+                        }
+                    }
+                    guard try usageFileStore.loadCurrentUsage(
+                        for: profileID
+                    ) == previousUsage else {
+                        throw ProfileUsageFileStoreError
+                            .currentUsageWriteVerificationFailed(profileID)
+                    }
+                } else if installedAfterFailure == usage {
+                    // The identity changed after installation. Remove only
+                    // the exact stale value installed by this call; never
+                    // delete a newer writer's payload.
+                    try usageFileStore.deleteCurrentUsage(for: profileID)
+                    guard try usageFileStore.loadCurrentUsage(
+                        for: profileID
+                    ) == nil else {
+                        throw ProfileUsageFileStoreError
+                            .currentUsageWriteVerificationFailed(profileID)
+                    }
+                }
+            } catch {
+                unresolvedUsageProfileIDs.insert(profileID)
+                throw ProfileStoreError
+                    .currentUsageCommitRollbackFailed(profileID)
+            }
+            throw commitError
+        }
     }
 
     /// Deletes current usage plus any history/recovery artifacts remaining in
@@ -609,6 +1119,68 @@ class ProfileStore {
         return try JSONDecoder().decode([Profile].self, from: data)
     }
 
+    @discardableResult
+    private func requireClaudeProfile(_ profileID: UUID) throws -> Profile {
+        let profiles = try decodeStoredProfiles()
+        try validateProfileSet(profiles)
+        guard let profile = profiles.first(where: {
+            $0.id == profileID
+        }) else {
+            throw ProfileStoreError.profileNotFound(profileID)
+        }
+        guard profile.providerConfiguration.kind == .claude else {
+            throw ProfileProviderConfigurationError
+                .claudeProfileRequired(profileID)
+        }
+        guard !profile.deletionInProgress else {
+            throw ProfileStoreError.profileDeletionInProgress(profileID)
+        }
+        return profile
+    }
+
+    private func validateCurrentUsageFence(
+        profileID: UUID,
+        expectedProviderID: ProviderID,
+        expectedProviderRevision: UInt64
+    ) throws {
+        let profiles = try decodeStoredProfiles()
+        try validateProfileSet(profiles)
+        guard let profile = profiles.first(where: {
+            $0.id == profileID
+        }) else {
+            throw ProfileStoreError.profileNotFound(profileID)
+        }
+        guard !profile.deletionInProgress else {
+            throw ProfileStoreError.profileDeletionInProgress(profileID)
+        }
+        guard profile.providerID == expectedProviderID,
+              profile.providerRevision == expectedProviderRevision else {
+            throw ProfileCurrentUsageValidationError.identityMismatch(
+                expectedProviderID: expectedProviderID,
+                expectedProviderRevision: expectedProviderRevision,
+                foundProviderID: profile.providerID,
+                foundProviderRevision: profile.providerRevision
+            )
+        }
+    }
+
+    private func currentUsageFenceMatches(
+        profileID: UUID,
+        expectedProviderID: ProviderID,
+        expectedProviderRevision: UInt64
+    ) -> Bool {
+        do {
+            try validateCurrentUsageFence(
+                profileID: profileID,
+                expectedProviderID: expectedProviderID,
+                expectedProviderRevision: expectedProviderRevision
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// A pending unlink remains authoritative even when its recovery write
     /// fails. Return a fail-closed runtime projection without changing either
     /// the stored retry material or durable marker needed by a later recovery.
@@ -620,7 +1192,12 @@ class ProfileStore {
             guard let index = profiles.firstIndex(where: {
                 $0.id == marker.profileID
             }) else {
-                continue
+                throw ProfileStoreError.profileNotFound(marker.profileID)
+            }
+            guard profiles[index].providerConfiguration.kind
+                    == .claude else {
+                throw ProfileProviderConfigurationError
+                    .claudeProfileRequired(marker.profileID)
             }
             let field: ProfileSecretField =
                 marker.component == .claude
@@ -644,6 +1221,7 @@ class ProfileStore {
             if var usageRetry =
                 profiles[index].currentUsageMigrationRetry {
                 if marker.component == .claude {
+                    usageRetry.report = nil
                     usageRetry.claudeUsage = nil
                 } else {
                     usageRetry.apiUsage = nil
@@ -653,11 +1231,98 @@ class ProfileStore {
             }
         }
 
+        for marker in try loadPendingCodexConfigurationMutations() {
+            guard let index = profiles.firstIndex(where: {
+                $0.id == marker.profileID
+            }) else {
+                throw ProfileStoreError.profileNotFound(marker.profileID)
+            }
+            try validateCodexConfigurationMutationMarker(
+                marker,
+                against: profiles[index]
+            )
+            profiles[index].providerConfiguration = .codex(
+                CodexProfileConfiguration(linkedHome: marker.linkedHome)
+            )
+            profiles[index].providerRevision = marker.targetRevision
+            profiles[index].claudeUsage = nil
+            profiles[index].apiUsage = nil
+            profiles[index].currentUsageMigrationRetry = nil
+            unresolvedUsageProfileIDs.insert(marker.profileID)
+        }
+
+        try validateProfileSet(profiles)
         return profiles
+    }
+
+    private func validateProviderIdentity(
+        candidate: Profile,
+        stored: Profile
+    ) throws {
+        guard stored.providerConfiguration.kind
+                == candidate.providerConfiguration.kind else {
+            throw ProfileProviderConfigurationError
+                .providerChangeNotAllowed(candidate.id)
+        }
+        guard stored.providerConfiguration
+                == candidate.providerConfiguration else {
+            throw ProfileProviderConfigurationError
+                .codexHomeChangeRequiresLink(candidate.id)
+        }
+        guard stored.providerRevision == candidate.providerRevision else {
+            throw ProfileProviderConfigurationError
+                .providerRevisionChangeNotAllowed(candidate.id)
+        }
+    }
+
+    private func validateDeletionState(
+        candidate: Profile,
+        stored: Profile
+    ) throws {
+        guard candidate.deletionInProgress
+                == stored.deletionInProgress else {
+            throw ProfileProviderConfigurationError
+                .deletionStateChangeRequiresLifecycle(candidate.id)
+        }
+    }
+
+    private func validateCodexConfigurationMutationMarker(
+        _ marker: PendingCodexConfigurationMutation,
+        against profile: Profile
+    ) throws {
+        guard profile.providerConfiguration.kind == .codex else {
+            throw ProfileProviderConfigurationError
+                .codexProfileRequired(marker.profileID)
+        }
+        let currentRevision = profile.providerRevision
+        if currentRevision == marker.targetRevision {
+            guard profile.providerConfiguration.codexConfiguration?
+                    .linkedHome == marker.linkedHome else {
+                throw ProfileProviderConfigurationError
+                    .codexConfigurationMarkerVerificationFailed
+            }
+            return
+        }
+        guard currentRevision < UInt64.max,
+              marker.targetRevision == currentRevision + 1 else {
+            throw ProfileProviderConfigurationError
+                .codexConfigurationMarkerVerificationFailed
+        }
     }
 
     private func prepareForOrdinarySave(_ profile: Profile, stored: Profile?) throws -> Profile {
         var prepared = profile
+        try profile.validateProviderIsolation()
+        if let stored {
+            try validateProviderIdentity(
+                candidate: profile,
+                stored: stored
+            )
+            try validateDeletionState(
+                candidate: profile,
+                stored: stored
+            )
+        }
         if stored?.deletionInProgress == true || profile.deletionInProgress {
             prepared.deletionInProgress = true
             prepared.claudeSessionKey = nil
@@ -674,6 +1339,12 @@ class ProfileStore {
             ?? profile.credentialMigrationRetry
         prepared.currentUsageMigrationRetry = stored?.currentUsageMigrationRetry
             ?? profile.currentUsageMigrationRetry
+
+        if profile.providerConfiguration.kind == .codex {
+            // Provider isolation guarantees these are already empty. Avoid
+            // even constructing Claude secure-storage locators.
+            return prepared
+        }
 
         for field in ProfileSecretField.allCases {
             let locator = ProfileSecretLocator(profileID: profile.id, field: field)
@@ -724,14 +1395,28 @@ class ProfileStore {
         for profileID: UUID
     ) throws -> ProfileCurrentUsage {
         var profiles = try decodeStoredProfiles()
+        try validateProfileSet(profiles)
         guard let index = profiles.firstIndex(where: { $0.id == profileID }) else {
             throw ProfileStoreError.profileNotFound(profileID)
         }
+        guard !profiles[index].deletionInProgress else {
+            throw ProfileStoreError.profileDeletionInProgress(profileID)
+        }
+        let providerID = profiles[index].providerID
+        let providerRevision = profiles[index].providerRevision
 
         if let retryUsage = profiles[index].currentUsageMigrationRetry {
             do {
+                try retryUsage.validate(
+                    expectedProviderID: providerID,
+                    expectedProviderRevision: providerRevision
+                )
                 let authoritativeUsage: ProfileCurrentUsage
                 if let existingUsage = try usageFileStore.loadCurrentUsage(for: profileID) {
+                    try existingUsage.validate(
+                        expectedProviderID: providerID,
+                        expectedProviderRevision: providerRevision
+                    )
                     authoritativeUsage = existingUsage
                 } else {
                     try usageFileStore.saveCurrentUsage(retryUsage, for: profileID)
@@ -749,7 +1434,14 @@ class ProfileStore {
 
         do {
             let usage = try usageFileStore.loadCurrentUsage(for: profileID)
-                ?? ProfileCurrentUsage()
+                ?? ProfileCurrentUsage(
+                    providerID: providerID,
+                    providerRevision: providerRevision
+                )
+            try usage.validate(
+                expectedProviderID: providerID,
+                expectedProviderRevision: providerRevision
+            )
             unresolvedUsageProfileIDs.remove(profileID)
             return usage
         } catch {
@@ -955,11 +1647,107 @@ class ProfileStore {
         }
     }
 
+    private func recoverPendingCodexConfigurationMutations() throws {
+        for marker in try loadPendingCodexConfigurationMutations() {
+            var profiles = try decodeStoredProfiles()
+            try validateProfileSet(profiles)
+            guard let index = profiles.firstIndex(where: {
+                $0.id == marker.profileID
+            }) else {
+                throw ProfileStoreError.profileNotFound(marker.profileID)
+            }
+            try validateCodexConfigurationMutationMarker(
+                marker,
+                against: profiles[index]
+            )
+
+            try usageFileStore.deleteCurrentUsage(for: marker.profileID)
+            profiles[index].providerConfiguration = .codex(
+                CodexProfileConfiguration(linkedHome: marker.linkedHome)
+            )
+            profiles[index].providerRevision = marker.targetRevision
+            try persistProfiles(profiles)
+            unresolvedUsageProfileIDs.remove(marker.profileID)
+            try removePendingCodexConfigurationMutation(
+                for: marker.profileID
+            )
+        }
+    }
+
+    private func loadPendingCodexConfigurationMutations() throws
+        -> [PendingCodexConfigurationMutation] {
+        guard let data = defaults.data(
+            forKey: Keys.pendingCodexConfigurationMutations
+        ) else {
+            return []
+        }
+        return try JSONDecoder().decode(
+            [PendingCodexConfigurationMutation].self,
+            from: data
+        )
+    }
+
+    private func persistPendingCodexConfigurationMutation(
+        _ marker: PendingCodexConfigurationMutation
+    ) throws {
+        var markers = try loadPendingCodexConfigurationMutations()
+        markers.removeAll { $0.profileID == marker.profileID }
+        markers.append(marker)
+        try persistPendingCodexConfigurationMutations(markers)
+    }
+
+    private func removePendingCodexConfigurationMutation(
+        for profileID: UUID
+    ) throws {
+        var markers = try loadPendingCodexConfigurationMutations()
+        markers.removeAll { $0.profileID == profileID }
+        try persistPendingCodexConfigurationMutations(markers)
+    }
+
+    private func persistPendingCodexConfigurationMutations(
+        _ markers: [PendingCodexConfigurationMutation]
+    ) throws {
+        let data = try JSONEncoder().encode(markers)
+        if markers.isEmpty {
+            defaults.removeObject(
+                forKey: Keys.pendingCodexConfigurationMutations
+            )
+            guard defaults.data(
+                forKey: Keys.pendingCodexConfigurationMutations
+            ) == nil else {
+                throw ProfileProviderConfigurationError
+                    .codexConfigurationMarkerVerificationFailed
+            }
+        } else {
+            defaults.set(
+                data,
+                forKey: Keys.pendingCodexConfigurationMutations
+            )
+            guard defaults.data(
+                forKey: Keys.pendingCodexConfigurationMutations
+            ) == data else {
+                throw ProfileProviderConfigurationError
+                    .codexConfigurationMarkerVerificationFailed
+            }
+        }
+    }
+
     private func recoverPendingCredentialUsageUnlink(
         _ marker: PendingCredentialUsageUnlink,
         rollbackCredentials: ProfileCredentials?,
         rollbackUsage: ProfileCurrentUsage?
     ) throws -> CredentialUsageUnlinkResolution {
+        var profiles = try decodeStoredProfiles()
+        try validateProfileSet(profiles)
+        guard let index = profiles.firstIndex(where: {
+            $0.id == marker.profileID
+        }) else {
+            throw ProfileStoreError.profileNotFound(marker.profileID)
+        }
+        guard profiles[index].providerConfiguration.kind == .claude else {
+            throw ProfileProviderConfigurationError
+                .claudeProfileRequired(marker.profileID)
+        }
         let field: ProfileSecretField =
             marker.component == .claude ? .claudeSessionKey : .apiSessionKey
         let locator = ProfileSecretLocator(
@@ -977,12 +1765,6 @@ class ProfileStore {
             throw ProfileStoreError.credentialReadUnresolved(locator)
         }
 
-        var profiles = try decodeStoredProfiles()
-        guard let index = profiles.firstIndex(where: {
-            $0.id == marker.profileID
-        }) else {
-            throw ProfileStoreError.profileNotFound(marker.profileID)
-        }
         let resolution: CredentialUsageUnlinkResolution
 
         if case .value(let value) = secretState,
@@ -1031,6 +1813,7 @@ class ProfileStore {
             if var usageRetry =
                 profiles[index].currentUsageMigrationRetry {
                 if marker.component == .claude {
+                    usageRetry.report = nil
                     usageRetry.claudeUsage = nil
                 } else {
                     usageRetry.apiUsage = nil
@@ -1040,8 +1823,17 @@ class ProfileStore {
             }
             var usage = try usageFileStore.loadCurrentUsage(
                 for: marker.profileID
-            ) ?? ProfileCurrentUsage()
+            ) ?? ProfileCurrentUsage(
+                providerID: profiles[index].providerID,
+                providerRevision: profiles[index].providerRevision
+            )
+            try usage.validate(
+                expectedProviderID: profiles[index].providerID,
+                expectedProviderRevision:
+                    profiles[index].providerRevision
+            )
             if marker.component == .claude {
+                usage.report = nil
                 usage.claudeUsage = nil
             } else {
                 usage.apiUsage = nil
@@ -1145,6 +1937,7 @@ class ProfileStore {
     }
 
     private func persistProfiles(_ profiles: [Profile]) throws {
+        try validateProfileSet(profiles)
         let previousData = defaults.data(forKey: Keys.profiles)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -1154,6 +1947,27 @@ class ProfileStore {
         guard defaults.data(forKey: Keys.profiles) == data else {
             try restoreProfiles(previousData)
             throw ProfileStoreError.profileWriteVerificationFailed
+        }
+    }
+
+    private func validateProfileSet(_ profiles: [Profile]) throws {
+        var profileIDs: Set<UUID> = []
+        var codexHomes: [CanonicalCodexHome: UUID] = [:]
+        for profile in profiles {
+            try profile.validateProviderIsolation()
+            guard profileIDs.insert(profile.id).inserted else {
+                throw ProfileProviderConfigurationError
+                    .duplicateProfileID(profile.id)
+            }
+            guard let home = profile.providerConfiguration
+                    .codexConfiguration?.linkedHome else {
+                continue
+            }
+            if let owner = codexHomes[home] {
+                throw ProfileProviderConfigurationError
+                    .duplicateCodexHome(owner)
+            }
+            codexHomes[home] = profile.id
         }
     }
 
@@ -1183,6 +1997,12 @@ private struct PendingCredentialUsageUnlink: Codable {
 
     let profileID: UUID
     let component: Component
+}
+
+private struct PendingCodexConfigurationMutation: Codable {
+    let profileID: UUID
+    let linkedHome: CanonicalCodexHome?
+    let targetRevision: UInt64
 }
 
 private enum CredentialUsageUnlinkResolution {

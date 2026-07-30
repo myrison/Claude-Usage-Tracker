@@ -1,10 +1,46 @@
 import Cocoa
 import SwiftUI
+import UsageCore
 import UserNotifications
 
+struct SetupWizardDecision {
+    static func shouldShow(
+        hasShownWizardOnce: Bool,
+        activeProfile: Profile?,
+        hasValidClaudeCLI: () -> Bool
+    ) -> Bool {
+        if activeProfile?.providerID == .codex {
+            // Provider routing precedes the one-time Claude migration wizard.
+            // Otherwise a first-launch Codex profile would enter the wizard
+            // branch, be rejected by the presentation guard, and initialize
+            // no menu-bar UI.
+            return false
+        }
+        guard hasShownWizardOnce else { return true }
+        guard let activeProfile else { return true }
+
+        switch activeProfile.providerConfiguration {
+        case .codex:
+            // Covered before the first-launch rule above.
+            return false
+        case .claude:
+            if activeProfile.hasAnyCredentials {
+                return false
+            }
+            return !hasValidClaudeCLI()
+        }
+    }
+
+    static func canPresentLegacyWizard(activeProfile: Profile?) -> Bool {
+        activeProfile?.providerID != .codex
+    }
+}
+
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var menuBarManager: MenuBarManager?
     private var setupWindow: NSWindow?
+    private var terminationTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hosted unit tests load the application target in-process. They must
@@ -49,7 +85,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Check if setup has been completed
         if !shouldShowSetupWizard() {
             // Initialize menu bar with active profile
-            menuBarManager = MenuBarManager()
+            menuBarManager = makeMenuBarManager()
             menuBarManager?.setup()
         } else {
             showSetupWizardManually()
@@ -101,7 +137,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         }
     }
 
-    static var isRunningHostedUnitTests: Bool {
+    nonisolated static var isRunningHostedUnitTests: Bool {
         let environment = ProcessInfo.processInfo.environment
         return environment["XCTestConfigurationFilePath"] != nil
             || environment["XCTestBundlePath"] != nil
@@ -120,32 +156,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private func shouldShowSetupWizard() -> Bool {
         // FORCE SHOW wizard on very first app launch (one-time)
         // This ensures users see the migration option if they have old data
-        if !SharedDataStore.shared.hasShownWizardOnce() {
+        let hasShownWizardOnce =
+            SharedDataStore.shared.hasShownWizardOnce()
+        if !hasShownWizardOnce {
             LoggingService.shared.log("AppDelegate: First launch - forcing wizard to show migration option")
-            return true
         }
-
-        // After first launch, use normal checks:
-
-        // activeProfile will always exist after loadProfiles() is called
-        // (ProfileManager creates a default profile if none exist)
-        guard let activeProfile = ProfileManager.shared.activeProfile else {
-            return true  // Safety fallback, should never happen
+        return SetupWizardDecision.shouldShow(
+            hasShownWizardOnce: hasShownWizardOnce,
+            activeProfile: ProfileManager.shared.activeProfile
+        ) {
+            let valid = hasValidSystemCLICredentials()
+            if valid {
+                LoggingService.shared.log(
+                    "AppDelegate: Found valid CLI credentials, skipping wizard"
+                )
+            }
+            return valid
         }
-
-        // If profile already has any credentials, skip wizard
-        if activeProfile.hasAnyCredentials {
-            return false
-        }
-
-        // Check if valid CLI credentials exist in system Keychain
-        if hasValidSystemCLICredentials() {
-            LoggingService.shared.log("AppDelegate: Found valid CLI credentials, skipping wizard")
-            return false
-        }
-
-        // No credentials found - show wizard
-        return true
     }
 
     /// Checks if valid Claude Code CLI credentials exist in system Keychain
@@ -187,6 +214,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     /// Shows the setup wizard window (can be called manually for testing)
     func showSetupWizardManually() {
         LoggingService.shared.log("AppDelegate: showSetupWizardManually called")
+        guard SetupWizardDecision.canPresentLegacyWizard(
+            activeProfile: ProfileManager.shared.activeProfile
+        ) else {
+            LoggingService.shared.log(
+                "AppDelegate: Ignoring legacy Claude setup for Codex profile"
+            )
+            return
+        }
 
         // Temporarily show dock icon for the setup window
         NSApp.setActivationPolicy(.regular)
@@ -210,13 +245,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             object: window,
             queue: .main
         ) { [weak self] _ in
-            NSApp.setActivationPolicy(.accessory)
-            self?.setupWindow = nil
+            MainActor.assumeIsolated {
+                NSApp.setActivationPolicy(.accessory)
+                self?.setupWindow = nil
 
-            // Initialize menu bar after setup completes
-            if self?.menuBarManager == nil {
-                self?.menuBarManager = MenuBarManager()
-                self?.menuBarManager?.setup()
+                if self?.menuBarManager == nil {
+                    self?.menuBarManager =
+                        self?.makeMenuBarManager()
+                    self?.menuBarManager?.setup()
+                }
             }
         }
 
@@ -224,9 +261,42 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        guard let menuBarManager else {
+            return .terminateNow
+        }
+        guard terminationTask == nil else {
+            return .terminateLater
+        }
+        terminationTask = Task { @MainActor in
+            await menuBarManager.cleanupAndWaitForTermination()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
-        // Cleanup
+        // Idempotent fallback for termination paths that do not consult the
+        // delegate reply gate.
         menuBarManager?.cleanup()
+    }
+
+    private func makeMenuBarManager() -> MenuBarManager {
+        let apiService = ClaudeAPIService()
+        let statusService = ClaudeStatusService()
+        let runtime = UsageRefreshRuntime.live(
+            profileManager: .shared,
+            apiService: apiService,
+            statusService: statusService
+        )
+        return MenuBarManager(
+            apiService: apiService,
+            statusService: statusService,
+            profileManager: .shared,
+            refreshRuntime: runtime
+        )
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
