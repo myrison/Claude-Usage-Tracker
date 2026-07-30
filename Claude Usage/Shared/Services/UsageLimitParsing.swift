@@ -36,7 +36,7 @@ enum UsageLimitParsing {
         guard let limits else { return nil }
 
         for limit in limits {
-            if let rawKind = limit["kind"] {
+            if let rawKind = limit["kind"], !(rawKind is NSNull) {
                 guard let kind = rawKind as? String,
                       kind.caseInsensitiveCompare("weekly_scoped") == .orderedSame else {
                     continue
