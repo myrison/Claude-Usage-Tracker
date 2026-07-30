@@ -76,10 +76,9 @@ class SharedDataStore {
         static let timeFormatPreference = "timeFormatPreference"
     }
 
-    init() {
-        // Use standard UserDefaults (app container)
-        self.defaults = UserDefaults.standard
-        LoggingService.shared.log("SharedDataStore: Using standard app container storage")
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        LoggingService.shared.log("SharedDataStore: Using configured app storage")
     }
 
     // MARK: - Language & Localization

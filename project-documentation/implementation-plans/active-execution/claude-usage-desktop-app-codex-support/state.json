@@ -1,0 +1,908 @@
+{
+  "schema_version": 2,
+  "project": "Claude Usage Desktop App Codex Support",
+  "slug": "claude-usage-desktop-app-codex-support",
+  "created_at": "2026-07-30T05:19:19Z",
+  "last_updated": "2026-07-30T05:34:00Z",
+  "status": "active",
+  "current_batch": "B01",
+  "current_phase": "P01",
+  "feature_branch": "feature/codex-subscription-support",
+  "feature_branch_role": "Durable project-control branch; delivery code uses sequential batch branches targeting upstream/main.",
+  "repository": {
+    "name": "revenium/Claude-Usage-Tracker",
+    "path": "/Users/jason/gitclone/Claude-Usage-Tracker",
+    "push_remote": "upstream",
+    "base_branch": "main",
+    "base_ref": "upstream/main",
+    "base_commit_at_initialization": "aaeb9e74747f0197dc7d8935a2b64ea37a4e81e5",
+    "worktree_root": "/Users/jason/gitclone/hc-repo/worktrees/Claude-Usage-Tracker",
+    "project_folder": "project-documentation/implementation-plans/active-execution/claude-usage-desktop-app-codex-support"
+  },
+  "linear": {
+    "team": "Product",
+    "team_key": "PRODUCT",
+    "project_name": "Claude Usage Desktop App Codex Support",
+    "project_id": "8fd871e1416e",
+    "umbrella_issue_identifier": "PRODUCT-2276",
+    "umbrella_issue_id": null,
+    "template": "revvie-implementation",
+    "template_id": "0770b224-e5c7-474c-8afa-a4be9ad08888",
+    "existing_related_issues": [
+      "PRODUCT-1022",
+      "PRODUCT-1237"
+    ],
+    "child_issue_identifiers": {
+      "P01": "PRODUCT-2282",
+      "P02": "PRODUCT-2280",
+      "P03": "PRODUCT-2279",
+      "P04": "PRODUCT-2277",
+      "P05": "PRODUCT-2281",
+      "P06": "PRODUCT-2278",
+      "P07": "PRODUCT-2286",
+      "P08": "PRODUCT-2285",
+      "P09": "PRODUCT-2288",
+      "P10": "PRODUCT-2283",
+      "P11": "PRODUCT-2287",
+      "P12": "PRODUCT-2284",
+      "P13": "PRODUCT-2293",
+      "P14": "PRODUCT-2289",
+      "P15": "PRODUCT-2291",
+      "P16": "PRODUCT-2292",
+      "P17": "PRODUCT-2290"
+    },
+    "setup_status": "complete"
+  },
+  "delivery_policy": {
+    "delivery_batches": 5,
+    "batch_pr_target": "upstream/main",
+    "batch_pr_repository": "revenium/Claude-Usage-Tracker",
+    "maximum_parallel_workers": 3,
+    "worker_merge_method": "PM cherry-picks verified worker commits onto the batch branch",
+    "batch_merge_method": "codex-ship-pr audited merge",
+    "ship_command": "$codex-ship-pr skip-review --auto-merge --linear <primary-linear-issue>",
+    "merge_authority_granted": true,
+    "require_previous_batch_merged": true,
+    "require_fresh_upstream_main": true,
+    "greptile_max_reviews_per_pr": 2,
+    "feature_flag": "Codex remains disabled for normal users until P17 passes",
+    "slack_updates_required": false
+  },
+  "shared_file_policy": {
+    "rule": "No two concurrently active workers may own or touch the same file or glob. Only the PM updates project state files. Shared integration files are assigned to one serialized phase.",
+    "pm_only_files": [
+      "project-documentation/implementation-plans/active-execution/claude-usage-desktop-app-codex-support/state.json",
+      "project-documentation/implementation-plans/active-execution/claude-usage-desktop-app-codex-support/progress-log.md",
+      "project-documentation/implementation-plans/active-execution/claude-usage-desktop-app-codex-support/decisions.md"
+    ],
+    "serialized_integration_files": [
+      "Claude Usage.xcodeproj/project.pbxproj",
+      "Packages/UsageKit/Package.swift",
+      "Claude Usage/Resources/*.lproj/Localizable.strings",
+      ".github/workflows/*.yml",
+      "README.md",
+      "CHANGELOG.md",
+      "RELEASING.md"
+    ],
+    "corrective_fix_rule": "P17 is verification-only by default. If it discovers a defect, the PM creates a serialized corrective work unit with an explicit touch set before editing."
+  },
+  "waves": {
+    "W00": {
+      "name": "Tracking initialization",
+      "status": "completed",
+      "phases": [],
+      "parallel": false,
+      "acceptance": "Create the 17 child issues, dependency relations, and links to PRODUCT-1022 and PRODUCT-1237; record real identifiers in state.json."
+    },
+    "W01": {
+      "name": "Green baseline",
+      "status": "in_progress",
+      "phases": ["P01"],
+      "parallel": false
+    },
+    "W02": {
+      "name": "Safety foundations",
+      "status": "pending",
+      "phases": ["P02", "P03", "P04"],
+      "parallel": true,
+      "parallel_safety": "P02 owns profile/keychain files, P03 owns usage/history persistence files, and P04 owns menu/window files."
+    },
+    "W03A": {
+      "name": "UsageKit boundary",
+      "status": "pending",
+      "phases": ["P05"],
+      "parallel": false
+    },
+    "W03B": {
+      "name": "Transport and profile model",
+      "status": "pending",
+      "phases": ["P06", "P07"],
+      "parallel": true,
+      "parallel_safety": "P06 is confined to Codex transport package files; P07 is confined to app profile models and stores."
+    },
+    "W03C": {
+      "name": "Codex provider",
+      "status": "pending",
+      "phases": ["P08"],
+      "parallel": false
+    },
+    "W03D": {
+      "name": "Refresh integration",
+      "status": "pending",
+      "phases": ["P09"],
+      "parallel": false
+    },
+    "W04": {
+      "name": "Provider-aware UI parity",
+      "status": "pending",
+      "phases": ["P10", "P11", "P12"],
+      "parallel": true,
+      "parallel_safety": "P10 owns onboarding/settings, P11 owns popover presentation, and P12 owns status-item/menu/icon presentation."
+    },
+    "W05A": {
+      "name": "Cross-cutting parity and distribution",
+      "status": "pending",
+      "phases": ["P13", "P14", "P16"],
+      "parallel": true,
+      "parallel_safety": "P13 owns history/notification/automation, P14 owns error/diagnostic files, and P16 owns release/update infrastructure."
+    },
+    "W05B": {
+      "name": "Localization, accessibility, and UI automation",
+      "status": "pending",
+      "phases": ["P15"],
+      "parallel": false
+    },
+    "W05C": {
+      "name": "Final parity and ship audit",
+      "status": "pending",
+      "phases": ["P17"],
+      "parallel": false
+    }
+  },
+  "delivery_batches": {
+    "B01": {
+      "name": "Restore deterministic baseline",
+      "status": "verified_pending_ship",
+      "branch": "feature/codex-support-baseline",
+      "worktree": "/Users/jason/gitclone/hc-repo/worktrees/Claude-Usage-Tracker/phase-01-baseline",
+      "target": "upstream/main",
+      "depends_on": [],
+      "phases": ["P01"],
+      "primary_linear_issue": "PRODUCT-2282",
+      "pr_number": null,
+      "pr_url": null,
+      "head_sha": null,
+      "started_at": "2026-07-30T05:20:00Z",
+      "merged_at": null
+    },
+    "B02": {
+      "name": "Safety foundations",
+      "status": "pending",
+      "branch": "feature/codex-support-foundations",
+      "worktree": null,
+      "target": "upstream/main",
+      "depends_on": ["B01"],
+      "phases": ["P02", "P03", "P04"],
+      "primary_linear_issue": null,
+      "pr_number": null,
+      "pr_url": null,
+      "head_sha": null,
+      "started_at": null,
+      "merged_at": null
+    },
+    "B03": {
+      "name": "Provider core",
+      "status": "pending",
+      "branch": "feature/codex-support-provider-core",
+      "worktree": null,
+      "target": "upstream/main",
+      "depends_on": ["B02"],
+      "phases": ["P05", "P06", "P07", "P08", "P09"],
+      "primary_linear_issue": null,
+      "pr_number": null,
+      "pr_url": null,
+      "head_sha": null,
+      "started_at": null,
+      "merged_at": null
+    },
+    "B04": {
+      "name": "Provider-aware UI parity",
+      "status": "pending",
+      "branch": "feature/codex-support-ui-parity",
+      "worktree": null,
+      "target": "upstream/main",
+      "depends_on": ["B03"],
+      "phases": ["P10", "P11", "P12"],
+      "primary_linear_issue": null,
+      "pr_number": null,
+      "pr_url": null,
+      "head_sha": null,
+      "started_at": null,
+      "merged_at": null
+    },
+    "B05": {
+      "name": "Release readiness and final parity",
+      "status": "pending",
+      "branch": "feature/codex-support-release-readiness",
+      "worktree": null,
+      "target": "upstream/main",
+      "depends_on": ["B04"],
+      "phases": ["P13", "P14", "P15", "P16", "P17"],
+      "primary_linear_issue": null,
+      "pr_number": null,
+      "pr_url": null,
+      "head_sha": null,
+      "started_at": null,
+      "merged_at": null
+    }
+  },
+  "phases": {
+    "P01": {
+      "ticket_number": 1,
+      "planned_linear_title": "Restore a deterministic green app baseline",
+      "linear_issue_identifier": "PRODUCT-2282",
+      "linear_issue_id": null,
+      "batch": "B01",
+      "wave": "W01",
+      "status": "verified_pending_ship",
+      "branch": "feature/codex-support-baseline",
+      "worktree": "/Users/jason/gitclone/hc-repo/worktrees/Claude-Usage-Tracker/phase-01-baseline",
+      "worker": "baseline_audit",
+      "commit_sha": null,
+      "started_at": "2026-07-30T05:20:00Z",
+      "completed_at": null,
+      "depends_on": [],
+      "owns_files": [
+        "Claude UsageTests/TestSupport/UserDefaultsTestSupport.swift"
+      ],
+      "touches_files": [
+        "Claude Usage/Shared/Services/UsageLimitParsing.swift",
+        "Claude Usage/Shared/Storage/SharedDataStore.swift",
+        "Claude UsageTests/ClaudeUsageTests.swift",
+        "Claude UsageTests/SharedDataStoreTests.swift",
+        ".github/workflows/build.yml"
+      ],
+      "estimated_context": "medium",
+      "acceptance": [
+        "The weekly-scoped parser honors kind and the known failing test passes.",
+        "SharedDataStore and UserDefaults tests remain deterministic under parallel execution.",
+        "All existing unit tests pass repeatedly.",
+        "Debug and Release builds pass and CI runs the same deterministic test and build gates.",
+        "Existing localization debt is documented for P15 and does not block B01."
+      ]
+    },
+    "P02": {
+      "ticket_number": 2,
+      "planned_linear_title": "Move profile secrets to Keychain with verified migration",
+      "linear_issue_identifier": "PRODUCT-2280",
+      "linear_issue_id": null,
+      "batch": "B02",
+      "wave": "W02",
+      "status": "pending",
+      "branch": "work/codex-foundations-keychain",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P01"],
+      "owns_files": [
+        "Claude Usage/Shared/Storage/ProfileSecretStore.swift",
+        "Claude UsageTests/ProfileSecretStoreTests.swift"
+      ],
+      "touches_files": [
+        "Claude Usage/Shared/Models/Profile.swift",
+        "Claude Usage/Shared/Storage/ProfileStore.swift",
+        "Claude Usage/Shared/Services/KeychainService.swift",
+        "Claude Usage/Shared/Services/KeychainMigrationService.swift",
+        "Claude Usage/Shared/Services/ProfileMigrationService.swift"
+      ],
+      "estimated_context": "large",
+      "acceptance": [
+        "Profile JSON no longer persists authentication secrets in plaintext.",
+        "Existing Claude web, API Console, and CLI credentials migrate to profile-keyed Keychain entries.",
+        "Legacy values are cleared only after successful write and readback verification.",
+        "Migration is idempotent, backwards-decodable, and rollback-safe on Keychain failure.",
+        "Tests prove success, partial failure, readback failure, deletion, and multi-profile isolation."
+      ]
+    },
+    "P03": {
+      "ticket_number": 3,
+      "planned_linear_title": "Add verified file-backed current usage and history persistence",
+      "linear_issue_identifier": "PRODUCT-2279",
+      "linear_issue_id": null,
+      "batch": "B02",
+      "wave": "W02",
+      "status": "pending",
+      "branch": "work/codex-foundations-history",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P01"],
+      "owns_files": [
+        "Claude Usage/Shared/Storage/UsageSnapshotStore.swift",
+        "Claude UsageTests/UsageSnapshotStoreTests.swift"
+      ],
+      "touches_files": [
+        "Claude Usage/Shared/Services/UsageHistoryService.swift",
+        "Claude Usage/Shared/Storage/SharedDataStore.swift",
+        "Claude Usage/Shared/Storage/DataStore.swift",
+        "Claude Usage/Shared/Models/UsageHistory.swift"
+      ],
+      "estimated_context": "large",
+      "acceptance": [
+        "Current usage snapshots and history use atomic file-backed persistence outside profile records.",
+        "Legacy UserDefaults data is deleted only after verified write and decode.",
+        "Corrupt, interrupted, missing, and version-skewed files fail safely without losing the legacy source.",
+        "Per-profile isolation, bounded history, export compatibility, and concurrent access are tested."
+      ]
+    },
+    "P04": {
+      "ticket_number": 4,
+      "planned_linear_title": "Adopt selected upstream menu and window reliability fixes",
+      "linear_issue_identifier": "PRODUCT-2277",
+      "linear_issue_id": null,
+      "batch": "B02",
+      "wave": "W02",
+      "status": "pending",
+      "branch": "work/codex-foundations-menu-reliability",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P01"],
+      "owns_files": [],
+      "touches_files": [
+        "Claude Usage/MenuBar/MenuBarManager.swift",
+        "Claude Usage/MenuBar/WindowCoordinator.swift",
+        "Claude Usage/MenuBar/StatusBarUIManager.swift",
+        "Claude Usage/MenuBar/MenuBarIconRenderer.swift",
+        "Claude Usage/Views/SettingsView.swift",
+        "Claude Usage/App/AppDelegate.swift"
+      ],
+      "estimated_context": "medium",
+      "acceptance": [
+        "Right-click Refresh, Settings, and Quit actions work.",
+        "Popover and settings remain usable in full-screen and after detach/reattach.",
+        "Visibility, profile switching, Cmd+W, and macOS 26/27 layout paths do not crash or recurse.",
+        "Menu icon rendering uses a stable CGImage path.",
+        "Only approved reliability fixes are adapted."
+      ]
+    },
+    "P05": {
+      "ticket_number": 5,
+      "planned_linear_title": "Introduce UsageKit contracts and Claude characterization adapter",
+      "linear_issue_identifier": "PRODUCT-2281",
+      "linear_issue_id": null,
+      "batch": "B03",
+      "wave": "W03A",
+      "status": "pending",
+      "branch": "work/codex-provider-usagekit-core",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P02", "P03", "P04"],
+      "owns_files": [
+        "Packages/UsageKit/Package.swift",
+        "Packages/UsageKit/Sources/UsageCore/ProviderID.swift",
+        "Packages/UsageKit/Sources/UsageCore/UsageReport.swift",
+        "Packages/UsageKit/Sources/UsageCore/UsageLimitGroup.swift",
+        "Packages/UsageKit/Sources/UsageCore/UsageWindow.swift",
+        "Packages/UsageKit/Sources/UsageCore/ProviderCapabilities.swift",
+        "Packages/UsageKit/Sources/UsageCore/UsageProvider.swift",
+        "Packages/UsageKit/Tests/UsageCoreTests/UsageCoreTests.swift",
+        "Claude Usage/Shared/Services/ClaudeUsageProviderAdapter.swift",
+        "Claude UsageTests/ClaudeUsageProviderAdapterTests.swift"
+      ],
+      "touches_files": [
+        "Claude Usage.xcodeproj/project.pbxproj",
+        "Claude Usage/Shared/Services/ClaudeAPIService.swift",
+        "Claude Usage/Shared/Models/ClaudeUsage.swift"
+      ],
+      "estimated_context": "large",
+      "acceptance": [
+        "A local Foundation-only UsageKit package builds independently.",
+        "Normalized provider-neutral types support dynamic limit groups and windows.",
+        "Provider capabilities represent unavailable and optional surfaces explicitly.",
+        "The Claude adapter reproduces characterized existing behavior.",
+        "UsageKit has no app-platform or persistence dependencies."
+      ]
+    },
+    "P06": {
+      "ticket_number": 6,
+      "planned_linear_title": "Build bounded Codex subprocess and JSON-RPC transport",
+      "linear_issue_identifier": "PRODUCT-2278",
+      "linear_issue_id": null,
+      "batch": "B03",
+      "wave": "W03B",
+      "status": "pending",
+      "branch": "work/codex-provider-transport",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P05"],
+      "owns_files": [
+        "Packages/UsageKit/Sources/CodexUsageProvider/Transport/BoundedProcess.swift",
+        "Packages/UsageKit/Sources/CodexUsageProvider/Transport/JSONLTransport.swift",
+        "Packages/UsageKit/Sources/CodexUsageProvider/Transport/CodexAppServerClient.swift",
+        "Packages/UsageKit/Sources/CodexUsageProvider/Transport/CodexProtocol.swift",
+        "Packages/UsageKit/Tests/CodexUsageProviderTests/TransportTests.swift",
+        "Packages/UsageKit/Tests/CodexUsageProviderTests/FakeCodexAppServer.swift"
+      ],
+      "touches_files": [],
+      "estimated_context": "large",
+      "acceptance": [
+        "Transport performs initialize followed by initialized before account calls.",
+        "Request IDs, partial lines, notifications, stderr, cancellation, timeout, early exit, malformed JSON, and bounded output are deterministic.",
+        "CODEX_HOME and executable path are injected without mutating the shell.",
+        "Errors redact credentials, environment values, and auth payloads.",
+        "A fake app-server supports deterministic protocol tests."
+      ]
+    },
+    "P07": {
+      "ticket_number": 7,
+      "planned_linear_title": "Add provider-tagged profiles and migration",
+      "linear_issue_identifier": "PRODUCT-2286",
+      "linear_issue_id": null,
+      "batch": "B03",
+      "wave": "W03B",
+      "status": "pending",
+      "branch": "work/codex-provider-profile-model",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P02", "P03", "P05"],
+      "owns_files": [
+        "Claude Usage/Shared/Models/ProfileProviderConfiguration.swift",
+        "Claude Usage/Shared/Utilities/CodexHomeCanonicalizer.swift",
+        "Claude UsageTests/ProfileProviderMigrationTests.swift"
+      ],
+      "touches_files": [
+        "Claude Usage/Shared/Models/Profile.swift",
+        "Claude Usage/Shared/Storage/ProfileStore.swift",
+        "Claude Usage/Shared/Services/ProfileManager.swift",
+        "Claude Usage/Shared/Services/ProfileMigrationService.swift",
+        "Claude Usage/Shared/Services/MigrationService.swift"
+      ],
+      "estimated_context": "large",
+      "acceptance": [
+        "Each profile has exactly one tagged provider configuration.",
+        "Existing profiles with no provider tag migrate as Claude.",
+        "Codex profiles store only a canonical CODEX_HOME reference and non-secret metadata.",
+        "Duplicate and symlink-equivalent CODEX_HOME values are rejected.",
+        "Profile activation never swaps tokens, edits auth.json, or mutates the shell."
+      ]
+    },
+    "P08": {
+      "ticket_number": 8,
+      "planned_linear_title": "Implement Codex account, login, health, and usage provider",
+      "linear_issue_identifier": "PRODUCT-2285",
+      "linear_issue_id": null,
+      "batch": "B03",
+      "wave": "W03C",
+      "status": "pending",
+      "branch": "work/codex-provider-account-usage",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P05", "P06", "P07"],
+      "owns_files": [
+        "Packages/UsageKit/Sources/CodexUsageProvider/Account/CodexAccountModels.swift",
+        "Packages/UsageKit/Sources/CodexUsageProvider/Account/CodexAccountClient.swift",
+        "Packages/UsageKit/Sources/CodexUsageProvider/Account/CodexUsageProvider.swift",
+        "Packages/UsageKit/Sources/CodexUsageProvider/Account/CodexLoginSession.swift",
+        "Packages/UsageKit/Tests/CodexUsageProviderTests/CodexUsageProviderTests.swift",
+        "Packages/UsageKit/Tests/CodexUsageProviderTests/CodexLoginSessionTests.swift"
+      ],
+      "touches_files": [],
+      "estimated_context": "large",
+      "acceptance": [
+        "Provider validates CLI/app-server availability and an existing CODEX_HOME.",
+        "ChatGPT account linking and official browser/device login work through app-server.",
+        "Disconnect only unlinks app state.",
+        "Account, dynamic rate-limit, credits, and optional usage responses are decoded.",
+        "Legacy response fallback and missing optional usage degrade gracefully.",
+        "API-key and Bedrock accounts are unsupported for subscription tracking."
+      ]
+    },
+    "P09": {
+      "ticket_number": 9,
+      "planned_linear_title": "Add provider-aware profile-keyed refresh orchestration",
+      "linear_issue_identifier": "PRODUCT-2288",
+      "linear_issue_id": null,
+      "batch": "B03",
+      "wave": "W03D",
+      "status": "pending",
+      "branch": "work/codex-provider-refresh-engine",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P05", "P07", "P08"],
+      "owns_files": [
+        "Claude Usage/Shared/Services/UsageRefreshEngine.swift",
+        "Claude Usage/Shared/Services/UsageProviderRegistry.swift",
+        "Claude UsageTests/UsageRefreshEngineTests.swift"
+      ],
+      "touches_files": [
+        "Claude Usage/MenuBar/UsageRefreshCoordinator.swift",
+        "Claude Usage/MenuBar/MenuBarManager.swift",
+        "Claude Usage/App/AppDelegate.swift"
+      ],
+      "estimated_context": "large",
+      "acceptance": [
+        "An actor coordinates refreshes by profile UUID and suppresses stale cross-profile results.",
+        "Claude and Codex providers preserve profile isolation.",
+        "Refresh uses request-scoped sessions and login uses a login-scoped session.",
+        "Cancellation, deletion, rapid switching, retries, and overlapping timers are tested.",
+        "Claude behavior is unchanged and Codex remains feature-gated."
+      ]
+    },
+    "P10": {
+      "ticket_number": 10,
+      "planned_linear_title": "Make onboarding, profiles, and settings provider-aware",
+      "linear_issue_identifier": "PRODUCT-2283",
+      "linear_issue_id": null,
+      "batch": "B04",
+      "wave": "W04",
+      "status": "pending",
+      "branch": "work/codex-ui-setup-settings",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P07", "P08", "P09"],
+      "owns_files": [
+        "Claude Usage/Views/Settings/Credentials/CodexAccountView.swift",
+        "Claude Usage/Views/Settings/Credentials/CodexLoginView.swift",
+        "Claude UsageTests/CodexProfileSetupTests.swift"
+      ],
+      "touches_files": [
+        "Claude Usage/Views/SetupWizardView.swift",
+        "Claude Usage/Views/SettingsView.swift",
+        "Claude Usage/Views/Settings/App/ManageProfilesView.swift",
+        "Claude Usage/Views/Settings/Profile/GeneralSettingsView.swift",
+        "Claude Usage/Views/Settings/Credentials/PersonalUsageView.swift",
+        "Claude Usage/Views/Settings/Credentials/CLIAccountView.swift"
+      ],
+      "estimated_context": "large",
+      "acceptance": [
+        "Users can create Claude or Codex profiles and mixed collections.",
+        "Codex setup supports selecting/linking an existing home and official login.",
+        "Settings expose provider, account, health, login, unlink, refresh, and capability state.",
+        "Claude-only controls are hidden or clearly unavailable for Codex.",
+        "Editing, deletion, duplicate-home validation, and migration states are covered."
+      ]
+    },
+    "P11": {
+      "ticket_number": 11,
+      "planned_linear_title": "Render normalized Claude and Codex usage in the popover",
+      "linear_issue_identifier": "PRODUCT-2287",
+      "linear_issue_id": null,
+      "batch": "B04",
+      "wave": "W04",
+      "status": "pending",
+      "branch": "work/codex-ui-popover",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P05", "P08", "P09"],
+      "owns_files": [
+        "Claude Usage/MenuBar/Components/NormalizedUsageView.swift",
+        "Claude Usage/MenuBar/Components/UsageLimitGroupView.swift",
+        "Claude UsageTests/NormalizedUsagePresentationTests.swift"
+      ],
+      "touches_files": [
+        "Claude Usage/MenuBar/PopoverContentView.swift",
+        "Claude Usage/Shared/Utilities/FormatterHelper.swift",
+        "Claude Usage/Shared/Utilities/PaceStatus.swift",
+        "Claude Usage/Shared/Utilities/UsageStatusCalculator.swift"
+      ],
+      "estimated_context": "large",
+      "acceptance": [
+        "The popover renders any number of provider limit groups and windows.",
+        "Codex windows, resets, plan, credits, optional summaries, and unavailable states render correctly.",
+        "Reset credits are display-only.",
+        "Mixed-profile, loading, stale, empty, unsupported, and error states are usable.",
+        "Claude visual behavior remains equivalent."
+      ]
+    },
+    "P12": {
+      "ticket_number": 12,
+      "planned_linear_title": "Make menus, status items, icons, and appearance provider-aware",
+      "linear_issue_identifier": "PRODUCT-2284",
+      "linear_issue_id": null,
+      "batch": "B04",
+      "wave": "W04",
+      "status": "pending",
+      "branch": "work/codex-ui-menu-icons",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P07", "P09"],
+      "owns_files": [
+        "Claude Usage/Shared/Models/ProviderAppearance.swift",
+        "Claude UsageTests/ProviderMenuPresentationTests.swift"
+      ],
+      "touches_files": [
+        "Claude Usage/MenuBar/MenuBarManager.swift",
+        "Claude Usage/MenuBar/StatusBarUIManager.swift",
+        "Claude Usage/MenuBar/MenuBarIconRenderer.swift",
+        "Claude Usage/Shared/Models/MenuBarIconConfig.swift",
+        "Claude Usage/Views/Settings/Profile/AppearanceSettingsView.swift",
+        "Claude Usage/Views/Settings/Components/ProfileSelectionRow.swift"
+      ],
+      "estimated_context": "large",
+      "acceptance": [
+        "All menu actions work for both providers.",
+        "Single and multi-profile status items identify provider and selected metric.",
+        "Icon style, thresholds, stale/error state, and used/remaining work for dynamic windows.",
+        "Claude menu and icon behavior is unchanged."
+      ]
+    },
+    "P13": {
+      "ticket_number": 13,
+      "planned_linear_title": "Add provider-aware history, export, notifications, and automation gating",
+      "linear_issue_identifier": "PRODUCT-2293",
+      "linear_issue_id": null,
+      "batch": "B05",
+      "wave": "W05A",
+      "status": "pending",
+      "branch": "work/codex-release-history-notifications",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P03", "P09", "P10", "P11", "P12"],
+      "owns_files": [
+        "Claude UsageTests/ProviderHistoryNotificationTests.swift"
+      ],
+      "touches_files": [
+        "Claude Usage/Shared/Services/UsageHistoryService.swift",
+        "Claude Usage/Shared/Services/NotificationManager.swift",
+        "Claude Usage/Shared/Services/StatuslineService.swift",
+        "Claude Usage/Shared/Services/AutoStartSessionService.swift",
+        "Claude Usage/Shared/Models/UsageHistory.swift",
+        "Claude Usage/Shared/Models/NotificationSettings.swift",
+        "Claude Usage/Views/Settings/Profile/UsageHistoryView.swift"
+      ],
+      "estimated_context": "large",
+      "acceptance": [
+        "History persists normalized provider-tagged usage without cross-profile contamination.",
+        "Exports retain provider, group, window, percentage, and reset semantics.",
+        "Threshold and reset notifications work for dynamic Codex windows without duplicates.",
+        "Claude-only automation is capability-gated for Codex.",
+        "Retention, migration, export, notification deduplication, and capability tests pass."
+      ]
+    },
+    "P14": {
+      "ticket_number": 14,
+      "planned_linear_title": "Add provider-aware errors, redaction, health checks, and diagnostics",
+      "linear_issue_identifier": "PRODUCT-2289",
+      "linear_issue_id": null,
+      "batch": "B05",
+      "wave": "W05A",
+      "status": "pending",
+      "branch": "work/codex-release-diagnostics",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P08", "P09", "P10", "P11", "P12"],
+      "owns_files": [
+        "Claude Usage/Shared/Models/ProviderHealth.swift",
+        "Claude UsageTests/CodexDiagnosticsRedactionTests.swift"
+      ],
+      "touches_files": [
+        "Claude Usage/Shared/ErrorHandling/AppError.swift",
+        "Claude Usage/Shared/ErrorHandling/ErrorRecovery.swift",
+        "Claude Usage/Shared/ErrorHandling/ErrorLogger.swift",
+        "Claude Usage/Shared/ErrorHandling/ErrorPresenter.swift",
+        "Claude Usage/Shared/Services/LoggingService.swift",
+        "Claude Usage/Shared/Services/NetworkLoggerService.swift",
+        "Claude Usage/Views/Settings/App/DebugNetworkLogView.swift"
+      ],
+      "estimated_context": "large",
+      "acceptance": [
+        "Provider errors have actionable recovery.",
+        "Health distinguishes CLI, app-server, authentication, and usage endpoints.",
+        "Logs never expose auth.json, tokens, API keys, credential JSON, or sensitive environment values.",
+        "Copyable diagnostics contain useful non-secret versions and state.",
+        "Redaction and recovery tests pass."
+      ]
+    },
+    "P15": {
+      "ticket_number": 15,
+      "planned_linear_title": "Complete localization, accessibility, documentation, and UI automation",
+      "linear_issue_identifier": "PRODUCT-2291",
+      "linear_issue_id": null,
+      "batch": "B05",
+      "wave": "W05B",
+      "status": "pending",
+      "branch": "work/codex-release-localization-ui-tests",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P10", "P11", "P12", "P13", "P14", "P16"],
+      "owns_files": [
+        "Claude UsageUITests/CodexSetupUITests.swift",
+        "Claude UsageUITests/CodexMenuUITests.swift",
+        "Claude UsageUITests/MixedProfilesUITests.swift",
+        "docs/codex-subscription-support.md"
+      ],
+      "touches_files": [
+        "Claude Usage.xcodeproj/project.pbxproj",
+        "Claude Usage/Resources/*.lproj/Localizable.strings",
+        "scripts/validate_localizations.sh",
+        ".github/workflows/build.yml",
+        "Claude Usage/Views/SetupWizardView.swift",
+        "Claude Usage/Views/Settings/**/*.swift",
+        "Claude Usage/MenuBar/PopoverContentView.swift",
+        "Claude Usage/MenuBar/Components/*.swift",
+        "Claude Usage/MenuBar/MenuBarManager.swift"
+      ],
+      "estimated_context": "large",
+      "acceptance": [
+        "All existing localization debt and every new visible string are remediated across the current nine locales.",
+        "Localization validation passes and is enforced by CI.",
+        "Provider controls and dynamic usage have useful accessibility labels, values, focus, and keyboard behavior.",
+        "UI automation covers setup, login, mixed profiles, menus, settings, errors, refresh, and unlink.",
+        "Documentation covers supported subscriptions, CLI, CODEX_HOME, login, privacy, troubleshooting, and exclusions."
+      ]
+    },
+    "P16": {
+      "ticket_number": 16,
+      "planned_linear_title": "Move release and update infrastructure to Revenium",
+      "linear_issue_identifier": "PRODUCT-2292",
+      "linear_issue_id": null,
+      "batch": "B05",
+      "wave": "W05A",
+      "status": "pending",
+      "branch": "work/codex-release-distribution",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": ["P01", "P04", "P12"],
+      "owns_files": [],
+      "touches_files": [
+        ".github/workflows/release.yml",
+        ".github/workflows/generate-appcast.yml",
+        ".github/workflows/update-homebrew-cask.yml",
+        "Claude Usage/Shared/Services/UpdateManager.swift",
+        "Claude Usage/Resources/Info.plist",
+        "Claude Usage/Views/Settings/App/UpdatesSettingsView.swift",
+        "Claude Usage/Views/Settings/App/AboutView.swift",
+        "Claude Usage/Views/Settings/App/SupportView.swift",
+        "README.md",
+        "CHANGELOG.md",
+        "RELEASING.md"
+      ],
+      "estimated_context": "large",
+      "acceptance": [
+        "All update, support, source, feedback, release, appcast, and Homebrew references point to Revenium.",
+        "App name, bundle identifier, preferences domain, and migration compatibility remain intact.",
+        "Release automation supports signed/notarized ZIP, checksum, appcast, and Homebrew publication.",
+        "Missing secrets or repository permissions are explicit blockers rather than silently bypassed."
+      ]
+    },
+    "P17": {
+      "ticket_number": 17,
+      "planned_linear_title": "Run final Codex parity audit, UAT, and ship verification",
+      "linear_issue_identifier": "PRODUCT-2290",
+      "linear_issue_id": null,
+      "batch": "B05",
+      "wave": "W05C",
+      "status": "pending",
+      "branch": "feature/codex-support-release-readiness",
+      "worktree": null,
+      "worker": null,
+      "commit_sha": null,
+      "started_at": null,
+      "completed_at": null,
+      "depends_on": [
+        "P01",
+        "P02",
+        "P03",
+        "P04",
+        "P05",
+        "P06",
+        "P07",
+        "P08",
+        "P09",
+        "P10",
+        "P11",
+        "P12",
+        "P13",
+        "P14",
+        "P15",
+        "P16"
+      ],
+      "owns_files": [
+        "project-documentation/implementation-plans/active-execution/claude-usage-desktop-app-codex-support/final-parity-audit.md"
+      ],
+      "touches_files": [],
+      "estimated_context": "large",
+      "acceptance": [
+        "The 17-ticket coverage matrix has evidence for every acceptance criterion.",
+        "All unit, package, protocol, migration, concurrency, localization, accessibility, UI, Debug, and Release gates pass.",
+        "A live installed Codex CLI/app-server and ChatGPT subscription smoke test passes.",
+        "Claude-only regression and mixed-profile UAT pass.",
+        "Distribution artifact validation passes where required credentials are available.",
+        "No forbidden credential or billing behavior exists.",
+        "Only after all gates pass is Codex enabled and B05 shipped."
+      ]
+    }
+  },
+  "quality_gates": {
+    "every_worker": [
+      "Focused tests for changed behavior",
+      "No changes outside the assigned touch set",
+      "No secret-bearing fixtures or logs",
+      "Commit SHA and exact test evidence returned to PM"
+    ],
+    "every_batch_before_pr": [
+      "All app unit tests",
+      "Relevant UsageKit package tests",
+      "Localization validation when localization is in scope",
+      "Unsigned Debug build",
+      "Unsigned Release build",
+      "Batch acceptance review"
+    ],
+    "every_batch_before_merge": [
+      "$codex-ship-pr skip-review --auto-merge completed",
+      "Combined commit status is success",
+      "PR is mergeable",
+      "Canonical REVIEW_GATE_RESULT is valid and satisfied",
+      "Commit-intent audit passes",
+      "All three GitHub review surfaces audited",
+      "Greptile review budget not exceeded"
+    ],
+    "final": [
+      "Full unit and UI suite",
+      "Live Codex app-server smoke test",
+      "Mixed Claude/Codex profile UAT",
+      "Localization and accessibility audit",
+      "Signed/notarized distribution smoke test",
+      "Linear project and ticket reconciliation"
+    ]
+  },
+  "manager": {
+    "worker": "root Codex orchestrator",
+    "spawned_at": "2026-07-30T05:19:19Z",
+    "handoffs": [],
+    "last_self_check_at": null,
+    "next_self_check_at": null
+  },
+  "blockers": [],
+  "notes": [
+    "Original upstream contains no Codex implementation; do not wholesale merge or rebase its feature work.",
+    "Selectively adapt file persistence, Keychain, bounded process, and approved menu/window reliability ideas only.",
+    "Preserve the existing untracked .cache/ and .serena/ directories.",
+    "The initial baseline had 103 tests with one parser failure and localization mismatch in every non-English catalog.",
+    "Localization remediation is deliberately tracked in P15 rather than B01.",
+    "Release signing, notarization, Sparkle, Pages/appcast, and Homebrew may require Revenium permissions and secrets."
+  ]
+}

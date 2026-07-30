@@ -36,6 +36,12 @@ enum UsageLimitParsing {
         guard let limits else { return nil }
 
         for limit in limits {
+            if let rawKind = limit["kind"] {
+                guard let kind = rawKind as? String,
+                      kind.caseInsensitiveCompare("weekly_scoped") == .orderedSame else {
+                    continue
+                }
+            }
             guard let group = limit["group"] as? String,
                   group.caseInsensitiveCompare("weekly") == .orderedSame else { continue }
             guard let scope = limit["scope"] as? [String: Any],

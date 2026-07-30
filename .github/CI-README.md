@@ -25,6 +25,45 @@ CODE_SIGNING_REQUIRED=NO
 CODE_SIGNING_ALLOWED=NO
 ```
 
+### Canonical local validation
+
+Run the same build and test boundaries locally before opening a pull request:
+
+```bash
+xcodebuild build \
+  -project "Claude Usage.xcodeproj" \
+  -scheme "Claude Usage" \
+  -configuration Debug \
+  CODE_SIGN_IDENTITY="" \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGNING_ALLOWED=NO
+
+xcodebuild test \
+  -project "Claude Usage.xcodeproj" \
+  -scheme "Claude Usage" \
+  -configuration Debug \
+  -destination "platform=macOS" \
+  CODE_SIGN_IDENTITY="" \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGNING_ALLOWED=NO
+
+xcodebuild build \
+  -project "Claude Usage.xcodeproj" \
+  -scheme "Claude Usage" \
+  -configuration Release \
+  CODE_SIGN_IDENTITY="" \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGNING_ALLOWED=NO
+```
+
+For changes involving concurrency or persistent state, also repeat the full test
+suite and run it with parallel testing enabled. Tests must use injected,
+test-scoped storage rather than `UserDefaults.standard`.
+
+The localization validator currently reports pre-existing catalog drift. Do not
+weaken or bypass it: localization parity is tracked as a dedicated remediation
+workstream and must be green before Codex support ships.
+
 ---
 
 ### `release.yml` — Automated Releases
