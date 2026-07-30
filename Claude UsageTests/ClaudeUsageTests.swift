@@ -91,7 +91,7 @@ final class ClaudeUsageTests: XCTestCase {
 
     func testParseWeeklyScopedLimitIsCaseInsensitive() {
         let limits: [[String: Any]] = [
-            ["kind": "weekly_scoped", "group": "WEEKLY", "percent": 10,
+            ["kind": "WEEKLY_SCOPED", "group": "WEEKLY", "percent": 10,
              "scope": ["model": ["display_name": "fable"]]]
         ]
 
@@ -112,9 +112,29 @@ final class ClaudeUsageTests: XCTestCase {
         XCTAssertNotNil(result?.resetTime)
     }
 
+    func testParseWeeklyScopedLimitAcceptsNullKind() {
+        let limits: [[String: Any]] = [
+            ["kind": NSNull(), "group": "weekly", "percent": 25,
+             "scope": ["model": ["display_name": "Fable"]]]
+        ]
+
+        let result = UsageLimitParsing.parseWeeklyScopedLimit(from: limits, modelDisplayName: "Fable")
+
+        XCTAssertEqual(result?.percentage, 25)
+    }
+
     func testParseWeeklyScopedLimitIgnoresNonWeeklyScopedKind() {
         let limits: [[String: Any]] = [
             ["kind": "session", "group": "weekly", "percent": 90,
+             "scope": ["model": ["display_name": "Fable"]]]
+        ]
+
+        XCTAssertNil(UsageLimitParsing.parseWeeklyScopedLimit(from: limits, modelDisplayName: "Fable"))
+    }
+
+    func testParseWeeklyScopedLimitIgnoresMalformedPresentKind() {
+        let limits: [[String: Any]] = [
+            ["kind": 42, "group": "weekly", "percent": 90,
              "scope": ["model": ["display_name": "Fable"]]]
         ]
 

@@ -4,15 +4,27 @@ import XCTest
 final class SharedDataStoreTests: XCTestCase {
 
     var sharedDataStore: SharedDataStore!
+    private var defaults: UserDefaults?
+    private var defaultsSuiteName: String?
 
-    override func setUp() {
-        super.setUp()
-        sharedDataStore = SharedDataStore.shared
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+
+        let suiteName = "ClaudeUsageTests.SharedDataStoreTests.\(UUID().uuidString)"
+        let testDefaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        testDefaults.removePersistentDomain(forName: suiteName)
+
+        defaultsSuiteName = suiteName
+        defaults = testDefaults
+        sharedDataStore = SharedDataStore(defaults: testDefaults)
     }
 
-    override func tearDown() {
-        // Clean up test data
-        super.tearDown()
+    override func tearDownWithError() throws {
+        if let defaults, let defaultsSuiteName {
+            defaults.removePersistentDomain(forName: defaultsSuiteName)
+        }
+
+        try super.tearDownWithError()
     }
 
     // MARK: - Language Settings Tests
@@ -29,11 +41,7 @@ final class SharedDataStoreTests: XCTestCase {
     }
 
     func testLanguageCodeNil() {
-        // Should return nil when not set (fresh state)
-        // Note: Can't easily test this without clearing UserDefaults entirely
-        // but we can test saving and loading works
-        sharedDataStore.saveLanguageCode("fr")
-        XCTAssertNotNil(sharedDataStore.loadLanguageCode())
+        XCTAssertNil(sharedDataStore.loadLanguageCode())
     }
 
     // MARK: - Statusline Configuration Tests
