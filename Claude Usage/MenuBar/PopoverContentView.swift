@@ -1,5 +1,6 @@
 import SwiftUI
 import Charts
+import UsageCore
 
 // MARK: - Always-active vibrancy background
 struct VisualEffectBackground: NSViewRepresentable {
@@ -54,10 +55,69 @@ struct VisualEffectBackground: NSViewRepresentable {
 }
 
 /// Native macOS popover interface - minimal, flat, system-style
+struct PopoverNavigationActions {
+    let manageProfiles: () -> Void
+    let preferences: () -> Void
+}
+
+enum PopoverShell: Equatable {
+    case claudeLegacy
+    case normalized
+
+    static func resolve(providerID: ProviderID) -> PopoverShell {
+        providerID == .claude ? .claudeLegacy : .normalized
+    }
+}
+
+enum LegacyPopoverBanner: Equatable {
+    enum Action: Equatable {
+        case preferences
+        case refresh
+    }
+
+    case credentialError
+    case refreshFailed(count: Int)
+    case stale(minutesAgo: Int)
+
+    var action: Action {
+        switch self {
+        case .credentialError:
+            return .preferences
+        case .refreshFailed, .stale:
+            return .refresh
+        }
+    }
+
+    static func resolve(
+        hasCredentialError: Bool,
+        consecutiveRefreshFailures: Int,
+        lastSuccessfulRefreshTime: Date?,
+        now: Date
+    ) -> LegacyPopoverBanner? {
+        if hasCredentialError {
+            return .credentialError
+        }
+        if consecutiveRefreshFailures >= 3 {
+            return .refreshFailed(
+                count: consecutiveRefreshFailures
+            )
+        }
+        if let lastSuccessfulRefreshTime {
+            let age = now.timeIntervalSince(
+                lastSuccessfulRefreshTime
+            )
+            if age > 300 {
+                return .stale(minutesAgo: Int(age / 60))
+            }
+        }
+        return nil
+    }
+}
+
 struct PopoverContentView: View {
     @ObservedObject var manager: MenuBarManager
     let onRefresh: () -> Void
-    let onPreferences: () -> Void
+    let navigationActions: PopoverNavigationActions
 
     @State private var isRefreshing = false
     @State private var showInsights = false
@@ -65,6 +125,20 @@ struct PopoverContentView: View {
     // on macOS 26/27 when preferredContentSize drives the hosting controller.
     @State private var appeared = false
     @StateObject private var profileManager = ProfileManager.shared
+
+    init(
+        manager: MenuBarManager,
+        onRefresh: @escaping () -> Void,
+        onManageProfiles: @escaping () -> Void,
+        onPreferences: @escaping () -> Void
+    ) {
+        self.manager = manager
+        self.onRefresh = onRefresh
+        navigationActions = PopoverNavigationActions(
+            manageProfiles: onManageProfiles,
+            preferences: onPreferences
+        )
+    }
 
     private func profileInitials(for name: String) -> String {
         let words = name.split(separator: " ")
@@ -76,8 +150,29 @@ struct PopoverContentView: View {
         return "?"
     }
 
-    // Computed properties for multi-profile mode support
-    private var displayUsage: ClaudeUsage {
+    private var displayedProfile: Profile? {
+        if let clickedProfileID = manager.clickedProfileId {
+            return profileManager.profiles.first {
+                $0.id == clickedProfileID
+            }
+        }
+        return profileManager.activeProfile
+    }
+
+    private var displayPreferences: NormalizedUsageDisplayPreferences {
+        NormalizedUsageDisplayPreferences.make(
+            displayMode: profileManager.displayMode,
+            displayedProfile: displayedProfile,
+            multiProfileConfiguration:
+                profileManager.multiProfileConfig
+        )
+    }
+
+    private var timeDisplay: PopoverTimeDisplay {
+        SharedDataStore.shared.loadPopoverTimeDisplay()
+    }
+
+    private var legacyDisplayUsage: ClaudeUsage {
         MenuBarManager.popoverUsage(
             clickedProfileID: manager.clickedProfileId,
             clickedProfileUsage: manager.clickedProfileUsage,
@@ -85,7 +180,7 @@ struct PopoverContentView: View {
         )
     }
 
-    private var displayAPIUsage: APIUsage? {
+    private var legacyDisplayAPIUsage: APIUsage? {
         MenuBarManager.popoverAPIUsage(
             clickedProfileID: manager.clickedProfileId,
             clickedProfileAPIUsage:
@@ -94,116 +189,61 @@ struct PopoverContentView: View {
         )
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            SmartHeader(
-                usage: displayUsage,
-                status: manager.status,
-                isRefreshing: isRefreshing,
-                onRefresh: {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        isRefreshing = true
-                    }
-                    onRefresh()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            isRefreshing = false
-                        }
-                    }
-                },
-                onManageProfiles: onPreferences,
-                onPreferences: onPreferences,
-                clickedProfileId: manager.clickedProfileId
+    private func presentation(
+        at now: Date
+    ) -> NormalizedUsagePresentation {
+        if let displayedProfile {
+            return NormalizedUsagePresentationBuilder.make(
+                snapshot: manager.displayedUsagePresentation,
+                expectedProfile: NormalizedUsageExpectedProfile(
+                    id: displayedProfile.id,
+                    name: displayedProfile.name,
+                    providerID: displayedProfile.providerID,
+                    providerRevision:
+                        displayedProfile.providerRevision
+                ),
+                now: now
             )
+        }
 
-            PopoverDivider()
+        // A removed profile can remain the popover click target for one render
+        // turn. Keep that target isolated instead of falling back to active
+        // profile data.
+        let unavailableID = manager.clickedProfileId
+            ?? Self.unavailableProfileID
+        return NormalizedUsagePresentationBuilder.make(
+            snapshot: nil,
+            expectedProfile: NormalizedUsageExpectedProfile(
+                id: unavailableID,
+                name: NormalizedUsageStrings.localized(
+                    "popover.normalized.selected_profile",
+                    default: "Selected profile"
+                ),
+                providerID: Self.unknownProviderID,
+                providerRevision: 0
+            ),
+            now: now
+        )
+    }
 
-            // Error / stale data banners
-            if manager.hasCredentialError {
-                StatusBannerView(
-                    icon: "exclamationmark.triangle.fill",
-                    message: "popover.banner.credentials_expired".localized,
-                    color: .orange
-                ) {
-                    onPreferences()
-                }
-            } else if manager.consecutiveRefreshFailures >= 3 {
-                StatusBannerView(
-                    icon: "arrow.clockwise.circle.fill",
-                    message: String(format: "popover.banner.refresh_failed".localized, manager.consecutiveRefreshFailures),
-                    color: .yellow
-                ) {
-                    onRefresh()
-                }
-            } else if let lastRefresh = manager.lastSuccessfulRefreshTime,
-                      Date().timeIntervalSince(lastRefresh) > 300 {
-                let minutesAgo = Int(Date().timeIntervalSince(lastRefresh) / 60)
-                StatusBannerView(
-                    icon: "clock.fill",
-                    message: String(format: "popover.banner.updated_ago".localized, minutesAgo),
-                    color: .orange
-                ) {
-                    onRefresh()
-                }
-            }
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { timeline in
+            popoverBody(
+                presentation: presentation(at: timeline.date),
+                now: timeline.date
+            )
+        }
+    }
 
-            // Viewing usage tag (shown in multi-profile mode)
-            if profileManager.displayMode == .multi,
-               let viewingProfile = manager.clickedProfileId.flatMap({ id in
-                   profileManager.profiles.first(where: { $0.id == id })
-               }) ?? profileManager.activeProfile {
-                HStack(spacing: 8) {
-                    // Profile initials avatar
-                    ZStack {
-                        Circle()
-                            .fill(Color.accentColor.opacity(0.15))
-                            .frame(width: 20, height: 20)
-
-                        Text(profileInitials(for: viewingProfile.name))
-                            .font(.system(size: 8, weight: .bold, design: .rounded))
-                            .foregroundColor(.accentColor)
-                    }
-
-                    Text(viewingProfile.name)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-
-                    Spacer()
-
-                    if viewingProfile.id == profileManager.activeProfile?.id {
-                        Text("Active")
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundColor(.accentColor)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(
-                                Capsule()
-                                    .fill(Color.accentColor.opacity(0.12))
-                            )
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.primary.opacity(0.03))
-                )
-                .padding(.horizontal, 10)
-                .padding(.top, 6)
-            }
-
-            // Usage
-            SmartUsageDashboard(usage: displayUsage, apiUsage: displayAPIUsage)
-
-            // Contextual Insights
-            if showInsights {
-                PopoverDivider()
-                ContextualInsights(usage: displayUsage)
-                    .transition(.opacity)
-            }
-
+    private func popoverBody(
+        presentation: NormalizedUsagePresentation,
+        now: Date
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            shellContent(
+                presentation: presentation,
+                now: now
+            )
         }
         .padding(.bottom, 8)
         .frame(width: 280)
@@ -217,6 +257,251 @@ struct PopoverContentView: View {
             }
         }
     }
+
+    @ViewBuilder
+    private func shellContent(
+        presentation: NormalizedUsagePresentation,
+        now: Date
+    ) -> some View {
+        switch PopoverShell.resolve(
+            providerID: presentation.providerID
+        ) {
+        case .claudeLegacy:
+            SmartHeader(
+                usage: legacyDisplayUsage,
+                status: manager.status,
+                isRefreshing: isRefreshing,
+                onRefresh: triggerRefresh,
+                onManageProfiles:
+                    navigationActions.manageProfiles,
+                onPreferences:
+                    navigationActions.preferences,
+                clickedProfileId: manager.clickedProfileId
+            )
+
+            PopoverDivider()
+            legacyBanner(now: now)
+            legacyProfileTag()
+
+            SmartUsageDashboard(
+                usage: legacyDisplayUsage,
+                apiUsage: legacyDisplayAPIUsage,
+                displayPreferences: displayPreferences
+            )
+
+            if showInsights {
+                PopoverDivider()
+                ContextualInsights(usage: legacyDisplayUsage)
+                    .transition(.opacity)
+            }
+        case .normalized:
+            ProviderPopoverHeader(
+                presentation: presentation,
+                claudeStatus: manager.status,
+                isRefreshing: isRefreshing
+                    || presentation.notices.contains {
+                        $0.kind == .loading
+                    },
+                onRefresh: triggerRefresh,
+                onManageProfiles:
+                    navigationActions.manageProfiles,
+                onPreferences:
+                    navigationActions.preferences
+            )
+
+            PopoverDivider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    normalizedProfileTag(
+                        presentation: presentation
+                    )
+                    NormalizedUsageView(
+                        presentation: presentation,
+                        displayPreferences: displayPreferences,
+                        timeDisplay: timeDisplay,
+                        now: now
+                    )
+                }
+            }
+            .frame(maxHeight: 520)
+        }
+    }
+
+    private func triggerRefresh() {
+        withAnimation(.easeInOut(duration: 0.3)) {
+            isRefreshing = true
+        }
+        onRefresh()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isRefreshing = false
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func legacyBanner(now: Date) -> some View {
+        if let banner = LegacyPopoverBanner.resolve(
+            hasCredentialError: manager.hasCredentialError,
+            consecutiveRefreshFailures:
+                manager.consecutiveRefreshFailures,
+            lastSuccessfulRefreshTime:
+                manager.lastSuccessfulRefreshTime,
+            now: now
+        ) {
+            switch banner {
+            case .credentialError:
+                StatusBannerView(
+                    icon: "exclamationmark.triangle.fill",
+                    message:
+                        "popover.banner.credentials_expired".localized,
+                    color: .orange,
+                    onTap: navigationActions.preferences
+                )
+            case .refreshFailed(let count):
+                StatusBannerView(
+                    icon: "arrow.clockwise.circle.fill",
+                    message: String(
+                        format:
+                            "popover.banner.refresh_failed".localized,
+                        count
+                    ),
+                    color: .yellow,
+                    onTap: onRefresh
+                )
+            case .stale(let minutesAgo):
+                StatusBannerView(
+                    icon: "clock.fill",
+                    message: String(
+                        format:
+                            "popover.banner.updated_ago".localized,
+                        minutesAgo
+                    ),
+                    color: .orange,
+                    onTap: onRefresh
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func legacyProfileTag() -> some View {
+        if profileManager.displayMode == .multi,
+           let viewingProfile = displayedProfile {
+            HStack(spacing: 8) {
+                profileAvatar(for: viewingProfile)
+
+                Text(viewingProfile.name)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+
+                Spacer()
+                activeBadge(for: viewingProfile)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.primary.opacity(0.03))
+            )
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier(
+                "popover.profile."
+                    + viewingProfile.id.uuidString
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func normalizedProfileTag(
+        presentation: NormalizedUsagePresentation
+    ) -> some View {
+        if profileManager.displayMode == .multi,
+           let viewingProfile = displayedProfile {
+            HStack(spacing: 8) {
+                profileAvatar(for: viewingProfile)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(viewingProfile.name)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    Text(presentation.providerName)
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+                activeBadge(for: viewingProfile)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.primary.opacity(0.03))
+            )
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier(
+                "popover.profile."
+                    + viewingProfile.id.uuidString
+            )
+        }
+    }
+
+    private func profileAvatar(for profile: Profile) -> some View {
+        ZStack {
+            Circle()
+                .fill(Color.accentColor.opacity(0.15))
+                .frame(width: 20, height: 20)
+
+            Text(profileInitials(for: profile.name))
+                .font(
+                    .system(
+                        size: 8,
+                        weight: .bold,
+                        design: .rounded
+                    )
+                )
+                .foregroundColor(.accentColor)
+        }
+    }
+
+    @ViewBuilder
+    private func activeBadge(for profile: Profile) -> some View {
+        if profile.id == profileManager.activeProfile?.id {
+            Text(
+                NormalizedUsageStrings.localized(
+                    "popover.normalized.profile.active",
+                    default: "Active"
+                )
+            )
+            .font(.system(size: 8, weight: .semibold))
+            .foregroundColor(.accentColor)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(
+                Capsule()
+                    .fill(Color.accentColor.opacity(0.12))
+            )
+        }
+    }
+
+    private static let unavailableProfileID = UUID(
+        uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    )
+
+    private static let unknownProviderID: ProviderID = {
+        guard let providerID = try? ProviderID("unknown") else {
+            preconditionFailure("Invalid unknown provider identifier")
+        }
+        return providerID
+    }()
 }
 
 // MARK: - Native Divider
@@ -235,47 +520,22 @@ struct ProfileSwitcherCompact: View {
     @State private var isHovered = false
     let onManageProfiles: () -> Void
 
+    private var rows: [ProviderProfileRowPresentation] {
+        ProviderProfileRowPresentation.make(
+            profiles: profileManager.profiles,
+            activeProfileID: profileManager.activeProfile?.id
+        )
+    }
+
     var body: some View {
         Menu {
-            ForEach(profileManager.profiles) { profile in
+            ForEach(rows) { row in
                 Button(action: {
                     Task {
-                        await profileManager.activateProfile(profile.id)
+                        await profileManager.activateProfile(row.id)
                     }
                 }) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "person.circle.fill")
-                            .font(.system(size: 12))
-
-                        Text(profile.name)
-                            .font(.system(size: 12, weight: .medium))
-
-                        Spacer()
-
-                        HStack(spacing: 4) {
-                            if profile.cliAccountName != nil {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.purple)
-                            } else if profile.hasCliAccount {
-                                Image(systemName: "terminal.fill")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.adaptiveGreen)
-                            }
-
-                            if profile.claudeSessionKey != nil {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.blue)
-                            }
-
-                            if profile.id == profileManager.activeProfile?.id {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(.accentColor)
-                            }
-                        }
-                    }
+                    ProviderProfileMenuRow(row: row)
                 }
             }
 
@@ -307,47 +567,22 @@ struct ProfileSwitcherBar: View {
     @State private var isHovered = false
     let onManageProfiles: () -> Void
 
+    private var rows: [ProviderProfileRowPresentation] {
+        ProviderProfileRowPresentation.make(
+            profiles: profileManager.profiles,
+            activeProfileID: profileManager.activeProfile?.id
+        )
+    }
+
     var body: some View {
         Menu {
-            ForEach(profileManager.profiles) { profile in
+            ForEach(rows) { row in
                 Button(action: {
                     Task {
-                        await profileManager.activateProfile(profile.id)
+                        await profileManager.activateProfile(row.id)
                     }
                 }) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "person.circle.fill")
-                            .font(.system(size: 12))
-
-                        Text(profile.name)
-                            .font(.system(size: 12, weight: .medium))
-
-                        Spacer()
-
-                        HStack(spacing: 4) {
-                            if profile.cliAccountName != nil {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.purple)
-                            } else if profile.hasCliAccount {
-                                Image(systemName: "terminal.fill")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.adaptiveGreen)
-                            }
-
-                            if profile.claudeSessionKey != nil {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.blue)
-                            }
-
-                            if profile.id == profileManager.activeProfile?.id {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(.accentColor)
-                            }
-                        }
-                    }
+                    ProviderProfileMenuRow(row: row)
                 }
             }
 
@@ -434,8 +669,52 @@ struct ProfileSwitcherBar: View {
     }
 }
 
+private struct ProviderProfileMenuRow: View {
+    let row: ProviderProfileRowPresentation
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: row.systemImage)
+                .font(.system(size: 11))
+                .frame(width: 14)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                Text(
+                    "\(row.providerName) · "
+                        + row.connectionDescription
+                )
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+            }
+
+            Spacer()
+
+            if row.isActive {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .accessibilityLabel(
+                        NormalizedUsageStrings.localized(
+                            "popover.normalized.profile.active",
+                            default: "Active"
+                        )
+                    )
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(row.accessibilityIdentifier)
+    }
+}
+
 // MARK: - Smart Header Component
 struct SmartHeader: View {
+    static let claudeStatusURL = URL(
+        string: "https://status.claude.com"
+    )!
+
     let usage: ClaudeUsage
     let status: ClaudeStatus
     let isRefreshing: Bool
@@ -482,9 +761,7 @@ struct SmartHeader: View {
 
                 // Status
                 Button(action: {
-                    if let url = URL(string: "https://status.claude.com") {
-                        NSWorkspace.shared.open(url)
-                    }
+                    NSWorkspace.shared.open(Self.claudeStatusURL)
                 }) {
                     HStack(spacing: 4) {
                         Circle()
@@ -567,9 +844,13 @@ struct HeaderIconButton: View {
 struct SmartUsageDashboard: View {
     let usage: ClaudeUsage
     let apiUsage: APIUsage?
+    var displayPreferences: NormalizedUsageDisplayPreferences? = nil
     @StateObject private var profileManager = ProfileManager.shared
 
     private var showRemainingPercentage: Bool {
+        if let displayPreferences {
+            return displayPreferences.showRemainingPercentage
+        }
         if profileManager.displayMode == .multi {
             return profileManager.multiProfileConfig.showRemainingPercentage
         }
@@ -577,6 +858,9 @@ struct SmartUsageDashboard: View {
     }
 
     private var showTimeMarker: Bool {
+        if let displayPreferences {
+            return displayPreferences.showTimeMarker
+        }
         if profileManager.displayMode == .multi {
             return profileManager.multiProfileConfig.showTimeMarker
         }
@@ -584,6 +868,9 @@ struct SmartUsageDashboard: View {
     }
 
     private var usePaceColoring: Bool {
+        if let displayPreferences {
+            return displayPreferences.usePaceColoring
+        }
         if profileManager.displayMode == .multi {
             return profileManager.multiProfileConfig.usePaceColoring
         }
@@ -591,6 +878,9 @@ struct SmartUsageDashboard: View {
     }
 
     private var showPaceMarker: Bool {
+        if let displayPreferences {
+            return displayPreferences.showPaceMarker
+        }
         if profileManager.displayMode == .multi {
             return profileManager.multiProfileConfig.showPaceMarker
         }
