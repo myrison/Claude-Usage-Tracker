@@ -9,6 +9,7 @@ struct ProviderAccountSettingsView: View {
     @State private var homePath = ""
     @State private var operationMessage: String?
     @State private var showingUnlinkConfirmation = false
+    @State private var copiedShellSnippet = false
     @FocusState private var homeFieldFocused: Bool
 
     init(
@@ -44,6 +45,7 @@ struct ProviderAccountSettingsView: View {
                 if let profile {
                     providerIdentityCard(profile)
                     homeCard(profile)
+                    cliSwitchingCard(profile)
                     accountCard(profile)
                 } else {
                     capabilityMessage(
@@ -231,6 +233,58 @@ struct ProviderAccountSettingsView: View {
                         ProviderUIAccessibility.unlink
                     )
                 }
+            }
+        }
+    }
+
+    private func cliSwitchingCard(_ profile: Profile) -> some View {
+        SettingsSectionCard(
+            title: text(
+                "codex.cli_switch.title",
+                "Terminal CLI Switching"
+            ),
+            subtitle: String(
+                format: text(
+                    "codex.cli_switch.explain",
+                    "Add this snippet to %@ once. It applies to every linked Codex profile — you do not need to repeat this step for other profiles."
+                ),
+                shellConfigFile
+            )
+        ) {
+            VStack(
+                alignment: .leading,
+                spacing: DesignTokens.Spacing.medium
+            ) {
+                Text(shellSnippet)
+                    .font(DesignTokens.Typography.monospaced)
+                    .foregroundColor(.primary)
+                    .padding(DesignTokens.Spacing.small)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.06))
+                    .cornerRadius(DesignTokens.Radius.small)
+
+                Button {
+                    copyShellSnippet()
+                } label: {
+                    HStack(spacing: DesignTokens.Spacing.extraSmall) {
+                        Image(
+                            systemName: copiedShellSnippet
+                                ? "checkmark" : "doc.on.doc"
+                        )
+                        .font(.system(size: DesignTokens.Icons.small))
+                        Text(
+                            copiedShellSnippet
+                                ? "cli.copied".localized
+                                : "cli.shell_integration_copy".localized
+                        )
+                        .font(DesignTokens.Typography.body)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .accessibilityIdentifier(
+                    ProviderUIAccessibility.cliSwitchCopy
+                )
             }
         }
     }
@@ -625,6 +679,76 @@ struct ProviderAccountSettingsView: View {
     private func text(_ key: String, _ fallback: String) -> String {
         ProviderUILocalization.text(key, fallback: fallback)
     }
+
+    // MARK: - Shell Integration
+
+    /// The user's shell family, detected once from `$SHELL` and shared by
+    /// every shell-specific presentation below so they can never drift out
+    /// of sync with each other.
+    private enum DetectedShellFamily: Equatable {
+        case zsh
+        case bash
+        case fish
+        case other
+
+        init(shellPath: String) {
+            if shellPath.contains("fish") {
+                self = .fish
+            } else if shellPath.contains("zsh") {
+                self = .zsh
+            } else if shellPath.contains("bash") {
+                self = .bash
+            } else {
+                self = .other
+            }
+        }
+    }
+
+    private var detectedShellFamily: DetectedShellFamily {
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        return DetectedShellFamily(shellPath: shell)
+    }
+
+    /// Detects the user's shell and returns the appropriate config file name.
+    private var shellConfigFile: String {
+        switch detectedShellFamily {
+        case .zsh:
+            return "~/.zshrc"
+        case .bash:
+            return "~/.bashrc or ~/.bash_profile"
+        case .fish:
+            return "~/.config/fish/config.fish"
+        case .other:
+            return "your shell configuration file"
+        }
+    }
+
+    private var shellSnippet: String {
+        if detectedShellFamily == .fish {
+            return """
+            # Codex CLI home auto-switch (one-time setup, applies to all profiles)
+            if test -f ~/.claude-tokens/.last-codex-home
+                set -gx CODEX_HOME (cat ~/.claude-tokens/.last-codex-home)
+            end
+            """
+        }
+        return """
+        # Codex CLI home auto-switch (one-time setup, applies to all profiles)
+        if [ -f ~/.claude-tokens/.last-codex-home ]; then
+          export CODEX_HOME="$(cat ~/.claude-tokens/.last-codex-home)"
+        fi
+        """
+    }
+
+    private func copyShellSnippet() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(shellSnippet, forType: .string)
+        copiedShellSnippet = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            copiedShellSnippet = false
+        }
+    }
 }
 
 enum ProviderUIAccessibility {
@@ -647,6 +771,7 @@ enum ProviderUIAccessibility {
     static let loginSucceeded = "codex.login.succeeded"
     static let accountStatus = "codex.account.status"
     static let accountRefresh = "codex.account.refresh"
+    static let cliSwitchCopy = "codex.cli_switch.copy"
     static let unlink = "codex.home.unlink"
     static let unlinkConfirmation = "codex.home.unlink.confirm"
     static let unlinkCancel = "codex.home.unlink.cancel"
