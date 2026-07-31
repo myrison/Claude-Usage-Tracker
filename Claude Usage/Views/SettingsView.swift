@@ -204,6 +204,12 @@ final class SettingsNavigationModel: ObservableObject {
                 self.isResolvingProfile = false
                 return
             }
+            self.normalizeSection(
+                for: targetProfile.providerID,
+                capabilities: dependencies.capabilities(
+                    for: targetProfile.providerID
+                )
+            )
             if needsActivation {
                 self.selectedProfileID = nil
                 self.isResolvingProfile = false
@@ -233,17 +239,29 @@ final class SettingsNavigationModel: ObservableObject {
                 self.isResolvingProfile = false
                 return
             }
-            self.normalizeCredentialSection(for: providerID)
+            self.normalizeSection(
+                for: providerID,
+                capabilities: dependencies.capabilities(
+                    for: providerID
+                )
+            )
             self.selectedProfileID = nil
             self.isResolvingProfile = false
         }
     }
 
-    func activeProviderDidChange(_ providerID: ProviderID?) {
+    func activeProviderDidChange(
+        _ providerID: ProviderID?,
+        capabilities: ProviderCapabilities?
+    ) {
         guard selectedProfileID == nil, let providerID else {
             return
         }
-        normalizeCredentialSection(for: providerID)
+        normalizeSection(
+            for: providerID,
+            capabilities: capabilities
+                ?? ProviderCapabilities()
+        )
     }
 
     private func apply(_ destination: SettingsNavigationDestination) {
@@ -293,6 +311,24 @@ final class SettingsNavigationModel: ObservableObject {
             if selectedSection.isCredential {
                 selectedSection = .general
             }
+        }
+    }
+
+    private func normalizeSection(
+        for providerID: ProviderID,
+        capabilities: ProviderCapabilities
+    ) {
+        normalizeCredentialSection(for: providerID)
+        let policy = ProviderFeatureSurfacePolicy(
+            capabilities: capabilities
+        )
+        if selectedSection == .history,
+           !policy.supports(.history) {
+            selectedSection = .general
+        }
+        if selectedSection == .claudeCode,
+           !policy.supports(.statusLine) {
+            selectedSection = .general
         }
     }
 }
@@ -551,7 +587,9 @@ struct SettingsView: View {
                         dependencies: dependencies
                     )
                 case .history:
-                    UsageHistoryView()
+                    UsageHistoryView(
+                        dependencies: dependencies
+                    )
 
                 // Shared Settings
                 case .appSettings:
@@ -592,7 +630,12 @@ struct SettingsView: View {
         .background(SettingsBackground())
         .onChange(of: profileManager.activeProfile?.providerID) {
             _, providerID in
-            navigation.activeProviderDidChange(providerID)
+            navigation.activeProviderDidChange(
+                providerID,
+                capabilities: providerID.map {
+                    dependencies.capabilities(for: $0)
+                }
+            )
         }
     }
 }
@@ -619,7 +662,20 @@ struct ProfileSectionContainer: View {
     }
 
     var profileSections: [SettingsSection] {
-        SettingsSection.allCases.filter { $0.isProfileSetting && !$0.isCredential }
+        let policy = profileManager.activeProfile.map {
+            ProviderFeatureSurfacePolicy(
+                capabilities: dependencies.capabilities(
+                    for: $0.providerID
+                )
+            )
+        }
+        return SettingsSection.allCases.filter {
+            guard $0.isProfileSetting && !$0.isCredential else {
+                return false
+            }
+            return $0 != .history
+                || policy?.supports(.history) != false
+        }
     }
 
     var body: some View {
@@ -743,9 +799,11 @@ struct AppSettingsSection: View {
             }
             if $0 == .claudeCode,
                let providerID {
-                return dependencies.capabilities(
-                    for: providerID
-                ).supports(.statusLineIntegration)
+                return ProviderFeatureSurfacePolicy(
+                    capabilities: dependencies.capabilities(
+                        for: providerID
+                    )
+                ).supports(.statusLine)
             }
             return true
         }
@@ -1072,6 +1130,11 @@ struct ProfileCredentialCardsRow: View {
                 }
                 .buttonStyle(.plain)
             } else {
+                let surfacePolicy = ProviderFeatureSurfacePolicy(
+                    capabilities: dependencies.capabilities(
+                        for: .claude
+                    )
+                )
                 // Claude.ai Card
                 Button {
                     selectedSection = .claudeAI
@@ -1086,33 +1149,39 @@ struct ProfileCredentialCardsRow: View {
                 }
                 .buttonStyle(.plain)
 
-                // API Console Card
-                Button {
-                    selectedSection = .apiConsole
-                } label: {
-                    CredentialMiniCard(
-                        icon: "dollarsign.circle.fill",
-                        title: "API Console",
-                        isConnected:
-                            credentials?.apiSessionKey != nil,
-                        isSelected: selectedSection == .apiConsole
-                    )
+                if surfacePolicy.supports(.apiBilling) {
+                    // API Console Card
+                    Button {
+                        selectedSection = .apiConsole
+                    } label: {
+                        CredentialMiniCard(
+                            icon: "dollarsign.circle.fill",
+                            title: "API Console",
+                            isConnected:
+                                credentials?.apiSessionKey != nil,
+                            isSelected:
+                                selectedSection == .apiConsole
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
 
-                // CLI Account Card
-                Button {
-                    selectedSection = .cliAccount
-                } label: {
-                    CredentialMiniCard(
-                        icon: "terminal.fill",
-                        title: "CLI Account",
-                        isConnected: profileManager.activeProfile?
-                            .hasCliAccount ?? false,
-                        isSelected: selectedSection == .cliAccount
-                    )
+                if surfacePolicy.supports(.cliAccountSync) {
+                    // CLI Account Card
+                    Button {
+                        selectedSection = .cliAccount
+                    } label: {
+                        CredentialMiniCard(
+                            icon: "terminal.fill",
+                            title: "CLI Account",
+                            isConnected: profileManager.activeProfile?
+                                .hasCliAccount ?? false,
+                            isSelected:
+                                selectedSection == .cliAccount
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
         .onAppear {

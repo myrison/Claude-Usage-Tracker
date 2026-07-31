@@ -50,12 +50,14 @@ class MenuBarManager: NSObject, ObservableObject {
 
     final class RefreshSideEffectRouter {
         struct Hooks {
+            let recordNormalized:
+                (AcceptedUsageRefreshEvent, UsageReport) -> Void
             let recordClaude:
                 (AcceptedUsageRefreshEvent, ClaudeUsage) -> Void
             let writeStatusline:
                 (AcceptedUsageRefreshEvent, ClaudeUsage) -> Void
-            let notify:
-                (AcceptedUsageRefreshEvent, ClaudeUsage) -> Void
+            let notifyNormalized:
+                (AcceptedUsageRefreshEvent, UsageReport) -> Void
             let autoSwitch:
                 (
                     AcceptedUsageRefreshEvent,
@@ -92,16 +94,31 @@ class MenuBarManager: NSObject, ObservableObject {
         }
 
         func committed(_ event: AcceptedUsageRefreshEvent) {
-            guard event.identity.providerID == .claude else {
-                return
-            }
             if event.acceptedComponents.contains(.providerUsage),
+               event.capabilities.supports(.usageHistory),
+               event.identity.providerID != .claude,
+               let report = event.currentUsage.report,
+               report.providerID == event.identity.providerID {
+                hooks.recordNormalized(event, report)
+            }
+            if event.identity.providerID == .claude,
+               event.acceptedComponents.contains(.providerUsage),
                let usage = event.currentUsage.claudeUsage {
                 hooks.recordClaude(event, usage)
             }
-            if event.acceptedComponents.contains(.claudeAPI),
+            if event.identity.providerID == .claude,
+               event.acceptedComponents.contains(.claudeAPI),
                let usage = event.currentUsage.apiUsage {
                 hooks.recordAPI(event, usage)
+            }
+            if event.acceptedComponents.contains(.providerUsage),
+               event.capabilities.supports(.usageNotifications),
+               let report = event.currentUsage.report,
+               report.providerID == event.identity.providerID {
+                // Notifications are profile-scoped committed effects, not
+                // presentation effects. Multi-profile refreshes intentionally
+                // have no single interactive presentation target.
+                hooks.notifyNormalized(event, report)
             }
         }
 
@@ -110,10 +127,12 @@ class MenuBarManager: NSObject, ObservableObject {
             currentContext: UsagePresentationContext,
             activeProfile: Profile?
         ) {
-            guard event.identity.providerID == .claude,
-                  event.acceptedComponents.contains(.providerUsage),
-                  let usage = event.currentUsage.claudeUsage,
+            guard event.acceptedComponents.contains(.providerUsage),
                   let activeProfile,
+                  activeProfile.providerID
+                    == event.identity.providerID,
+                  activeProfile.providerRevision
+                    == event.identity.providerRevision,
                   MenuBarManager
                     .shouldApplyInteractiveRefreshSideEffects(
                         eventContext: event.presentationContext,
@@ -123,13 +142,23 @@ class MenuBarManager: NSObject, ObservableObject {
                     ) else {
                 return
             }
-            if event.capabilities.supports(
-                .statusLineIntegration
-            ) {
-                hooks.writeStatusline(event, usage)
+            if event.identity.providerID == .claude,
+               let usage = event.currentUsage.claudeUsage {
+                if event.capabilities.supports(
+                    .statusLineIntegration
+                ) {
+                    hooks.writeStatusline(event, usage)
+                }
+                if event.capabilities.supports(
+                    .automaticProfileSwitch
+                ) {
+                    hooks.autoSwitch(
+                        event,
+                        usage,
+                        activeProfile
+                    )
+                }
             }
-            hooks.notify(event, usage)
-            hooks.autoSwitch(event, usage, activeProfile)
         }
 
         func finished(
@@ -181,6 +210,9 @@ class MenuBarManager: NSObject, ObservableObject {
                   case .accepted = outcome,
                   let activeSnapshot,
                   activeSnapshot.providerID == .claude,
+                  activeSnapshot.capabilities.supports(
+                      .automaticProfileSwitch
+                  ),
                   let usage = activeSnapshot.claudeUsage else {
                 return
             }
@@ -297,6 +329,16 @@ class MenuBarManager: NSObject, ObservableObject {
     private lazy var refreshSideEffectRouter =
         RefreshSideEffectRouter(
             hooks: .init(
+                recordNormalized: { event, report in
+                    UsageHistoryService.shared
+                        .recordNormalizedReport(
+                            report,
+                            for: event.identity.profileID,
+                            providerID:
+                                event.identity.providerID,
+                            recordedAt: event.committedAt
+                        )
+                },
                 recordClaude: { [weak self] event, usage in
                     self?.recordAcceptedClaude(
                         event,
@@ -312,11 +354,15 @@ class MenuBarManager: NSObject, ObservableObject {
                         profileName: event.profileName
                     )
                 },
-                notify: { event, usage in
+                notifyNormalized: { event, report in
                     NotificationManager.shared.checkAndNotify(
-                        usage: usage,
+                        report: report,
+                        previousReport:
+                            event.previousUsage?.report,
+                        profileID: event.identity.profileID,
                         profileName: event.profileName,
-                        settings: event.notificationSettings
+                        settings: event.notificationSettings,
+                        now: Date()
                     )
                 },
                 autoSwitch: { [weak self] event, usage, profile in
@@ -2670,6 +2716,11 @@ class MenuBarManager: NSObject, ObservableObject {
 
         // Guard: feature must be enabled
         guard SharedDataStore.shared.loadAutoSwitchProfileEnabled() else { return }
+        guard providerUIDependencies.capabilities(
+            for: currentProfile.providerID
+        ).supports(.automaticProfileSwitch) else {
+            return
+        }
 
         // Guard: need more than 1 profile
         let profiles = profileManager.profiles
@@ -2734,8 +2785,11 @@ class MenuBarManager: NSObject, ObservableObject {
             let index = (currentIndex + offset) % count
             let candidate = profiles[index]
 
-            // Must have usage credentials
-            guard candidate.providerID == .claude,
+            // Must support this automation and have compatible usage data.
+            guard providerUIDependencies.capabilities(
+                for: candidate.providerID
+            ).supports(.automaticProfileSwitch),
+                  candidate.providerID == .claude,
                   candidate.hasUsageCredentials else {
                 continue
             }

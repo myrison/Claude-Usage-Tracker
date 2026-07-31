@@ -1,26 +1,827 @@
 import Foundation
 import UserNotifications
 import AppKit
+import UsageCore
 
-/// Manages user notifications for usage threshold alerts
-class NotificationManager: NotificationServiceProtocol {
-    static let shared = NotificationManager()
+struct UsageNotificationWindowKey:
+    Codable,
+    Hashable,
+    Sendable
+{
+    let profileID: UUID
+    let providerID: ProviderID
+    let groupID: UsageLimitGroupID
+    let windowID: UsageWindowID
 
-    // Track previous session percentage per profile to detect resets
-    private var previousSessionPercentages: [String: Double] = [:]
+    var persistencePrefix: String {
+        [
+            profileID.uuidString.lowercased(),
+            providerID.rawValue,
+            groupID.rawValue,
+            windowID.rawValue
+        ]
+        .map { "\($0.utf8.count):\($0)" }
+        .joined()
+    }
+}
 
-    // Track which notifications have been sent to prevent duplicates
-    // Persisted to UserDefaults to survive app restarts
-    private var sentNotifications: Set<String> {
-        get {
-            Set(UserDefaults.standard.array(forKey: "sentNotifications") as? [String] ?? [])
-        }
-        set {
-            UserDefaults.standard.set(Array(newValue), forKey: "sentNotifications")
+struct UsageNotificationWindowState:
+    Codable,
+    Equatable,
+    Sendable
+{
+    var cycleID: String
+    var percentage: Double
+    var highestDeliveredThreshold: Int?
+    var pendingThreshold: Int?
+    var pendingResetCycleID: String?
+    var lastSeenAt: Date
+
+    init(
+        cycleID: String,
+        percentage: Double,
+        highestDeliveredThreshold: Int? = nil,
+        pendingThreshold: Int? = nil,
+        pendingResetCycleID: String? = nil,
+        lastSeenAt: Date
+    ) {
+        self.cycleID = cycleID
+        self.percentage = percentage
+        self.highestDeliveredThreshold =
+            highestDeliveredThreshold
+        self.pendingThreshold = pendingThreshold
+        self.pendingResetCycleID = pendingResetCycleID
+        self.lastSeenAt = lastSeenAt
+    }
+}
+
+enum UsageNotificationEventKind: String, Equatable, Sendable {
+    case threshold
+    case reset
+}
+
+struct UsageNotificationIdentity: Hashable, Sendable {
+    let window: UsageNotificationWindowKey
+    let cycleID: String
+    let kind: UsageNotificationEventKind
+    let threshold: Int?
+
+    /// Injective, display-independent identity persisted across launches.
+    var persistenceKey: String {
+        window.persistencePrefix + [
+            cycleID,
+            kind.rawValue,
+            threshold.map(String.init) ?? "-"
+        ]
+        .map { "\($0.utf8.count):\($0)" }
+        .joined()
+    }
+}
+
+struct UsageNotificationEvent: Equatable, Sendable {
+    let identity: UsageNotificationIdentity
+    let percentage: Double
+    let threshold: Int?
+    let resetTime: Date?
+    let groupDisplayName: String?
+    let windowDisplayName: String?
+}
+
+struct UsageNotificationEvaluation: Equatable, Sendable {
+    let events: [UsageNotificationEvent]
+    let states: [UsageNotificationWindowKey:
+        UsageNotificationWindowState]
+}
+
+/// Pure threshold/reset policy used by NotificationManager and deterministic
+/// tests. It consumes only normalized provider data and stable identities.
+enum UsageNotificationPolicy {
+    struct EligibleWindow {
+        let groupID: UsageLimitGroupID
+        let groupDisplayName: String?
+        let window: UsageWindow
+        let percentage: Double
+    }
+
+    /// Claude's established policy applies only to its effective subscription
+    /// session. Provider-owned dynamic windows are otherwise all eligible.
+    static func includes(
+        providerID: ProviderID,
+        groupID: UsageLimitGroupID,
+        windowID: UsageWindowID
+    ) -> Bool {
+        providerID != .claude
+            || (
+                groupID.rawValue == "subscription"
+                    && windowID.rawValue == "session"
+            )
+    }
+
+    static func isEligible(
+        report: UsageReport,
+        settings: NotificationSettings,
+        now: Date
+    ) -> Bool {
+        settings.enabled
+            && !report.isStale(at: now)
+            && report.health.status != .unavailable
+            && report.health.status != .unauthenticated
+            && report.health.status != .unsupported
+    }
+
+    static func eligibleWindows(
+        in report: UsageReport
+    ) -> [EligibleWindow] {
+        report.limitGroups.flatMap { group in
+            group.windows.compactMap { window in
+                guard includes(
+                    providerID: report.providerID,
+                    groupID: group.id,
+                    windowID: window.id
+                ),
+                      let percentage = window.usedPercentage
+                        ?? window.quantity?
+                            .calculatedUsedPercentage,
+                      percentage.isFinite else {
+                    return nil
+                }
+                return EligibleWindow(
+                    groupID: group.id,
+                    groupDisplayName: group.displayName,
+                    window: window,
+                    percentage: percentage
+                )
+            }
         }
     }
 
-    private init() {}
+    static func baselineStates(
+        report: UsageReport,
+        profileID: UUID
+    ) -> [UsageNotificationWindowKey:
+        UsageNotificationWindowState] {
+        var result: [UsageNotificationWindowKey:
+            UsageNotificationWindowState] = [:]
+        for eligible in eligibleWindows(in: report) {
+            result[
+                UsageNotificationWindowKey(
+                    profileID: profileID,
+                    providerID: report.providerID,
+                    groupID: eligible.groupID,
+                    windowID: eligible.window.id
+                )
+            ] = UsageNotificationWindowState(
+                cycleID:
+                    NormalizedUsageSnapshot.cycleID(
+                        for: eligible.window
+                    ),
+                percentage: eligible.percentage,
+                lastSeenAt: report.fetchedAt
+            )
+        }
+        return result
+    }
+
+    static func evaluate(
+        report: UsageReport,
+        profileID: UUID,
+        settings: NotificationSettings,
+        now: Date,
+        previousStates: [UsageNotificationWindowKey:
+            UsageNotificationWindowState]
+    ) -> UsageNotificationEvaluation {
+        guard isEligible(
+            report: report,
+            settings: settings,
+            now: now
+        ) else {
+            return UsageNotificationEvaluation(
+                events: [],
+                states: previousStates
+            )
+        }
+
+        var states = previousStates
+        var events: [UsageNotificationEvent] = []
+        let thresholds = settings.sortedThresholds.filter {
+            threshold in
+            (1...100).contains(threshold)
+        }
+        for eligible in eligibleWindows(in: report) {
+            let window = eligible.window
+            let percentage = eligible.percentage
+            let key = UsageNotificationWindowKey(
+                profileID: profileID,
+                providerID: report.providerID,
+                groupID: eligible.groupID,
+                windowID: window.id
+            )
+            let cycleID =
+                NormalizedUsageSnapshot.cycleID(for: window)
+            let previous = previousStates[key]
+            var state: UsageNotificationWindowState
+            if let previous,
+               previous.cycleID == cycleID {
+                state = previous
+                state.percentage = percentage
+                state.lastSeenAt = now
+            } else {
+                state = UsageNotificationWindowState(
+                    cycleID: cycleID,
+                    percentage: percentage,
+                    pendingResetCycleID:
+                        (previous?.percentage ?? 0) > 0
+                        ? cycleID
+                        : nil,
+                    lastSeenAt: now
+                )
+            }
+
+            if state.pendingResetCycleID == cycleID {
+                let identity = UsageNotificationIdentity(
+                    window: key,
+                    cycleID: cycleID,
+                    kind: .reset,
+                    threshold: nil
+                )
+                events.append(
+                    UsageNotificationEvent(
+                        identity: identity,
+                        percentage: percentage,
+                        threshold: nil,
+                        resetTime: window.resetsAt,
+                        groupDisplayName:
+                            eligible.groupDisplayName,
+                        windowDisplayName:
+                            window.displayName
+                    )
+                )
+            }
+
+            if let pendingThreshold =
+                state.pendingThreshold,
+               !thresholds.contains(pendingThreshold) {
+                state.pendingThreshold = nil
+            }
+
+            if let reachedThreshold = thresholds
+                .reversed()
+                .first(where: {
+                    percentage >= Double($0)
+                }),
+               reachedThreshold
+                > (state.highestDeliveredThreshold ?? 0),
+               reachedThreshold
+                > (state.pendingThreshold ?? 0) {
+                state.pendingThreshold = reachedThreshold
+            }
+
+            if let threshold = state.pendingThreshold,
+               threshold
+                > (state.highestDeliveredThreshold ?? 0) {
+                let identity = UsageNotificationIdentity(
+                    window: key,
+                    cycleID: cycleID,
+                    kind: .threshold,
+                    threshold: threshold
+                )
+                events.append(
+                    UsageNotificationEvent(
+                        identity: identity,
+                        percentage: max(
+                            percentage,
+                            Double(threshold)
+                        ),
+                        threshold: threshold,
+                        resetTime: window.resetsAt,
+                        groupDisplayName:
+                            eligible.groupDisplayName,
+                        windowDisplayName:
+                            window.displayName
+                    )
+                )
+            }
+
+            states[key] = state
+        }
+        return UsageNotificationEvaluation(
+            events: events,
+            states: states
+        )
+    }
+}
+
+private struct PersistedUsageNotificationLedger: Codable {
+    let schemaVersion: Int
+    let records: [PersistedUsageNotificationRecord]
+}
+
+private struct PersistedUsageNotificationRecord: Codable {
+    let window: UsageNotificationWindowKey
+    let state: UsageNotificationWindowState
+}
+
+private enum NormalizedNotificationLedgerLoad {
+    case absent
+    case valid(
+        [UsageNotificationWindowKey:
+            UsageNotificationWindowState]
+    )
+    case invalidOrFuture
+}
+
+private struct NormalizedNotificationReservation {
+    let token: UUID
+    let window: UsageNotificationWindowKey
+}
+
+private enum NotificationStatePersistenceError:
+    LocalizedError
+{
+    case normalizedLedgerWriteFailed
+    case legacyStateWriteFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .normalizedLedgerWriteFailed,
+             .legacyStateWriteFailed:
+            return "Notification state could not be saved."
+        }
+    }
+}
+
+/// Manages user notifications for usage threshold alerts
+class NotificationManager: NotificationServiceProtocol {
+    typealias NotificationRequestAdder = (
+        UNNotificationRequest,
+        @escaping (Error?) -> Void
+    ) -> Void
+
+    static let shared = NotificationManager()
+
+    private let stateLock = NSLock()
+    private let defaults: UserDefaults
+    private let notificationRequestAdder: NotificationRequestAdder
+    private let missingWindowRetention: TimeInterval
+    private let maximumMissingWindowsPerScope: Int
+    private var normalizedLedgerIsUsable: Bool
+    private static let normalizedLedgerKey =
+        "normalizedUsageNotificationLedger.v1"
+    private static let normalizedLedgerSchemaVersion = 1
+
+    // Track previous session percentage per profile to detect resets
+    private var previousSessionPercentages: [String: Double] = [:]
+    private var normalizedWindowStates:
+        [UsageNotificationWindowKey:
+            UsageNotificationWindowState] = [:]
+    private var normalizedInFlightReservations:
+        [String: NormalizedNotificationReservation] = [:]
+
+    // Legacy notification identities retain their established persistence.
+    // Normalized provider notifications use the versioned per-window ledger.
+    private var sentNotificationIdentities: Set<String>
+
+    init(
+        defaults: UserDefaults = .standard,
+        missingWindowRetention: TimeInterval = 15 * 60,
+        maximumMissingWindowsPerScope: Int = 64,
+        notificationRequestAdder:
+            @escaping NotificationRequestAdder = {
+                request,
+                completion in
+                UNUserNotificationCenter.current().add(
+                    request,
+                    withCompletionHandler: completion
+                )
+            }
+    ) {
+        self.defaults = defaults
+        self.missingWindowRetention =
+            max(0, missingWindowRetention)
+        self.maximumMissingWindowsPerScope =
+            max(0, maximumMissingWindowsPerScope)
+        self.notificationRequestAdder = notificationRequestAdder
+        sentNotificationIdentities = Set(
+            defaults.array(forKey: "sentNotifications")
+                as? [String] ?? []
+        )
+        switch Self.loadNormalizedLedger(from: defaults) {
+        case .absent:
+            normalizedLedgerIsUsable = true
+        case .valid(let states):
+            normalizedLedgerIsUsable = true
+            normalizedWindowStates = states
+        case .invalidOrFuture:
+            normalizedLedgerIsUsable = false
+        }
+    }
+
+    private static func loadNormalizedLedger(
+        from defaults: UserDefaults
+    ) -> NormalizedNotificationLedgerLoad {
+        guard let data = defaults.data(
+            forKey: normalizedLedgerKey
+        ) else {
+            return .absent
+        }
+        guard let ledger = try? JSONDecoder().decode(
+            PersistedUsageNotificationLedger.self,
+            from: data
+        ),
+              ledger.schemaVersion
+                == normalizedLedgerSchemaVersion else {
+            return .invalidOrFuture
+        }
+        return .valid(
+            Dictionary(
+                ledger.records.map {
+                    ($0.window, $0.state)
+                },
+                uniquingKeysWith: { _, latest in latest }
+            )
+        )
+    }
+
+    @discardableResult
+    private func persistNormalizedLedgerLocked() -> Bool {
+        guard normalizedLedgerIsUsable else {
+            return false
+        }
+        let records = normalizedWindowStates
+            .map {
+                PersistedUsageNotificationRecord(
+                    window: $0.key,
+                    state: $0.value
+                )
+            }
+            .sorted {
+                $0.window.persistencePrefix
+                    < $1.window.persistencePrefix
+            }
+        let ledger = PersistedUsageNotificationLedger(
+            schemaVersion:
+                Self.normalizedLedgerSchemaVersion,
+            records: records
+        )
+        guard let data = try? JSONEncoder().encode(ledger) else {
+            return false
+        }
+        defaults.set(data, forKey: Self.normalizedLedgerKey)
+        return defaults.data(forKey: Self.normalizedLedgerKey)
+            == data
+    }
+
+    @discardableResult
+    private func persistSentNotificationsLocked() -> Bool {
+        defaults.set(
+            Array(sentNotificationIdentities),
+            forKey: "sentNotifications"
+        )
+        return Set(
+            defaults.array(forKey: "sentNotifications")
+                as? [String] ?? []
+        ) == sentNotificationIdentities
+    }
+
+    @discardableResult
+    private func reserveNotification(_ identifier: String) -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard sentNotificationIdentities.insert(identifier).inserted else {
+            return false
+        }
+        persistSentNotificationsLocked()
+        return true
+    }
+
+    private func releaseNotification(_ identifier: String) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard sentNotificationIdentities.remove(identifier) != nil else {
+            return
+        }
+        persistSentNotificationsLocked()
+    }
+
+    /// Applies the profile's notification policy to every normalized usage
+    /// window. Callers must pass the accepted report for the exact profile.
+    func checkAndNotify(
+        report: UsageReport,
+        previousReport: UsageReport? = nil,
+        profileID: UUID,
+        profileName: String,
+        settings: NotificationSettings,
+        now: Date = Date()
+    ) {
+        guard UsageNotificationPolicy.isEligible(
+            report: report,
+            settings: settings,
+            now: now
+        ) else {
+            return
+        }
+
+        let reservedEvents: [(
+            event: UsageNotificationEvent,
+            token: UUID
+        )] = {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            guard normalizedLedgerIsUsable else {
+                return []
+            }
+            var priorStates = normalizedWindowStates
+            if let previousReport,
+               previousReport.providerID == report.providerID {
+                let persistedBaseline =
+                    UsageNotificationPolicy.baselineStates(
+                        report: previousReport,
+                        profileID: profileID
+                    )
+                for (key, state) in persistedBaseline
+                where priorStates[key] == nil {
+                    priorStates[key] = state
+                }
+            }
+            let evaluation = UsageNotificationPolicy.evaluate(
+                report: report,
+                profileID: profileID,
+                settings: settings,
+                now: now,
+                previousStates: priorStates
+            )
+            normalizedWindowStates = evaluation.states
+            let activeKeys = activeWindowKeys(
+                report: report,
+                profileID: profileID
+            )
+            applyMissingWindowRetentionLocked(
+                profileID: profileID,
+                providerID: report.providerID,
+                activeKeys: activeKeys,
+                now: now
+            )
+            guard persistNormalizedLedgerLocked() else {
+                return []
+            }
+            var reservations: [(
+                event: UsageNotificationEvent,
+                token: UUID
+            )] = []
+            for event in evaluation.events {
+                let identifier = event.identity.persistenceKey
+                guard normalizedInFlightReservations[
+                    identifier
+                ] == nil else {
+                    continue
+                }
+                let token = UUID()
+                normalizedInFlightReservations[identifier] =
+                    NormalizedNotificationReservation(
+                        token: token,
+                        window: event.identity.window
+                    )
+                reservations.append((event, token))
+            }
+            return reservations
+        }()
+        for reservation in reservedEvents {
+            sendNormalizedAlert(
+                reservation.event,
+                reservationToken: reservation.token,
+                profileName: profileName,
+                soundName: settings.soundName
+            )
+        }
+    }
+
+    private func sendNormalizedAlert(
+        _ event: UsageNotificationEvent,
+        reservationToken: UUID,
+        profileName: String,
+        soundName: String
+    ) {
+        let identifier = event.identity.persistenceKey
+
+        let content = UNMutableNotificationContent()
+        let groupLabel = event.groupDisplayName
+            ?? event.identity.window.groupID.rawValue
+        let windowLabel = event.windowDisplayName
+            ?? event.identity.window.windowID.rawValue
+        let label =
+            groupLabel == windowLabel
+            ? windowLabel
+            : "\(groupLabel) – \(windowLabel)"
+        let titleFormat = ProviderUILocalization.text(
+            "notification.provider_usage.title",
+            fallback: "%@ – %@"
+        )
+        content.title = String(
+            format: titleFormat,
+            profileName,
+            label
+        )
+        if let threshold = event.threshold {
+            let reset = event.resetTime.map {
+                let resetFormat = ProviderUILocalization.text(
+                    "notification.provider_usage.reset_suffix",
+                    fallback: " Resets %@."
+                )
+                return String(
+                    format: resetFormat,
+                    FormatterHelper.timeUntilReset(from: $0)
+                )
+            } ?? ""
+            let bodyFormat = ProviderUILocalization.text(
+                "notification.provider_usage.threshold",
+                fallback: "Usage crossed %d%% (%.1f%%).%@"
+            )
+            content.body = String(
+                format: bodyFormat,
+                threshold,
+                event.percentage,
+                reset
+            )
+        } else {
+            content.body = ProviderUILocalization.text(
+                "notification.provider_usage.reset",
+                fallback: "Usage window reset."
+            )
+        }
+        content.categoryIdentifier = "USAGE_ALERT"
+
+        let customSoundName: String?
+        switch soundName {
+        case "none":
+            customSoundName = nil
+        case "default":
+            content.sound = .default
+            customSoundName = nil
+        default:
+            customSoundName = soundName
+        }
+
+        let request = UNNotificationRequest(
+            identifier: identifier,
+            content: content,
+            trigger: nil
+        )
+        notificationRequestAdder(request) {
+            [weak self] error in
+            if let error {
+                self?.completeNormalizedNotification(
+                    event,
+                    reservationToken: reservationToken,
+                    succeeded: false
+                )
+                LoggingService.shared.logError(
+                    "Failed to send usage notification",
+                    error: error
+                )
+                return
+            }
+            self?.completeNormalizedNotification(
+                event,
+                reservationToken: reservationToken,
+                succeeded: true
+            )
+            if let customSoundName {
+                DispatchQueue.main.async {
+                    NSSound(
+                        named: NSSound.Name(customSoundName)
+                    )?.play()
+                }
+            }
+        }
+    }
+
+    private func completeNormalizedNotification(
+        _ event: UsageNotificationEvent,
+        reservationToken: UUID,
+        succeeded: Bool
+    ) {
+        let identifier = event.identity.persistenceKey
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard normalizedInFlightReservations[identifier]?
+                .token == reservationToken else {
+            return
+        }
+        normalizedInFlightReservations.removeValue(
+            forKey: identifier
+        )
+        guard succeeded,
+              var state =
+                normalizedWindowStates[
+                    event.identity.window
+                ],
+              state.cycleID == event.identity.cycleID else {
+            return
+        }
+        switch event.identity.kind {
+        case .reset:
+            if state.pendingResetCycleID
+                == event.identity.cycleID {
+                state.pendingResetCycleID = nil
+            }
+        case .threshold:
+            guard let threshold = event.threshold else {
+                return
+            }
+            state.highestDeliveredThreshold = max(
+                state.highestDeliveredThreshold ?? 0,
+                threshold
+            )
+            if state.pendingThreshold == threshold {
+                state.pendingThreshold = nil
+            }
+        }
+        normalizedWindowStates[event.identity.window] =
+            state
+        persistNormalizedLedgerLocked()
+    }
+
+    private func activeWindowKeys(
+        report: UsageReport,
+        profileID: UUID
+    ) -> Set<UsageNotificationWindowKey> {
+        Set(
+            UsageNotificationPolicy.eligibleWindows(
+                in: report
+            ).map {
+                UsageNotificationWindowKey(
+                    profileID: profileID,
+                    providerID: report.providerID,
+                    groupID: $0.groupID,
+                    windowID: $0.window.id
+                )
+            }
+        )
+    }
+
+    private func applyMissingWindowRetentionLocked(
+        profileID: UUID,
+        providerID: ProviderID,
+        activeKeys: Set<UsageNotificationWindowKey>,
+        now: Date
+    ) {
+        let scoped = normalizedWindowStates.filter {
+            $0.key.profileID == profileID
+                && $0.key.providerID == providerID
+        }
+        let cutoff = now.addingTimeInterval(
+            -missingWindowRetention
+        )
+        let retainedMissing = scoped
+            .filter {
+                !activeKeys.contains($0.key)
+                    && $0.value.lastSeenAt >= cutoff
+            }
+            .sorted {
+                if $0.value.lastSeenAt
+                    != $1.value.lastSeenAt {
+                    return $0.value.lastSeenAt
+                        > $1.value.lastSeenAt
+                }
+                return $0.key.persistencePrefix
+                    < $1.key.persistencePrefix
+            }
+            .prefix(maximumMissingWindowsPerScope)
+        let retainedKeys =
+            activeKeys
+                .union(retainedMissing.map(\.key))
+                .union(
+                    normalizedInFlightReservations.values
+                        .compactMap {
+                            reservation in
+                            let key = reservation.window
+                            return key.profileID == profileID
+                                && key.providerID == providerID
+                                ? key
+                                : nil
+                        }
+                )
+        let removedKeys = Set(scoped.keys).subtracting(
+            retainedKeys
+        )
+        guard !removedKeys.isEmpty else {
+            return
+        }
+        normalizedWindowStates = normalizedWindowStates
+            .filter { !removedKeys.contains($0.key) }
+    }
+
+    func normalizedNotificationStateCount(
+        profileID: UUID,
+        providerID: ProviderID
+    ) -> Int {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return normalizedWindowStates.keys.filter {
+            $0.profileID == profileID
+                && $0.providerID == providerID
+        }.count
+    }
 
     /// Sends a notification when approaching usage limits (legacy method)
     func sendUsageAlert(type: AlertType, percentage: Double, resetTime: Date?) {
@@ -44,8 +845,7 @@ class NotificationManager: NotificationServiceProtocol {
         // Create unique identifier based on threshold level, not actual percentage
         let identifier = "\(type.rawValue)_\(thresholdLevel)"
 
-        // Check if we've already sent this notification
-        guard !sentNotifications.contains(identifier) else {
+        guard reserveNotification(identifier) else {
             return
         }
 
@@ -61,12 +861,13 @@ class NotificationManager: NotificationServiceProtocol {
             trigger: nil // Show immediately
         )
 
-        UNUserNotificationCenter.current().add(request) { [weak self] error in
-            if error == nil {
-                // Mark this notification as sent
-                var updated = self?.sentNotifications ?? []
-                updated.insert(identifier)
-                self?.sentNotifications = updated
+        notificationRequestAdder(request) { [weak self] error in
+            if let error {
+                self?.releaseNotification(identifier)
+                LoggingService.shared.logError(
+                    "Failed to send legacy usage notification",
+                    error: error
+                )
             }
         }
     }
@@ -85,7 +886,7 @@ class NotificationManager: NotificationServiceProtocol {
             trigger: nil // Show immediately
         )
 
-        UNUserNotificationCenter.current().add(request) { _ in
+        notificationRequestAdder(request) { _ in
             // Notification sent
         }
     }
@@ -109,7 +910,7 @@ class NotificationManager: NotificationServiceProtocol {
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
 
         // Add the notification request
-        center.add(request) { error in
+        notificationRequestAdder(request) { error in
             if let error = error {
                 LoggingService.shared.logError("Failed to show success notification: \(error)")
             }
@@ -129,13 +930,23 @@ class NotificationManager: NotificationServiceProtocol {
         }
 
         let sessionPercentage = usage.effectiveSessionPercentage
-        let previousPercentage = previousSessionPercentages[profileName] ?? 0.0
+        stateLock.lock()
+        let previousPercentage =
+            previousSessionPercentages[profileName] ?? 0.0
+        let didReset =
+            previousPercentage > 0.0 && sessionPercentage == 0.0
+        if didReset {
+            sentNotificationIdentities =
+                Set(sentNotificationIdentities.filter {
+                    !$0.hasPrefix(profileName)
+                })
+            persistSentNotificationsLocked()
+        }
+        previousSessionPercentages[profileName] = sessionPercentage
+        stateLock.unlock()
 
         // Check for session reset (went from >0% to 0%)
-        if previousPercentage > 0.0 && sessionPercentage == 0.0 {
-            // Clear all sent notifications for this profile to allow re-notification in new session
-            sentNotifications = sentNotifications.filter { !$0.hasPrefix(profileName) }
-
+        if didReset {
             sendProfileAlert(
                 profileName: profileName,
                 type: .sessionReset,
@@ -146,9 +957,6 @@ class NotificationManager: NotificationServiceProtocol {
 
             // Note: Auto-start session is handled per-profile but called from elsewhere
         }
-
-        // Update previous percentage for this specific profile
-        previousSessionPercentages[profileName] = sessionPercentage
 
         // Check thresholds (highest first) - includes both built-in and custom
         let thresholds = settings.sortedThresholds
@@ -201,8 +1009,7 @@ class NotificationManager: NotificationServiceProtocol {
         // Create unique identifier based on alert type and threshold level
         let identifier = "\(profileName)_\(type.rawValue)_\(level)"
 
-        // Check if we've already sent this notification
-        guard !sentNotifications.contains(identifier) else {
+        guard reserveNotification(identifier) else {
             return
         }
 
@@ -233,8 +1040,14 @@ class NotificationManager: NotificationServiceProtocol {
             trigger: nil // Show immediately
         )
 
-        UNUserNotificationCenter.current().add(request) { [weak self] error in
-            if error == nil {
+        notificationRequestAdder(request) { [weak self] error in
+            if let error {
+                self?.releaseNotification(identifier)
+                LoggingService.shared.logError(
+                    "Failed to send profile usage notification",
+                    error: error
+                )
+            } else {
                 // Play custom system sound after notification is delivered
                 if let name = customSoundName {
                     DispatchQueue.main.async {
@@ -246,10 +1059,6 @@ class NotificationManager: NotificationServiceProtocol {
                     }
                 }
 
-                // Mark this notification as sent
-                var updated = self?.sentNotifications ?? []
-                updated.insert(identifier)
-                self?.sentNotifications = updated
             }
         }
     }
@@ -281,7 +1090,7 @@ class NotificationManager: NotificationServiceProtocol {
             trigger: nil // Show immediately
         )
 
-        UNUserNotificationCenter.current().add(request) { error in
+        notificationRequestAdder(request) { error in
             if let error = error {
                 LoggingService.shared.logError("Failed to send auto-start notification: \(error)")
             }
@@ -303,7 +1112,7 @@ class NotificationManager: NotificationServiceProtocol {
             trigger: nil
         )
 
-        UNUserNotificationCenter.current().add(request) { error in
+        notificationRequestAdder(request) { error in
             if let error = error {
                 LoggingService.shared.logError("Failed to send auto-switch notification: \(error)")
             }
@@ -312,8 +1121,66 @@ class NotificationManager: NotificationServiceProtocol {
 
     /// Clears notification tracking state for a specific profile
     func clearNotificationsForProfile(_ profileName: String) {
-        sentNotifications = sentNotifications.filter { !$0.hasPrefix(profileName) }
+        stateLock.lock()
         previousSessionPercentages.removeValue(forKey: profileName)
+        let filtered = sentNotificationIdentities.filter {
+            !$0.hasPrefix(profileName)
+        }
+        if filtered.count != sentNotificationIdentities.count {
+            sentNotificationIdentities = Set(filtered)
+            persistSentNotificationsLocked()
+        }
+        stateLock.unlock()
+    }
+
+    func clearNotificationsForProfile(
+        _ profileID: UUID,
+        providerID: ProviderID
+    ) throws {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if !normalizedLedgerIsUsable {
+            // An unreadable or future-schema ledger cannot be edited
+            // selectively. Explicit profile deletion must still complete and
+            // must not retain unknown data for the deleted profile, so reset
+            // the whole notification-only ledger with readback verification.
+            defaults.removeObject(
+                forKey: Self.normalizedLedgerKey
+            )
+            guard defaults.data(
+                forKey: Self.normalizedLedgerKey
+            ) == nil else {
+                throw NotificationStatePersistenceError
+                    .normalizedLedgerWriteFailed
+            }
+            normalizedWindowStates.removeAll()
+            normalizedInFlightReservations.removeAll()
+            normalizedLedgerIsUsable = true
+        }
+        normalizedWindowStates = normalizedWindowStates.filter {
+            $0.key.profileID != profileID
+                || $0.key.providerID != providerID
+        }
+        normalizedInFlightReservations =
+            normalizedInFlightReservations.filter {
+                let window = $0.value.window
+                return window.profileID != profileID
+                    || window.providerID != providerID
+            }
+        let component = profileID.uuidString.lowercased()
+        let profilePrefix = "\(component.utf8.count):\(component)"
+        let filtered = sentNotificationIdentities.filter {
+            !$0.hasPrefix(profilePrefix)
+        }
+        sentNotificationIdentities = Set(filtered)
+        guard persistSentNotificationsLocked() else {
+            throw NotificationStatePersistenceError
+                .legacyStateWriteFailed
+        }
+        guard persistNormalizedLedgerLocked() else {
+            throw NotificationStatePersistenceError
+                .normalizedLedgerWriteFailed
+        }
     }
 
     /// Schedules a notification 24 hours before the session key expires
@@ -345,7 +1212,7 @@ class NotificationManager: NotificationServiceProtocol {
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
 
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
-        center.add(request) { error in
+        notificationRequestAdder(request) { error in
             if let error = error {
                 LoggingService.shared.logError("Failed to schedule session key expiry notification: \(error)")
             }

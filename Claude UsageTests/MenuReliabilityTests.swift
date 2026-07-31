@@ -913,8 +913,8 @@ final class MenuReliabilityTests: HostedAppTestCase {
         XCTAssertEqual(
             recorder.snapshot(),
             [
-                "history:Initiating name",
-                "api-history:Initiating name"
+                "api-history:Initiating name",
+                "notify:Initiating name:false:Captured sound"
             ]
         )
 
@@ -927,12 +927,80 @@ final class MenuReliabilityTests: HostedAppTestCase {
         XCTAssertEqual(
             recorder.snapshot(),
             [
-                "history:Initiating name",
                 "api-history:Initiating name",
-                "statusline:Initiating name",
                 "notify:Initiating name:false:Captured sound",
+                "statusline:Initiating name",
                 "auto:\(profileID.uuidString)"
             ]
+        )
+    }
+
+    func testRefreshSideEffectRouterCapabilityGatesAutomaticSwitch()
+    {
+        let profile = Profile(name: "Claude")
+        let context = UsagePresentationContext(
+            epoch: 10,
+            focusedProfileID: profile.id,
+            visibleProfileIDs: [profile.id],
+            mode: .single
+        )
+        let event = makeAcceptedEvent(
+            profileID: profile.id,
+            context: context,
+            capabilities: ProviderCapabilities([
+                .statusLineIntegration: .available,
+                .usageHistory: .available,
+                .usageNotifications: .available,
+                .automaticProfileSwitch: .unavailable
+            ]),
+            components: [.providerUsage]
+        )
+        let recorder = ThreadSafeRecorder()
+        let router = makeSideEffectRouter(recorder)
+
+        router.committed(event)
+        router.presented(
+            event,
+            currentContext: context,
+            activeProfile: profile
+        )
+
+        XCTAssertEqual(
+            recorder.snapshot(),
+            [
+                "notify:Captured:true:default",
+                "statusline:Captured"
+            ]
+        )
+    }
+
+    func testRefreshSideEffectRouterCommitsMultiProfileNotifications()
+    {
+        let profile = Profile(name: "Claude")
+        let context = UsagePresentationContext(
+            epoch: 11,
+            focusedProfileID: profile.id,
+            visibleProfileIDs: [profile.id, UUID()],
+            mode: .multi
+        )
+        let event = makeAcceptedEvent(
+            profileID: profile.id,
+            context: context,
+            components: [.providerUsage]
+        )
+        let recorder = ThreadSafeRecorder()
+        let router = makeSideEffectRouter(recorder)
+
+        router.committed(event)
+        router.presented(
+            event,
+            currentContext: context,
+            activeProfile: profile
+        )
+
+        XCTAssertEqual(
+            recorder.snapshot(),
+            ["notify:Captured:true:default"]
         )
     }
 
@@ -963,7 +1031,10 @@ final class MenuReliabilityTests: HostedAppTestCase {
 
         XCTAssertEqual(
             recorder.snapshot(),
-            ["history:Captured", "api-history:Captured"]
+            [
+                "api-history:Captured",
+                "notify:Captured:true:default"
+            ]
         )
     }
 
@@ -1079,6 +1150,72 @@ final class MenuReliabilityTests: HostedAppTestCase {
                 "claude-circuit-success",
                 "success-toast"
             ]
+        )
+    }
+
+    func testRefreshSideEffectRouterCapabilityGatesBatchAutomaticSwitch()
+    {
+        let profile = Profile(name: "Claude")
+        let context = UsagePresentationContext(
+            epoch: 15,
+            focusedProfileID: profile.id,
+            visibleProfileIDs: [profile.id],
+            mode: .multi
+        )
+        let result = UsageRefreshBatchResult(
+            batchID: UUID(),
+            invocationOrder: 5,
+            outcomes: [profile.id: .accepted],
+            trigger: .timer,
+            presentationContext: context,
+            isLatestBatch: true
+        )
+        let unavailableRecorder = ThreadSafeRecorder()
+        let unavailableRouter = makeSideEffectRouter(
+            unavailableRecorder
+        )
+        unavailableRouter.finished(
+            result,
+            currentContext: context,
+            latestInvocationOrder: 5,
+            activeProfile: profile,
+            activeSnapshot: makePresentationSnapshot(
+                profileID: profile.id,
+                providerID: .claude,
+                presentationEpoch: context.epoch,
+                capabilities: ProviderCapabilities([
+                    .automaticProfileSwitch: .unavailable
+                ]),
+                claudeUsage: .empty
+            )
+        )
+        XCTAssertEqual(
+            unavailableRecorder.snapshot(),
+            ["batch-finalized"]
+        )
+
+        let availableRecorder = ThreadSafeRecorder()
+        let availableRouter = makeSideEffectRouter(
+            availableRecorder
+        )
+        availableRouter.finished(
+            result,
+            currentContext: context,
+            latestInvocationOrder: 5,
+            activeProfile: profile,
+            activeSnapshot: makePresentationSnapshot(
+                profileID: profile.id,
+                providerID: .claude,
+                presentationEpoch: context.epoch,
+                capabilities: ProviderCapabilities([
+                    .automaticProfileSwitch: .available
+                ]),
+                claudeUsage: .empty
+            )
+        )
+        XCTAssertEqual(
+            availableRecorder.snapshot(),
+            ["batch-finalized", "batch-auto-switch"]
         )
     }
 
@@ -1336,6 +1473,13 @@ final class MenuReliabilityTests: HostedAppTestCase {
         profileName: String = "Captured",
         notificationSettings: NotificationSettings =
             NotificationSettings(),
+        capabilities: ProviderCapabilities =
+            ProviderCapabilities([
+                .statusLineIntegration: .available,
+                .usageHistory: .available,
+                .usageNotifications: .available,
+                .automaticProfileSwitch: .available
+            ]),
         components: Set<AcceptedUsageComponent>
     ) -> AcceptedUsageRefreshEvent {
         var usage = ClaudeUsage.empty
@@ -1363,13 +1507,21 @@ final class MenuReliabilityTests: HostedAppTestCase {
             notificationSettings: notificationSettings,
             trigger: .manual,
             presentationContext: context,
-            capabilities: ProviderCapabilities([
-                .statusLineIntegration: .available
-            ]),
+            capabilities: capabilities,
             previousUsage: nil,
             currentUsage: ProfileCurrentUsage(
                 providerID: .claude,
                 providerRevision: 0,
+                report:
+                    components.contains(.providerUsage)
+                        ? try! makeUsageReport(
+                            providerID: .claude,
+                            fetchedAt: Date(
+                                timeIntervalSinceReferenceDate:
+                                    2_000
+                            )
+                        )
+                        : nil,
                 claudeUsage:
                     components.contains(.providerUsage)
                         ? usage
@@ -1461,15 +1613,16 @@ final class MenuReliabilityTests: HostedAppTestCase {
     ) -> MenuBarManager.RefreshSideEffectRouter {
         retain(MenuBarManager.RefreshSideEffectRouter(
             hooks: .init(
-                recordClaude: { event, _ in
+                recordNormalized: { event, _ in
                     recorder.append("history:\(event.profileName)")
                 },
+                recordClaude: { _, _ in },
                 writeStatusline: { event, _ in
                     recorder.append(
                         "statusline:\(event.profileName)"
                     )
                 },
-                notify: { event, _ in
+                notifyNormalized: { event, _ in
                     recorder.append(
                         "notify:\(event.profileName):"
                             + "\(event.notificationSettings.enabled):"

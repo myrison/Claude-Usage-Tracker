@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Charts
+import UsageCore
 
 /// Time scale options for charts
 enum ChartTimeScale: Double, CaseIterable {
@@ -25,11 +26,32 @@ enum ChartTimeScale: Double, CaseIterable {
     }
 }
 
+nonisolated struct NormalizedHistorySeriesIdentity:
+    Hashable,
+    Sendable
+{
+    let profileID: UUID
+    let providerID: ProviderID
+    let groupID: UsageLimitGroupID
+    let windowID: UsageWindowID
+}
+
 /// Usage history view showing charts and historical data
 struct UsageHistoryView: View {
-    @StateObject private var profileManager = ProfileManager.shared
+    private let dependencies: ProviderUIDependencies
+    @ObservedObject private var profileManager: ProfileManager
     @State private var historyData: UsageHistoryData = UsageHistoryData()
     @State private var selectedTimeScale: ChartTimeScale = .hours24
+    @State private var selectedWindowKey = "all"
+
+    /// Require the caller's composition root so settings navigation, history,
+    /// capabilities, and export observe the same profile manager.
+    init(dependencies: ProviderUIDependencies) {
+        self.dependencies = dependencies
+        _profileManager = ObservedObject(
+            wrappedValue: dependencies.profileManager
+        )
+    }
 
     var body: some View {
         ScrollView {
@@ -57,16 +79,30 @@ struct UsageHistoryView: View {
                     .frame(width: 110)
                 }
 
-                if let _ = profileManager.activeProfile {
-                    // Combined Usage Chart (session + weekly)
-                    CombinedUsageChart(
-                        sessionSnapshots: historyData.sessionSnapshots,
-                        weeklySnapshots: historyData.weeklySnapshots,
-                        timeScale: $selectedTimeScale
-                    )
+                if let profile = profileManager.activeProfile {
+                    if profile.providerID == .claude {
+                        // Preserve the established Claude history experience.
+                        CombinedUsageChart(
+                            sessionSnapshots:
+                                historyData.sessionSnapshots,
+                            weeklySnapshots:
+                                historyData.weeklySnapshots,
+                            timeScale: $selectedTimeScale
+                        )
+                    } else if normalizedSeries.isEmpty {
+                        emptyChartView
+                    } else {
+                        normalizedHistorySection
+                    }
 
                     // Billing Section
-                    billingSection
+                    if ProviderFeatureSurfacePolicy(
+                        capabilities: dependencies.capabilities(
+                            for: profile.providerID
+                        )
+                    ).supports(.apiBilling) {
+                        billingSection
+                    }
 
                     // Export Button
                     exportSection
@@ -83,8 +119,148 @@ struct UsageHistoryView: View {
             loadHistory()
         }
         .onChange(of: profileManager.activeProfile?.id) {
+            selectedWindowKey = "all"
             loadHistory()
         }
+        .onChange(of: profileManager.activeProfile?.providerID) {
+            selectedWindowKey = "all"
+            loadHistory()
+        }
+    }
+
+    private struct WindowSeries: Identifiable {
+        let key: String
+        let profileID: UUID
+        let providerID: ProviderID
+        let groupID: UsageLimitGroupID
+        let groupName: String?
+        let windowID: UsageWindowID
+        let windowName: String?
+        let snapshots: [NormalizedUsageSnapshot]
+
+        var id: NormalizedHistorySeriesIdentity {
+            NormalizedHistorySeriesIdentity(
+                profileID: profileID,
+                providerID: providerID,
+                groupID: groupID,
+                windowID: windowID
+            )
+        }
+        var title: String {
+            let group = groupName ?? groupID.rawValue
+            let window = windowName ?? windowID.rawValue
+            return "\(group) – \(window)"
+        }
+    }
+
+    private var normalizedSeries: [WindowSeries] {
+        let grouped = Dictionary(
+            grouping: historyData.normalizedSnapshots
+        ) {
+            Self.windowKey(
+                providerID: $0.providerID,
+                groupID: $0.groupID,
+                windowID: $0.windowID
+            )
+        }
+        return grouped.compactMap { key, snapshots in
+            guard let latest = snapshots.max(
+                by: { $0.timestamp < $1.timestamp }
+            ) else {
+                return nil
+            }
+            return WindowSeries(
+                key: key,
+                profileID: latest.profileID,
+                providerID: latest.providerID,
+                groupID: latest.groupID,
+                groupName: latest.groupDisplayName,
+                windowID: latest.windowID,
+                windowName: latest.windowDisplayName,
+                snapshots: snapshots.sorted {
+                    $0.timestamp > $1.timestamp
+                }
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.providerID != rhs.providerID {
+                return lhs.providerID.rawValue
+                    < rhs.providerID.rawValue
+            }
+            if lhs.groupID != rhs.groupID {
+                return lhs.groupID.rawValue
+                    < rhs.groupID.rawValue
+            }
+            return lhs.windowID.rawValue
+                < rhs.windowID.rawValue
+        }
+    }
+
+    private var displayedNormalizedSeries: [WindowSeries] {
+        guard selectedWindowKey != "all" else {
+            return normalizedSeries
+        }
+        return normalizedSeries.filter {
+            $0.key == selectedWindowKey
+        }
+    }
+
+    @ViewBuilder
+    private var normalizedHistorySection: some View {
+        if !normalizedSeries.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label(
+                        ProviderUILocalization.text(
+                            "history.provider_usage",
+                            fallback: "Provider usage"
+                        ),
+                        systemImage: "chart.xyaxis.line"
+                    )
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.secondary)
+                    Spacer()
+                    Picker(
+                        ProviderUILocalization.text(
+                            "history.provider_window_filter",
+                            fallback: "Usage window"
+                        ),
+                        selection: $selectedWindowKey
+                    ) {
+                        Text(
+                            ProviderUILocalization.text(
+                                "history.all_windows",
+                                fallback: "All windows"
+                            )
+                        ).tag("all")
+                        ForEach(normalizedSeries) { series in
+                            Text(series.title).tag(series.key)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 220)
+                }
+
+                ForEach(displayedNormalizedSeries) { series in
+                    NormalizedUsageChart(
+                        title: series.title,
+                        snapshots: series.snapshots,
+                        timeScale: $selectedTimeScale
+                    )
+                }
+            }
+        }
+    }
+
+    private static func windowKey(
+        providerID: ProviderID,
+        groupID: UsageLimitGroupID,
+        windowID: UsageWindowID
+    ) -> String {
+        [providerID.rawValue, groupID.rawValue, windowID.rawValue]
+            .map { "\($0.utf8.count):\($0)" }
+            .joined()
     }
 
     // MARK: - Billing Section
@@ -174,19 +350,24 @@ struct UsageHistoryView: View {
     // MARK: - Actions
 
     private func loadHistory() {
-        guard let profileId = profileManager.activeProfile?.id else {
+        guard let profile = profileManager.activeProfile else {
             historyData = UsageHistoryData()
             return
         }
 
-        historyData = UsageHistoryService.shared.loadHistory(for: profileId)
+        historyData = UsageHistoryService.shared.loadHistory(
+            for: profile.id,
+            providerID: profile.providerID
+        )
     }
 
     private func exportHistory(format: UsageHistoryService.ExportFormat) {
-        guard let profileId = profileManager.activeProfile?.id else { return }
+        guard let profile = profileManager.activeProfile else {
+            return
+        }
 
         UsageHistoryService.shared.exportToFile(
-            for: profileId,
+            profile: profile,
             format: format
         )
     }
@@ -653,6 +834,8 @@ struct CombinedUsageChart: View {
 // MARK: - Previews
 
 #Preview("History View") {
-    UsageHistoryView()
+    UsageHistoryView(
+        dependencies: ProviderUICompositionRoot.shared.dependencies
+    )
         .frame(width: 520, height: 700)
 }
