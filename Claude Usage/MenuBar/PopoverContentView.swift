@@ -60,15 +60,6 @@ struct PopoverNavigationActions {
     let preferences: () -> Void
 }
 
-enum PopoverShell: Equatable {
-    case claudeLegacy
-    case normalized
-
-    static func resolve(providerID: ProviderID) -> PopoverShell {
-        providerID == .claude ? .claudeLegacy : .normalized
-    }
-}
-
 enum LegacyPopoverBanner: Equatable {
     enum Action: Equatable {
         case preferences
@@ -85,6 +76,23 @@ enum LegacyPopoverBanner: Equatable {
             return .preferences
         case .refreshFailed, .stale:
             return .refresh
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .credentialError:
+            return "popover.banner.credentials_expired".localized
+        case .refreshFailed(let count):
+            return String(
+                format: "popover.banner.refresh_failed".localized,
+                count
+            )
+        case .stale(let minutesAgo):
+            return String(
+                format: "popover.banner.updated_ago".localized,
+                minutesAgo
+            )
         }
     }
 
@@ -114,13 +122,79 @@ enum LegacyPopoverBanner: Equatable {
     }
 }
 
+/// Diagnostic detail shown when a refresh-failure or stale banner expands.
+/// A pure resolver (mirroring `LegacyPopoverBanner` itself) so "does the
+/// chevron actually produce useful content" stays unit-testable without
+/// driving SwiftUI: every notice with a disclosure affordance must resolve
+/// to real text, never an empty or purely decorative expansion.
+enum LegacyPopoverBannerDetail: Equatable {
+    /// Reuses the same provider-neutral vocabulary as the normalized notice
+    /// list (`NormalizedUsagePresentationBuilder`) rather than inventing
+    /// Claude-specific copy, since the failure kinds themselves are
+    /// provider-neutral.
+    static func explanationLocalization(
+        for failureKind: ProviderRefreshFailureKind?
+    ) -> (key: String, default: String) {
+        switch failureKind {
+        case .unauthenticated:
+            return (
+                "popover.normalized.notice.unauthenticated",
+                "Sign in again to refresh usage."
+            )
+        case .unsupportedAccount:
+            return (
+                "popover.normalized.notice.unsupported_account",
+                "This account does not expose subscription usage."
+            )
+        case .disabled, .unlinked, .dependencyMissing,
+             .invalidConfiguration:
+            return (
+                "popover.normalized.notice.configuration",
+                "This profile needs attention before it can refresh."
+            )
+        case .transport, .protocolMismatch, .malformedResponse,
+             .timedOut, .persistence, .unknown, nil:
+            return (
+                "popover.normalized.notice.refresh_failed",
+                "The latest refresh failed; showing cached usage."
+            )
+        }
+    }
+
+    static func explanation(
+        for failureKind: ProviderRefreshFailureKind?
+    ) -> String {
+        let localization = explanationLocalization(for: failureKind)
+        return NormalizedUsageStrings.localized(
+            localization.key,
+            default: localization.default
+        )
+    }
+
+    static func lastSuccessText(
+        _ date: Date?,
+        formatted: (Date) -> String
+    ) -> String {
+        guard let date else {
+            return NormalizedUsageStrings.localized(
+                "popover.banner.never_succeeded",
+                default: "No successful refresh yet."
+            )
+        }
+        return NormalizedUsageStrings.formatted(
+            "popover.banner.last_success",
+            default: "Last successful refresh: %@",
+            arguments: [formatted(date)]
+        )
+    }
+}
+
 struct PopoverContentView: View {
     @ObservedObject var manager: MenuBarManager
     let onRefresh: () -> Void
     let navigationActions: PopoverNavigationActions
 
     @State private var isRefreshing = false
-    @State private var showInsights = false
     // Replaces NSPopover's native resize animation, which can recurse indefinitely
     // on macOS 26/27 when preferredContentSize drives the hosting controller.
     @State private var appeared = false
@@ -174,23 +248,6 @@ struct PopoverContentView: View {
 
     private var timeDisplay: PopoverTimeDisplay {
         SharedDataStore.shared.loadPopoverTimeDisplay()
-    }
-
-    private var legacyDisplayUsage: ClaudeUsage {
-        MenuBarManager.popoverUsage(
-            clickedProfileID: manager.clickedProfileId,
-            clickedProfileUsage: manager.clickedProfileUsage,
-            activeProfileUsage: manager.usage
-        )
-    }
-
-    private var legacyDisplayAPIUsage: APIUsage? {
-        MenuBarManager.popoverAPIUsage(
-            clickedProfileID: manager.clickedProfileId,
-            clickedProfileAPIUsage:
-                manager.clickedProfileAPIUsage,
-            activeProfileAPIUsage: manager.apiUsage
-        )
     }
 
     private func presentation(
@@ -267,71 +324,56 @@ struct PopoverContentView: View {
         presentation: NormalizedUsagePresentation,
         now: Date
     ) -> some View {
-        switch PopoverShell.resolve(
-            providerID: presentation.providerID
-        ) {
-        case .claudeLegacy:
-            SmartHeader(
-                profileManager: profileManager,
-                usage: legacyDisplayUsage,
-                status: manager.status,
-                isRefreshing: isRefreshing,
-                onRefresh: triggerRefresh,
-                onManageProfiles:
-                    navigationActions.manageProfiles,
-                onPreferences:
-                    navigationActions.preferences,
-                clickedProfileId: manager.clickedProfileId
+        ProviderPopoverHeader(
+            profileManager: profileManager,
+            presentation: presentation,
+            claudeStatus: manager.status,
+            isRefreshing: isRefreshing
+                || presentation.notices.contains {
+                    $0.kind == .loading
+                },
+            onRefresh: triggerRefresh,
+            onManageProfiles:
+                navigationActions.manageProfiles,
+            onPreferences:
+                navigationActions.preferences
+        )
+
+        PopoverDivider()
+
+        let resolvedBanner: LegacyPopoverBanner? =
+            presentation.providerID == .claude
+            ? LegacyPopoverBanner.resolve(
+                hasCredentialError: manager.hasCredentialError,
+                consecutiveRefreshFailures:
+                    manager.consecutiveRefreshFailures,
+                lastSuccessfulRefreshTime:
+                    manager.lastSuccessfulRefreshTime,
+                now: now
             )
+            : nil
 
-            PopoverDivider()
-            legacyBanner(now: now)
-            legacyProfileTag()
-
-            SmartUsageDashboard(
-                usage: legacyDisplayUsage,
-                apiUsage: legacyDisplayAPIUsage,
-                displayPreferences: displayPreferences
-            )
-
-            if showInsights {
-                PopoverDivider()
-                ContextualInsights(usage: legacyDisplayUsage)
-                    .transition(.opacity)
-            }
-        case .normalized:
-            ProviderPopoverHeader(
-                profileManager: profileManager,
-                presentation: presentation,
-                claudeStatus: manager.status,
-                isRefreshing: isRefreshing
-                    || presentation.notices.contains {
-                        $0.kind == .loading
-                    },
-                onRefresh: triggerRefresh,
-                onManageProfiles:
-                    navigationActions.manageProfiles,
-                onPreferences:
-                    navigationActions.preferences
-            )
-
-            PopoverDivider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    normalizedProfileTag(
-                        presentation: presentation
-                    )
-                    NormalizedUsageView(
-                        presentation: presentation,
-                        displayPreferences: displayPreferences,
-                        timeDisplay: timeDisplay,
-                        now: now
-                    )
-                }
-            }
-            .frame(maxHeight: 520)
+        if presentation.providerID == .claude {
+            claudeBanner(resolvedBanner: resolvedBanner)
         }
+
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                normalizedProfileTag(
+                    presentation: presentation
+                )
+                NormalizedUsageView(
+                    presentation: presentation
+                        .filteringOutNoticesShownByClaudeBanner(
+                            matching: resolvedBanner
+                        ),
+                    displayPreferences: displayPreferences,
+                    timeDisplay: timeDisplay,
+                    now: now
+                )
+            }
+        }
+        .frame(maxHeight: 520)
     }
 
     private func triggerRefresh() {
@@ -347,15 +389,10 @@ struct PopoverContentView: View {
     }
 
     @ViewBuilder
-    private func legacyBanner(now: Date) -> some View {
-        if let banner = LegacyPopoverBanner.resolve(
-            hasCredentialError: manager.hasCredentialError,
-            consecutiveRefreshFailures:
-                manager.consecutiveRefreshFailures,
-            lastSuccessfulRefreshTime:
-                manager.lastSuccessfulRefreshTime,
-            now: now
-        ) {
+    private func claudeBanner(
+        resolvedBanner: LegacyPopoverBanner?
+    ) -> some View {
+        if let banner = resolvedBanner {
             switch banner {
             case .credentialError:
                 StatusBannerView(
@@ -365,60 +402,35 @@ struct PopoverContentView: View {
                     color: .orange,
                     onTap: navigationActions.preferences
                 )
-            case .refreshFailed(let count):
-                StatusBannerView(
+            case .refreshFailed:
+                ExpandableStatusBanner(
                     icon: "arrow.clockwise.circle.fill",
-                    message: String(
-                        format:
-                            "popover.banner.refresh_failed".localized,
-                        count
+                    message: banner.message,
+                    detail: LegacyPopoverBannerDetail.explanation(
+                        for: manager.lastRefreshFailureKind
                     ),
+                    lastSuccessText:
+                        LegacyPopoverBannerDetail.lastSuccessText(
+                            manager.lastSuccessfulRefreshTime,
+                            formatted: Self.absoluteTimeText
+                        ),
                     color: .yellow,
-                    onTap: onRefresh
+                    onRetry: onRefresh
                 )
-            case .stale(let minutesAgo):
-                StatusBannerView(
+            case .stale:
+                ExpandableStatusBanner(
                     icon: "clock.fill",
-                    message: String(
-                        format:
-                            "popover.banner.updated_ago".localized,
-                        minutesAgo
-                    ),
+                    message: banner.message,
+                    detail: nil,
+                    lastSuccessText:
+                        LegacyPopoverBannerDetail.lastSuccessText(
+                            manager.lastSuccessfulRefreshTime,
+                            formatted: Self.absoluteTimeText
+                        ),
                     color: .orange,
-                    onTap: onRefresh
+                    onRetry: onRefresh
                 )
             }
-        }
-    }
-
-    @ViewBuilder
-    private func legacyProfileTag() -> some View {
-        if profileManager.displayMode == .multi,
-           let viewingProfile = displayedProfile {
-            HStack(spacing: 8) {
-                profileAvatar(for: viewingProfile)
-
-                Text(viewingProfile.name)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-
-                Spacer()
-                activeBadge(for: viewingProfile)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.primary.opacity(0.03))
-            )
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier(
-                "popover.profile."
-                    + viewingProfile.id.uuidString
-            )
         }
     }
 
@@ -496,6 +508,17 @@ struct PopoverContentView: View {
                     .fill(Color.accentColor.opacity(0.12))
             )
         }
+    }
+
+    private static let absoluteTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private static func absoluteTimeText(_ date: Date) -> String {
+        absoluteTimeFormatter.string(from: date)
     }
 
     private static let unavailableProfileID = UUID(
@@ -728,122 +751,6 @@ private struct ProviderProfileMenuRow: View {
     }
 }
 
-// MARK: - Smart Header Component
-struct SmartHeader: View {
-    static let claudeStatusURL = URL(
-        string: "https://status.claude.com"
-    )!
-
-    @ObservedObject private var profileManager: ProfileManager
-    let usage: ClaudeUsage
-    let status: ClaudeStatus
-    let isRefreshing: Bool
-    let onRefresh: () -> Void
-    let onManageProfiles: () -> Void
-    let onPreferences: () -> Void
-    var clickedProfileId: UUID? = nil
-
-    init(
-        profileManager: ProfileManager,
-        usage: ClaudeUsage,
-        status: ClaudeStatus,
-        isRefreshing: Bool,
-        onRefresh: @escaping () -> Void,
-        onManageProfiles: @escaping () -> Void,
-        onPreferences: @escaping () -> Void,
-        clickedProfileId: UUID? = nil
-    ) {
-        _profileManager = ObservedObject(
-            wrappedValue: profileManager
-        )
-        self.usage = usage
-        self.status = status
-        self.isRefreshing = isRefreshing
-        self.onRefresh = onRefresh
-        self.onManageProfiles = onManageProfiles
-        self.onPreferences = onPreferences
-        self.clickedProfileId = clickedProfileId
-    }
-
-    private var statusColor: Color {
-        switch status.indicator.color {
-        case .green: return .adaptiveGreen
-        case .yellow: return .yellow
-        case .orange: return .orange
-        case .red: return .red
-        case .gray: return .gray
-        }
-    }
-
-    private var isMultiProfileMode: Bool {
-        profileManager.displayMode == .multi
-    }
-
-    private var clickedProfile: Profile? {
-        guard let id = clickedProfileId else { return nil }
-        return profileManager.profiles.first { $0.id == id }
-    }
-
-    private func profileInitials(for name: String) -> String {
-        let words = name.split(separator: " ")
-        if words.count >= 2 {
-            return String(words[0].prefix(1) + words[1].prefix(1)).uppercased()
-        } else if let first = words.first {
-            return String(first.prefix(2)).uppercased()
-        }
-        return "?"
-    }
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                ProfileSwitcherCompact(
-                    profileManager: profileManager,
-                    onManageProfiles: onManageProfiles
-                )
-
-                // Status
-                Button(action: {
-                    NSWorkspace.shared.open(Self.claudeStatusURL)
-                }) {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(statusColor)
-                            .frame(width: 6, height: 6)
-
-                        Text(status.description)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .buttonStyle(.plain)
-                .help("Click to open status.claude.com")
-            }
-
-            Spacer()
-
-            HStack(alignment: .center, spacing: 2) {
-                // Refresh
-                HeaderIconButton(
-                    icon: "arrow.clockwise",
-                    isRefreshing: isRefreshing,
-                    action: onRefresh
-                )
-                .disabled(isRefreshing)
-
-                // Settings
-                HeaderIconButton(
-                    icon: "gearshape.fill",
-                    fontSize: 12,
-                    action: onPreferences
-                )
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-    }
-}
-
 // MARK: - Header Icon Button
 struct HeaderIconButton: View {
     let icon: String
@@ -873,495 +780,6 @@ struct HeaderIconButton: View {
                     .fill(isHovered ? Color.primary.opacity(0.08) : Color.clear)
             )
             .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
-            }
-        }
-    }
-}
-
-// MARK: - Smart Usage Dashboard
-struct SmartUsageDashboard: View {
-    let usage: ClaudeUsage
-    let apiUsage: APIUsage?
-    var displayPreferences: NormalizedUsageDisplayPreferences? = nil
-    @StateObject private var profileManager = ProfileManager.shared
-
-    private var showRemainingPercentage: Bool {
-        if let displayPreferences {
-            return displayPreferences.showRemainingPercentage
-        }
-        if profileManager.displayMode == .multi {
-            return profileManager.multiProfileConfig.showRemainingPercentage
-        }
-        return profileManager.activeProfile?.iconConfig.showRemainingPercentage ?? false
-    }
-
-    private var showTimeMarker: Bool {
-        if let displayPreferences {
-            return displayPreferences.showTimeMarker
-        }
-        if profileManager.displayMode == .multi {
-            return profileManager.multiProfileConfig.showTimeMarker
-        }
-        return profileManager.activeProfile?.iconConfig.showTimeMarker ?? true
-    }
-
-    private var usePaceColoring: Bool {
-        if let displayPreferences {
-            return displayPreferences.usePaceColoring
-        }
-        if profileManager.displayMode == .multi {
-            return profileManager.multiProfileConfig.usePaceColoring
-        }
-        return profileManager.activeProfile?.iconConfig.usePaceColoring ?? true
-    }
-
-    private var showPaceMarker: Bool {
-        if let displayPreferences {
-            return displayPreferences.showPaceMarker
-        }
-        if profileManager.displayMode == .multi {
-            return profileManager.multiProfileConfig.showPaceMarker
-        }
-        return profileManager.activeProfile?.iconConfig.showPaceMarker ?? true
-    }
-
-    private var timeDisplay: PopoverTimeDisplay {
-        SharedDataStore.shared.loadPopoverTimeDisplay()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Primary: Session Usage
-            UsageRow(
-                title: "menubar.session_usage".localized,
-                subtitle: "menubar.5_hour_window".localized,
-                usedPercentage: usage.effectiveSessionPercentage,
-                showRemaining: showRemainingPercentage,
-                resetTime: usage.sessionResetTime,
-                periodDuration: Constants.sessionWindow,
-                showTimeMarker: showTimeMarker,
-                showPaceMarker: showPaceMarker,
-                usePaceColoring: usePaceColoring,
-                timeDisplay: timeDisplay
-            )
-
-            // All Models (Weekly)
-            UsageRow(
-                title: "menubar.all_models".localized,
-                tag: "menubar.weekly".localized,
-                subtitle: nil,
-                usedPercentage: usage.weeklyPercentage,
-                showRemaining: showRemainingPercentage,
-                resetTime: usage.weeklyResetTime,
-                periodDuration: Constants.weeklyWindow,
-                showTimeMarker: showTimeMarker,
-                showPaceMarker: showPaceMarker,
-                usePaceColoring: usePaceColoring,
-                timeDisplay: timeDisplay
-            )
-
-            if usage.opusWeeklyTokensUsed > 0 {
-                UsageRow(
-                    title: "menubar.opus_usage".localized,
-                    tag: "menubar.weekly".localized,
-                    subtitle: nil,
-                    usedPercentage: usage.opusWeeklyPercentage,
-                    showRemaining: showRemainingPercentage,
-                    resetTime: nil,
-                    periodDuration: nil
-                )
-            }
-
-            if usage.sonnetWeeklyTokensUsed > 0 {
-                UsageRow(
-                    title: "menubar.sonnet_usage".localized,
-                    subtitle: nil,
-                    usedPercentage: usage.sonnetWeeklyPercentage,
-                    showRemaining: showRemainingPercentage,
-                    resetTime: usage.sonnetWeeklyResetTime,
-                    periodDuration: nil,
-                    timeDisplay: timeDisplay
-                )
-            }
-
-            if usage.fableWeeklyLimitAvailable {
-                UsageRow(
-                    title: "menubar.fable_usage".localized,
-                    subtitle: nil,
-                    usedPercentage: usage.fableWeeklyPercentage,
-                    showRemaining: showRemainingPercentage,
-                    resetTime: usage.fableWeeklyResetTime,
-                    periodDuration: nil,
-                    timeDisplay: timeDisplay
-                )
-            }
-
-            // Extra usage (cost-based)
-            if let used = usage.costUsed, let limit = usage.costLimit, let currency = usage.costCurrency, limit > 0 {
-                let usedPercentage = (used / limit) * 100.0
-                UsageRow(
-                    title: "menubar.extra_usage".localized,
-                    subtitle: String(format: "%.2f / %.2f %@", used / 100.0, limit / 100.0, currency),
-                    usedPercentage: usedPercentage,
-                    showRemaining: showRemainingPercentage,
-                    resetTime: nil,
-                    periodDuration: nil
-                )
-
-                // Overage credit grant balance
-                if let balance = usage.overageBalance, let balanceCurrency = usage.overageBalanceCurrency {
-                    HStack {
-                        Text("popover.overage_balance".localized)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text(String(format: "%.2f %@", balance / 100.0, balanceCurrency.uppercased()))
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundColor(.adaptiveGreen)
-                    }
-                }
-            }
-
-            // API Usage
-            if let apiUsage = apiUsage {
-                APIUsageCard(apiUsage: apiUsage, showRemaining: showRemainingPercentage, timeDisplay: timeDisplay)
-
-                // API Cost Card (only if cost data is available)
-                if let costCents = apiUsage.apiTokenCostCents, costCents > 0 {
-                    APICostCard(apiUsage: apiUsage)
-                }
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-    }
-}
-
-// MARK: - Usage Row (flat, native style)
-struct UsageRow: View {
-    let title: String
-    var tag: String? = nil
-    let subtitle: String?
-    let usedPercentage: Double
-    let showRemaining: Bool
-    let resetTime: Date?
-    let periodDuration: TimeInterval?
-    var showTimeMarker: Bool = true
-    var showPaceMarker: Bool = true
-    var usePaceColoring: Bool = true
-    var timeDisplay: PopoverTimeDisplay = .resetTime
-
-    private var displayPercentage: Double {
-        UsageStatusCalculator.getDisplayPercentage(
-            usedPercentage: usedPercentage,
-            showRemaining: showRemaining
-        )
-    }
-
-    private var rawElapsedFraction: Double? {
-        UsageStatusCalculator.elapsedFraction(
-            resetTime: resetTime,
-            duration: periodDuration ?? 0,
-            showRemaining: false
-        )
-    }
-
-    private var timeMarkerFraction: CGFloat? {
-        guard showTimeMarker, let f = rawElapsedFraction else { return nil }
-        return CGFloat(showRemaining ? 1.0 - f : f)
-    }
-
-    private var paceStatus: PaceStatus? {
-        guard showPaceMarker, let elapsed = rawElapsedFraction else { return nil }
-        return PaceStatus.calculate(usedPercentage: usedPercentage, elapsedFraction: elapsed)
-    }
-
-    private var timeMarkerColor: Color {
-        if let pace = paceStatus {
-            return pace.swiftUIColor
-        }
-        return Color(nsColor: .labelColor)
-    }
-
-    private var statusLevel: UsageStatusLevel {
-        UsageStatusCalculator.calculateStatus(
-            usedPercentage: usedPercentage,
-            showRemaining: showRemaining,
-            elapsedFraction: usePaceColoring ? rawElapsedFraction : nil
-        )
-    }
-
-    private var statusColor: Color {
-        switch statusLevel {
-        case .safe: return .adaptiveGreen
-        case .moderate: return .orange
-        case .critical: return .red
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            // Title row with percentage
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 5) {
-                        Text(title)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.primary)
-
-                        if let tag = tag {
-                            Text(tag)
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(.secondary)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(
-                                    Capsule()
-                                        .fill(Color.primary.opacity(0.08))
-                                )
-                        }
-                    }
-
-                    if let subtitle = subtitle {
-                        Text(subtitle)
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                Spacer()
-
-                Text("\(Int(displayPercentage))%")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundColor(statusColor)
-            }
-
-            // Progress bar
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 2.5)
-                        .fill(Color.primary.opacity(0.08))
-
-                    RoundedRectangle(cornerRadius: 2.5)
-                        .fill(statusColor)
-                        .frame(width: geometry.size.width * min(displayPercentage / 100.0, 1.0))
-                        .animation(.easeInOut(duration: 0.6), value: displayPercentage)
-                }
-                .overlay(alignment: .leading) {
-                    if let fraction = timeMarkerFraction {
-                        RoundedRectangle(cornerRadius: 1)
-                            .fill(timeMarkerColor)
-                            .frame(width: 2.5, height: 8)
-                            .offset(x: round(geometry.size.width * fraction) - 0.75)
-                    }
-                }
-            }
-            .frame(height: 4)
-
-            // Reset time
-            if let reset = resetTime {
-                Text(resetTimeText(for: reset))
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondary)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
-        )
-    }
-
-    private func resetTimeText(for reset: Date) -> String {
-        switch timeDisplay {
-        case .resetTime:
-            return "menubar.resets_time".localized(with: reset.resetTimeString())
-        case .remainingTime:
-            return "menubar.resets_in".localized(with: reset.timeRemainingString())
-        case .both:
-            return "menubar.resets_both".localized(with: reset.timeRemainingString(), reset.resetTimeString())
-        }
-    }
-}
-
-// MARK: - Contextual Insights
-struct ContextualInsights: View {
-    let usage: ClaudeUsage
-
-    private var insights: [Insight] {
-        var result: [Insight] = []
-
-        if usage.effectiveSessionPercentage > 80 {
-            result.append(Insight(
-                icon: "exclamationmark.triangle.fill",
-                color: .orange,
-                title: "usage.high_session".localized,
-                description: "usage.high_session.desc".localized
-            ))
-        }
-
-        if usage.weeklyPercentage > 90 {
-            result.append(Insight(
-                icon: "clock.fill",
-                color: .red,
-                title: "usage.weekly_approaching".localized,
-                description: "usage.weekly_approaching.desc".localized
-            ))
-        }
-
-        if usage.effectiveSessionPercentage < 20 && usage.weeklyPercentage < 30 {
-            result.append(Insight(
-                icon: "checkmark.circle.fill",
-                color: .adaptiveGreen,
-                title: "usage.efficient".localized,
-                description: "usage.efficient.desc".localized
-            ))
-        }
-
-        return result
-    }
-
-    var body: some View {
-        VStack(spacing: 2) {
-            ForEach(insights, id: \.title) { insight in
-                HStack(spacing: 8) {
-                    Image(systemName: insight.icon)
-                        .font(.system(size: 11))
-                        .foregroundColor(insight.color)
-                        .frame(width: 16)
-
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(insight.title)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.primary)
-
-                        Text(insight.description)
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                            .lineLimit(2)
-                    }
-
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-struct Insight {
-    let icon: String
-    let color: Color
-    let title: String
-    let description: String
-}
-
-// MARK: - Smart Footer
-struct SmartFooter: View {
-    let usage: ClaudeUsage
-    let status: ClaudeStatus
-    @Binding var showInsights: Bool
-    let onPreferences: () -> Void
-
-    var body: some View {
-        HStack {
-            Spacer()
-            SmartActionButton(
-                icon: "gearshape.fill",
-                title: "common.settings".localized,
-                action: onPreferences
-            )
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-    }
-}
-
-// MARK: - Claude Status Row
-struct ClaudeStatusRow: View {
-    let status: ClaudeStatus
-    @State private var isHovered = false
-
-    private var statusColor: Color {
-        switch status.indicator.color {
-        case .green: return .adaptiveGreen
-        case .yellow: return .yellow
-        case .orange: return .orange
-        case .red: return .red
-        case .gray: return .gray
-        }
-    }
-
-    var body: some View {
-        Button(action: {
-            if let url = URL(string: "https://status.claude.com") {
-                NSWorkspace.shared.open(url)
-            }
-        }) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 8, height: 8)
-
-                Text(status.description)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-
-                Spacer()
-
-                Image(systemName: "arrow.up.right")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(isHovered ? Color.accentColor.opacity(0.1) : Color.clear)
-            )
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.1)) {
-                isHovered = hovering
-            }
-        }
-        .help("Click to open status.claude.com")
-    }
-}
-
-// MARK: - Smart Action Button (kept for backward compatibility)
-struct SmartActionButton: View {
-    let icon: String
-    let title: String
-    var isDestructive: Bool = false
-    let action: () -> Void
-
-    @State private var isHovered = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 10, weight: .medium))
-                    .frame(width: 12)
-
-                Text(title)
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .foregroundColor(isDestructive ? .red : (isHovered ? .primary : .secondary))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -1725,6 +1143,133 @@ struct StatusBannerView: View {
         .cornerRadius(6)
         .padding(.horizontal, 10)
         .padding(.top, 4)
+        // Without an explicit hit-testing shape, `onTapGesture` only
+        // registers over the row's rendered content (icon/text), not the
+        // `Spacer()` that fills most of the row — including the area right
+        // under the chevron the layout draws to invite a tap. That made the
+        // affordance look dead even though the closure was reachable.
+        .contentShape(Rectangle())
         .onTapGesture { onTap?() }
+    }
+}
+
+// MARK: - Expandable Status Banner
+
+/// A status banner whose chevron toggles an in-place disclosure instead of
+/// silently firing an action: tapping the row only ever reveals real detail
+/// (and, when relevant, a last-successful-refresh time), and the visible
+/// "Retry" button is the only thing that re-triggers a refresh. This keeps
+/// the chevron affordance honest — it never implies detail that isn't there.
+struct ExpandableStatusBanner: View {
+    let icon: String
+    let message: String
+    /// Root-cause explanation for the failure, if any. `nil` for banners
+    /// (like staleness) that have no distinct cause beyond time passing.
+    let detail: String?
+    let lastSuccessText: String
+    let color: Color
+    let onRetry: () -> Void
+
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            }) {
+                HStack(spacing: 8) {
+                    Image(systemName: icon)
+                        .font(.system(size: 11))
+                        .foregroundColor(color)
+                    Text(message)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("popover.banner.disclosure")
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let detail {
+                        Text(detail)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text(lastSuccessText)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+
+                    Button(action: onRetry) {
+                        Text("common.refresh".localized)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 2)
+                    .accessibilityIdentifier("popover.banner.retry")
+                }
+                .padding(.leading, 19)
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(color.opacity(0.12))
+        .cornerRadius(6)
+        .padding(.horizontal, 10)
+        .padding(.top, 4)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+extension NormalizedUsagePresentation {
+    /// Claude renders its own credential-error and refresh-failure
+    /// banners via `claudeBanner(resolvedBanner:)`. Strip only the
+    /// notice kind that corresponds to the banner actually resolved
+    /// for the current state, so the same problem isn't shown twice
+    /// in the popover — but nothing is silently dropped when no
+    /// banner is being rendered (e.g. fewer than 3 consecutive
+    /// refresh failures).
+    fileprivate func filteringOutNoticesShownByClaudeBanner(
+        matching resolvedBanner: LegacyPopoverBanner?
+    ) -> NormalizedUsagePresentation {
+        guard let resolvedBanner else { return self }
+        let kindToStrip: NormalizedUsageNotice.Kind
+        switch resolvedBanner {
+        case .credentialError:
+            kindToStrip = .unauthenticated
+        case .refreshFailed:
+            kindToStrip = .refreshFailed
+        case .stale:
+            kindToStrip = .stale
+        }
+        return NormalizedUsagePresentation(
+            profileID: profileID,
+            profileName: profileName,
+            providerID: providerID,
+            providerName: providerName,
+            accountName: accountName,
+            planName: planName,
+            organizationName: organizationName,
+            healthStatus: healthStatus,
+            groups: groups,
+            summary: summary,
+            credits: credits,
+            notices: notices.filter { $0.kind != kindToStrip },
+            emptyState: emptyState,
+            legacyClaudeUsage: legacyClaudeUsage,
+            legacyClaudeAPIUsage: legacyClaudeAPIUsage
+        )
     }
 }
