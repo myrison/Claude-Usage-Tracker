@@ -5,11 +5,66 @@
 //  Created by Claude on 2026-01-29.
 //
 
-import SwiftUI
+import AppKit
 import Combine
+import SwiftUI
+import UsageCore
+
+struct ProviderDiagnosticRequestIdentity: Hashable {
+    let profileID: UUID?
+    let providerRevision: UInt64?
+
+    init(profile: Profile?) {
+        profileID = profile?.id
+        providerRevision = profile?.providerRevision
+    }
+}
+
+@MainActor
+final class ProviderDiagnosticsPresentationModel: ObservableObject {
+    typealias Snapshotter =
+        @MainActor (Profile?) async -> ProviderDiagnosticSnapshot
+
+    @Published private(set) var snapshot:
+        ProviderDiagnosticSnapshot?
+    @Published private(set) var isRefreshing = false
+
+    private let snapshotter: Snapshotter
+    private var latestRequestGeneration: UUID?
+
+    init(
+        snapshotter: @escaping Snapshotter = {
+            await ProviderDiagnosticsService.shared.snapshot(for: $0)
+        }
+    ) {
+        self.snapshotter = snapshotter
+    }
+
+    func refresh(for profile: Profile?) async {
+        let generation = UUID()
+        latestRequestGeneration = generation
+        snapshot = nil
+        isRefreshing = true
+        defer {
+            if latestRequestGeneration == generation {
+                isRefreshing = false
+            }
+        }
+
+        let candidate = await snapshotter(profile)
+        guard !Task.isCancelled,
+              latestRequestGeneration == generation else {
+            return
+        }
+        snapshot = candidate
+    }
+}
 
 struct DebugNetworkLogView: View {
     @StateObject private var loggerService = NetworkLoggerService.shared
+    @StateObject private var profileManager = ProfileManager.shared
+    @StateObject private var diagnostics =
+        ProviderDiagnosticsPresentationModel()
     @State private var selectedDuration: LoggingDuration = .fifteenMinutes
     @State private var selectedLog: NetworkRequestLog?
     @State private var showClearConfirmation = false
@@ -26,12 +81,31 @@ struct DebugNetworkLogView: View {
                     subtitle: "debug.subtitle".localized
                 )
 
+                ProviderDiagnosticsCard(
+                    snapshot: diagnostics.snapshot,
+                    isRefreshing: diagnostics.isRefreshing,
+                    onRefresh: {
+                        let profile = profileManager.activeProfile
+                        Task {
+                            await diagnostics.refresh(for: profile)
+                        }
+                    },
+                    onCopy: copyDiagnostics
+                )
+
                 // Controls Card
                 SettingsSectionCard(
                     title: "debug.network_logger".localized,
                     subtitle: "debug.network_logger_desc".localized
                 ) {
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.cardPadding) {
+                        if loggerService.storageFailure
+                            == .unsafeLegacyCaptureRetained {
+                            unsafeLegacyCaptureWarning
+
+                            Divider()
+                        }
+
                         // Duration Picker
                         VStack(alignment: .leading, spacing: DesignTokens.Spacing.small) {
                             Text("debug.logging_duration".localized)
@@ -43,7 +117,10 @@ struct DebugNetworkLogView: View {
                                 }
                             }
                             .pickerStyle(.segmented)
-                            .disabled(loggerService.session.isActive)
+                            .disabled(
+                                loggerService.session.isActive
+                                    || loggerService.storageFailure != nil
+                            )
                         }
 
                         Divider()
@@ -88,6 +165,9 @@ struct DebugNetworkLogView: View {
                                 ) {
                                     loggerService.stopLogging()
                                 }
+                                .disabled(
+                                    loggerService.storageFailure != nil
+                                )
                             } else {
                                 SettingsButton(
                                     title: "debug.start_logging".localized,
@@ -96,6 +176,9 @@ struct DebugNetworkLogView: View {
                                 ) {
                                     loggerService.startLogging(duration: selectedDuration.rawValue)
                                 }
+                                .disabled(
+                                    loggerService.storageFailure != nil
+                                )
                             }
 
                             SettingsButton(
@@ -104,7 +187,10 @@ struct DebugNetworkLogView: View {
                             ) {
                                 showClearConfirmation = true
                             }
-                            .disabled(loggerService.session.logs.isEmpty)
+                            .disabled(
+                                loggerService.session.logs.isEmpty
+                                    || loggerService.storageFailure != nil
+                            )
                         }
                     }
                 }
@@ -122,7 +208,21 @@ struct DebugNetworkLogView: View {
                     title: "debug.captured_requests".localized,
                     subtitle: String(format: "debug.requests_logged".localized, loggerService.session.logs.count)
                 ) {
-                    if loggerService.session.logs.isEmpty {
+                    if loggerService.storageFailure
+                        == .unsafeLegacyCaptureRetained {
+                        Text(
+                            ProviderUILocalization.text(
+                                "diagnostics.network_logs.cleanup_required",
+                                fallback:
+                                    "Network logs are unavailable until "
+                                    + "secure cleanup succeeds."
+                            )
+                        )
+                            .font(DesignTokens.Typography.body)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, DesignTokens.Spacing.cardPadding)
+                    } else if loggerService.session.logs.isEmpty {
                         Text("debug.no_requests".localized)
                             .font(DesignTokens.Typography.body)
                             .foregroundColor(.secondary)
@@ -153,6 +253,14 @@ struct DebugNetworkLogView: View {
         .onReceive(timer) { _ in
             currentTime = Date()
         }
+        .task(
+            id: ProviderDiagnosticRequestIdentity(
+                profile: profileManager.activeProfile
+            )
+        ) {
+            let profile = profileManager.activeProfile
+            await diagnostics.refresh(for: profile)
+        }
     }
 
     private func formatTimeRemaining(_ seconds: TimeInterval) -> String {
@@ -164,6 +272,244 @@ struct DebugNetworkLogView: View {
         } else {
             return "\(secs)s"
         }
+    }
+
+    private var unsafeLegacyCaptureWarning: some View {
+        VStack(
+            alignment: .leading,
+            spacing: DesignTokens.Spacing.small
+        ) {
+            HStack(
+                alignment: .top,
+                spacing: DesignTokens.Spacing.iconText
+            ) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.red)
+
+                VStack(
+                    alignment: .leading,
+                    spacing: DesignTokens.Spacing.extraSmall
+                ) {
+                    Text(
+                        ProviderUILocalization.text(
+                            "diagnostics.network_logs.cleanup_title",
+                            fallback: "Secure Cleanup Required"
+                        )
+                    )
+                    .font(DesignTokens.Typography.bodyMedium)
+                    .foregroundColor(.red)
+
+                    Text(
+                        ProviderUILocalization.text(
+                            "diagnostics.network_logs.cleanup_message",
+                            fallback:
+                                "A legacy network capture may contain "
+                                + "credentials and could not be safely "
+                                + "removed. Network logging is blocked "
+                                + "until cleanup succeeds."
+                        )
+                    )
+                    .font(DesignTokens.Typography.body)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            SettingsButton(
+                title: ProviderUILocalization.text(
+                    "diagnostics.network_logs.retry_cleanup",
+                    fallback: "Retry Secure Cleanup"
+                ),
+                icon: "arrow.clockwise",
+                style: .destructive
+            ) {
+                loggerService.retryUnsafeLegacyCaptureCleanup()
+            }
+        }
+        .padding(DesignTokens.Spacing.iconText)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.red.opacity(0.08))
+        .cornerRadius(DesignTokens.Radius.small)
+    }
+
+    private func copyDiagnostics() {
+        guard let diagnosticSnapshot = diagnostics.snapshot else {
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(
+            diagnosticSnapshot.supportText,
+            forType: .string
+        )
+    }
+}
+
+// MARK: - Safe Provider Diagnostics
+
+private struct ProviderDiagnosticsCard: View {
+    let snapshot: ProviderDiagnosticSnapshot?
+    let isRefreshing: Bool
+    let onRefresh: () -> Void
+    let onCopy: () -> Void
+
+    var body: some View {
+        SettingsSectionCard(
+            title: text(
+                "diagnostics.provider.title",
+                "Provider Diagnostics"
+            ),
+            subtitle: text(
+                "diagnostics.provider.subtitle",
+                "Copy a redacted status summary for troubleshooting."
+            )
+        ) {
+            VStack(
+                alignment: .leading,
+                spacing: DesignTokens.Spacing.medium
+            ) {
+                if let snapshot {
+                    diagnosticRows(snapshot)
+                } else {
+                    HStack {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(
+                            text(
+                                "diagnostics.provider.loading",
+                                "Checking provider status…"
+                            )
+                        )
+                        .foregroundColor(.secondary)
+                    }
+                }
+
+                Divider()
+
+                HStack(spacing: DesignTokens.Spacing.medium) {
+                    SettingsButton(
+                        title: text(
+                            "diagnostics.provider.refresh",
+                            "Refresh Diagnostics"
+                        ),
+                        icon: "arrow.clockwise"
+                    ) {
+                        onRefresh()
+                    }
+                    .disabled(isRefreshing)
+
+                    SettingsButton(
+                        title: text(
+                            "diagnostics.provider.copy",
+                            "Copy Redacted Diagnostics"
+                        ),
+                        icon: "doc.on.doc"
+                    ) {
+                        onCopy()
+                    }
+                    .disabled(snapshot == nil)
+
+                    if isRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func diagnosticRows(
+        _ snapshot: ProviderDiagnosticSnapshot
+    ) -> some View {
+        VStack(spacing: 8) {
+            diagnosticRow(
+                label: text(
+                    "diagnostics.provider.app",
+                    "App"
+                ),
+                value: "\(snapshot.appVersion) "
+                    + "(\(snapshot.appBuild ?? "unknown"))"
+            )
+            diagnosticRow(
+                label: text(
+                    "diagnostics.provider.os",
+                    "macOS"
+                ),
+                value: snapshot.osVersion
+            )
+            diagnosticRow(
+                label: text(
+                    "diagnostics.provider.provider",
+                    "Provider"
+                ),
+                value: snapshot.providerID
+            )
+            if snapshot.providerID == "codex" {
+                diagnosticRow(
+                    label: text(
+                        "diagnostics.provider.codex",
+                        "Codex"
+                    ),
+                    value:
+                        snapshot.codexVersion
+                        ?? snapshot.codexExecutableStatus.rawValue
+                )
+                diagnosticRow(
+                    label: text(
+                        "diagnostics.provider.app_server",
+                        "App Server"
+                    ),
+                    value: snapshot.appServerCapability.rawValue
+                )
+                diagnosticRow(
+                    label: text(
+                        "diagnostics.provider.home",
+                        "Codex Home"
+                    ),
+                    value: snapshot.homeFingerprint ?? "not linked"
+                )
+            }
+            diagnosticRow(
+                label: text(
+                    "diagnostics.provider.health",
+                    "Health"
+                ),
+                value: snapshot.health?.status.rawValue
+                    ?? "not checked"
+            )
+            if let duration =
+                snapshot.requestDurationMilliseconds {
+                diagnosticRow(
+                    label: text(
+                        "diagnostics.provider.duration",
+                        "Check Duration"
+                    ),
+                    value: "\(duration) ms"
+                )
+            }
+        }
+    }
+
+    private func diagnosticRow(
+        label: String,
+        value: String
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label)
+                .font(DesignTokens.Typography.caption)
+                .foregroundColor(.secondary)
+                .frame(width: 110, alignment: .leading)
+
+            Text(SensitiveDataRedactor.redact(value))
+                .font(.system(size: 11, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func text(_ key: String, _ fallback: String) -> String {
+        ProviderUILocalization.text(key, fallback: fallback)
     }
 }
 
