@@ -295,71 +295,88 @@ final class ProviderUIDependencies {
 
     convenience init(
         profileManager: ProfileManager? = nil,
-        codexProviderFactory: CodexProviderFactory
+        codexProviderFactory: CodexProviderFactory,
+        setupCompletionWriter:
+            @escaping SetupCompletionWriter = {
+                SharedDataStore.shared.saveHasCompletedSetup(true)
+            },
+        setupCompletionReader:
+            @escaping SetupCompletionReader = {
+                SharedDataStore.shared.hasCompletedSetup()
+            },
+        setupProfileActivator: SetupProfileActivator? = nil
     ) {
         self.init(
             profileManager: profileManager ?? .shared,
             availability: UsageProviderFeatureAvailability(
                 codexRefreshEnabled: codexProviderFactory.isEnabled
             ),
-            codexCapabilities: codexProviderFactory.capabilities
-        ) { profile in
-            guard case .codex(let configuration) =
-                    profile.providerConfiguration else {
-                throw ProviderUIOperationError.wrongProvider
-            }
-            let captured = try codexProviderFactory.capture(
-                linkedHome: configuration.linkedHome
-            )
-            let identity = Self.identity(for: profile)
-            return CapturedProviderUIRequest(
-                identity: identity,
-                capabilities: codexProviderFactory.capabilities,
-                account: {
-                    let provider = try codexProviderFactory
-                        .makeFreshProvider(captured)
-                    return try await provider.account()
-                },
-                health: {
-                    let provider = try codexProviderFactory
-                        .makeFreshProvider(captured)
-                    return await provider.health()
-                },
-                beginLogin: { flow in
-                    let provider = try codexProviderFactory
-                        .makeFreshProvider(captured)
-                    let providerFlow: CodexLoginFlow
-                    switch flow {
-                    case .browser:
-                        providerFlow = .browser()
-                    case .deviceCode:
-                        providerFlow = .deviceCode
-                    }
-                    switch try await provider.beginLogin(providerFlow) {
-                    case .alreadyAuthenticated(let account):
-                        await provider.disconnect()
-                        return .alreadyAuthenticated(account)
-                    case .started(let attempt):
-                        return .started(
-                            ProviderUILoginSession(
-                                challenge: Self.challenge(
-                                    from: attempt.challenge
-                                ),
-                                wait: {
-                                    try await attempt.waitForCompletion()
-                                },
-                                cancel: {
-                                    try await attempt.cancel()
-                                },
-                                disconnect: {
-                                    try await attempt.disconnect()
-                                }
-                            )
-                        )
-                    }
+            codexCapabilities: codexProviderFactory.capabilities,
+            requestCapture: { profile in
+                guard case .codex(let configuration) =
+                        profile.providerConfiguration else {
+                    throw ProviderUIOperationError.wrongProvider
                 }
-            )
-        }
+                let captured = try codexProviderFactory.capture(
+                    linkedHome: configuration.linkedHome
+                )
+                let identity = Self.identity(for: profile)
+                return CapturedProviderUIRequest(
+                    identity: identity,
+                    capabilities:
+                        codexProviderFactory.capabilities,
+                    account: {
+                        let provider = try codexProviderFactory
+                            .makeFreshProvider(captured)
+                        return try await provider.account()
+                    },
+                    health: {
+                        let provider = try codexProviderFactory
+                            .makeFreshProvider(captured)
+                        return await provider.health()
+                    },
+                    beginLogin: { flow in
+                        let provider = try codexProviderFactory
+                            .makeFreshProvider(captured)
+                        let providerFlow: CodexLoginFlow
+                        switch flow {
+                        case .browser:
+                            providerFlow = .browser()
+                        case .deviceCode:
+                            providerFlow = .deviceCode
+                        }
+                        switch try await provider.beginLogin(
+                            providerFlow
+                        ) {
+                        case .alreadyAuthenticated(let account):
+                            await provider.disconnect()
+                            return .alreadyAuthenticated(account)
+                        case .started(let attempt):
+                            return .started(
+                                ProviderUILoginSession(
+                                    challenge: Self.challenge(
+                                        from: attempt.challenge
+                                    ),
+                                    wait: {
+                                        try await attempt
+                                            .waitForCompletion()
+                                    },
+                                    cancel: {
+                                        try await attempt.cancel()
+                                    },
+                                    disconnect: {
+                                        try await attempt.disconnect()
+                                    }
+                                )
+                            )
+                        }
+                    }
+                )
+            },
+            setupCompletionWriter: setupCompletionWriter,
+            setupCompletionReader: setupCompletionReader,
+            setupProfileActivator: setupProfileActivator
+        )
     }
 
     func captureRequest(
@@ -688,22 +705,44 @@ final class ProviderUIDependencies {
 @MainActor
 final class ProviderUICompositionRoot {
     static let shared = ProviderUICompositionRoot()
+    static let application: ProviderUICompositionRoot = {
+#if UI_TESTING
+        UITestApplicationBootstrap.compositionRoot
+#else
+        shared
+#endif
+    }()
 
+    let profileManager: ProfileManager
     let codexProviderFactory: CodexProviderFactory
     let dependencies: ProviderUIDependencies
 
     init(
         profileManager: ProfileManager? = nil,
         availability: UsageProviderFeatureAvailability = .production,
-        codexProviderFactory: CodexProviderFactory? = nil
+        codexProviderFactory: CodexProviderFactory? = nil,
+        setupCompletionWriter:
+            @escaping SetupCompletionWriter = {
+                SharedDataStore.shared.saveHasCompletedSetup(true)
+            },
+        setupCompletionReader:
+            @escaping SetupCompletionReader = {
+                SharedDataStore.shared.hasCompletedSetup()
+            },
+        setupProfileActivator: SetupProfileActivator? = nil
     ) {
         let factory =
             codexProviderFactory
             ?? CodexProviderFactory(availability: availability)
+        let manager = profileManager ?? .shared
+        self.profileManager = manager
         self.codexProviderFactory = factory
         dependencies = ProviderUIDependencies(
-            profileManager: profileManager ?? .shared,
-            codexProviderFactory: factory
+            profileManager: manager,
+            codexProviderFactory: factory,
+            setupCompletionWriter: setupCompletionWriter,
+            setupCompletionReader: setupCompletionReader,
+            setupProfileActivator: setupProfileActivator
         )
     }
 }

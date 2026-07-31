@@ -581,7 +581,9 @@ struct SettingsView: View {
 
                 // Profile Settings
                 case .appearance:
-                    AppearanceSettingsView()
+                    AppearanceSettingsView(
+                        profileManager: dependencies.profileManager
+                    )
                 case .general:
                     GeneralSettingsView(
                         dependencies: dependencies
@@ -720,6 +722,7 @@ struct ProfileSectionContainer: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
+                .accessibilityIdentifier("settings.profile.picker")
             }
             .padding(8)
 
@@ -766,6 +769,9 @@ struct ProfileSectionContainer: View {
                         }
                         .buttonStyle(.plain)
                         .help(section.description)
+                        .accessibilityIdentifier(
+                            "settings.section.\(section.rawValue)"
+                        )
                     }
                 }
                 .padding(.horizontal, 8)
@@ -825,6 +831,9 @@ struct AppSettingsSection: View {
                 ) {
                     selectedSection = section
                 }
+                .accessibilityIdentifier(
+                    "settings.section.\(section.rawValue)"
+                )
             }
         }
     }
@@ -855,6 +864,9 @@ struct BottomBarSection: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier(
+                        "settings.section.\(section.rawValue)"
+                    )
                     .onHover { hovering in
                         hoveredItem = hovering ? section.rawValue : nil
                     }
@@ -874,6 +886,9 @@ struct BottomBarSection: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier(
+                    "settings.action.quit"
+                )
                 .onHover { hovering in
                     hoveredItem = hovering ? "quit" : nil
                 }
@@ -1129,6 +1144,9 @@ struct ProfileCredentialCardsRow: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier(
+                    "settings.section.providerAccount"
+                )
             } else {
                 let surfacePolicy = ProviderFeatureSurfacePolicy(
                     capabilities: dependencies.capabilities(

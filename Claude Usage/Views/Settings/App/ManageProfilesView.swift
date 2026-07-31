@@ -542,6 +542,11 @@ struct ProfileRow: View {
                 }
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(
+            "profile.row.\(profile.providerID.rawValue)."
+                + profile.id.uuidString.lowercased()
+        )
         .alert(item: $deletionAlert) { alert in
             switch alert {
             case .confirmation:
