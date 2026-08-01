@@ -1375,7 +1375,7 @@ private struct UITestSetupSurface: View {
 @MainActor
 private struct UITestPopoverSurface: View {
     let compositionRoot: ProviderUICompositionRoot
-    var selectedProfileID: UUID? = nil
+    @State private var viewedProfileID: UUID? = nil
     var onRefreshOverride: (() -> Void)? = nil
     var onManageProfilesOverride: (() -> Void)? = nil
     var onPreferencesOverride: (() -> Void)? = nil
@@ -1403,7 +1403,7 @@ private struct UITestPopoverSurface: View {
         onActiveProfileChanged: ((UUID?) -> Void)? = nil
     ) {
         self.compositionRoot = compositionRoot
-        self.selectedProfileID = selectedProfileID
+        _viewedProfileID = State(initialValue: selectedProfileID)
         self.onRefreshOverride = onRefreshOverride
         self.onManageProfilesOverride = onManageProfilesOverride
         self.onPreferencesOverride = onPreferencesOverride
@@ -1424,6 +1424,12 @@ private struct UITestPopoverSurface: View {
                 presentation: current,
                 claudeStatus: .unknown,
                 isRefreshing: isRefreshing,
+                onSelectProfile: { id in
+                    viewedProfileID = id
+                    presentation = nil
+                    refreshGeneration &+= 1
+                    refresh()
+                },
                 onRefresh: onRefreshOverride ?? refresh,
                 onManageProfiles: {
                     if let onManageProfilesOverride {
@@ -1478,6 +1484,28 @@ private struct UITestPopoverSurface: View {
                 .accessibilityIdentifier(
                     "ui-testing.popover.profile-id"
                 )
+            // Mirrors PopoverContentView's `makeActiveButton(for:)`: the
+            // real, click-in-place activation affordance shown whenever the
+            // viewed profile isn't its provider's active one. Exercising
+            // activation this way (rather than through the background
+            // status-item context menu) avoids any dependence on window
+            // stacking order relative to a detached surface.
+            if let viewedProfileID,
+               viewedProfileID != profileManager.activeProfile?.id,
+               let viewedProfile = profileManager.profiles.first(
+                   where: { $0.id == viewedProfileID }
+               ) {
+                Button("Make Active") {
+                    Task {
+                        await profileManager.activateProfile(
+                            viewedProfile.id
+                        )
+                    }
+                }
+                .accessibilityIdentifier(
+                    "popover.profile.make_active"
+                )
+            }
             if let onDetach {
                 Button("Detach", action: onDetach)
                     .accessibilityIdentifier(
@@ -1511,7 +1539,7 @@ private struct UITestPopoverSurface: View {
             of: profileManager.activeProfile?.id
         ) { _, profileID in
             onActiveProfileChanged?(profileID)
-            guard selectedProfileID == nil else { return }
+            guard viewedProfileID == nil else { return }
             presentation = nil
             refreshGeneration &+= 1
             refresh()
@@ -1519,7 +1547,7 @@ private struct UITestPopoverSurface: View {
     }
 
     private var activeProfile: Profile {
-        selectedProfileID.flatMap { selectedID in
+        viewedProfileID.flatMap { selectedID in
             profileManager.profiles.first {
                 $0.id == selectedID
             }

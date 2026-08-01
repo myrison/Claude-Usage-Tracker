@@ -48,7 +48,8 @@ final class NormalizedUsagePresentationTests: HostedAppTestCase {
             .disabled, .unlinked, .dependencyMissing,
             .unauthenticated, .unsupportedAccount,
             .invalidConfiguration, .transport, .protocolMismatch,
-            .malformedResponse, .timedOut, .persistence, .unknown,
+            .malformedResponse, .timedOut, .persistence,
+            .rateLimited, .serverError, .unknown,
             nil
         ]
         for kind in allKinds {
@@ -72,6 +73,137 @@ final class NormalizedUsagePresentationTests: HostedAppTestCase {
         XCTAssertEqual(
             LegacyPopoverBannerDetail.explanation(for: nil),
             "popover.normalized.notice.refresh_failed".localized
+        )
+        XCTAssertEqual(
+            LegacyPopoverBannerDetail.explanation(for: .rateLimited),
+            "popover.normalized.notice.rate_limited".localized
+        )
+        XCTAssertEqual(
+            LegacyPopoverBannerDetail.explanation(for: .serverError),
+            "popover.normalized.notice.server_error".localized
+        )
+    }
+
+    /// 429 and 5xx failures get their own retry-oriented copy rather than
+    /// falling into the generic "refresh failed" bucket every other
+    /// recoverable-but-uninteresting kind (transport, timeout, ...) shares.
+    func testRateLimitedAndServerErrorNoticesUseDistinctVocabulary()
+        throws
+    {
+        let cachedReport = try makeReport()
+
+        let rateLimited = makePresentation(
+            report: cachedReport,
+            failure: ProviderRefreshFailure(
+                kind: .rateLimited,
+                occurredAt: now,
+                isRecoverable: true,
+                consecutiveCount: 1,
+                retryAfter: 30
+            )
+        )
+        let refreshFailedNotice = rateLimited.notices.first {
+            $0.kind == .refreshFailed
+        }
+        XCTAssertEqual(
+            refreshFailedNotice?.localizationKey,
+            NormalizedUsageFailureVocabulary.rateLimited.key
+        )
+        XCTAssertEqual(
+            refreshFailedNotice?.defaultMessage,
+            NormalizedUsageFailureVocabulary.rateLimited.default
+        )
+
+        let serverError = makePresentation(
+            report: cachedReport,
+            failure: ProviderRefreshFailure(
+                kind: .serverError,
+                occurredAt: now,
+                isRecoverable: true,
+                consecutiveCount: 1
+            )
+        )
+        let serverErrorNotice = serverError.notices.first {
+            $0.kind == .refreshFailed
+        }
+        XCTAssertEqual(
+            serverErrorNotice?.localizationKey,
+            NormalizedUsageFailureVocabulary.serverError.key
+        )
+        XCTAssertEqual(
+            serverErrorNotice?.defaultMessage,
+            NormalizedUsageFailureVocabulary.serverError.default
+        )
+
+        // A kind with no dedicated vocabulary (e.g. transport) still falls
+        // back to the generic copy, proving the switch is additive rather
+        // than having silently dropped the default case.
+        let transport = makePresentation(
+            report: cachedReport,
+            failure: ProviderRefreshFailure(
+                kind: .transport,
+                occurredAt: now,
+                isRecoverable: true,
+                consecutiveCount: 1
+            )
+        )
+        XCTAssertEqual(
+            transport.notices.first { $0.kind == .refreshFailed }?
+                .localizationKey,
+            NormalizedUsageFailureVocabulary.refreshFailed.key
+        )
+    }
+
+    func testRetryTextOmittedWithoutKnownRetryTimeAndFormattedWhenKnown() {
+        XCTAssertNil(
+            LegacyPopoverBannerDetail.retryText(nil, formatted: { _ in
+                "unused"
+            })
+        )
+        let retryAt = now.addingTimeInterval(60)
+        XCTAssertEqual(
+            LegacyPopoverBannerDetail.retryText(retryAt) { date in
+                XCTAssertEqual(date, retryAt)
+                return "3:04 PM"
+            },
+            "Retrying at 3:04 PM"
+        )
+    }
+
+    func testTechnicalDetailTextFormatsWhenKnownAndNilWhenAbsent() {
+        XCTAssertNil(
+            LegacyPopoverBannerDetail.technicalDetailText(nil)
+        )
+        XCTAssertEqual(
+            LegacyPopoverBannerDetail.technicalDetailText(
+                "HTTP 429 — Rate limited by Claude API"
+            ),
+            "Details: HTTP 429 — Rate limited by Claude API"
+        )
+    }
+
+    /// `ProviderRefreshFailure.retryNotBefore` is the wiring between a
+    /// server's `Retry-After` hint and the UI's "Retrying at" line: it must
+    /// be derived from `occurredAt + retryAfter`, and stay nil without one.
+    func testRetryNotBeforeDerivesFromOccurredAtAndRetryAfter() {
+        let noHint = ProviderRefreshFailure(
+            kind: .transport,
+            occurredAt: now,
+            isRecoverable: true,
+            consecutiveCount: 1
+        )
+        XCTAssertNil(noHint.retryNotBefore)
+
+        let withHint = ProviderRefreshFailure(
+            kind: .rateLimited,
+            occurredAt: now,
+            isRecoverable: true,
+            consecutiveCount: 1,
+            retryAfter: 90
+        )
+        XCTAssertEqual(
+            withHint.retryNotBefore,
+            now.addingTimeInterval(90)
         )
     }
 
@@ -1106,6 +1238,92 @@ final class NormalizedUsagePresentationTests: HostedAppTestCase {
             rows[0].accessibilityIdentifier,
             "popover.profile.switcher.\(codexID.uuidString)"
         )
+    }
+
+    func testProviderProfileRowViewingIsIndependentOfActive() {
+        let activeClaudeID = UUID()
+        let viewedCodexID = UUID()
+        let claude = Profile(
+            id: activeClaudeID,
+            name: "Active Claude",
+            providerConfiguration: .claude
+        )
+        let codex = Profile(
+            id: viewedCodexID,
+            name: "Viewed Codex",
+            providerConfiguration: .codex(
+                CodexProfileConfiguration()
+            )
+        )
+
+        // Claude is the active profile (for its own provider), but Codex
+        // is the one currently being viewed — the switcher menu must be
+        // able to represent that split, since selecting a row changes
+        // only what's viewed, never what's active.
+        let rows = ProviderProfileRowPresentation.make(
+            profiles: [claude, codex],
+            isActive: { $0.id == activeClaudeID },
+            viewedProfileID: viewedCodexID
+        )
+
+        XCTAssertTrue(rows[0].isActive)
+        XCTAssertFalse(rows[0].isViewing)
+        XCTAssertFalse(rows[1].isActive)
+        XCTAssertTrue(rows[1].isViewing)
+    }
+
+    func testProviderProfileRowDefaultsToNoViewingWithoutViewedID() {
+        let profile = Profile(name: "Solo")
+        let rows = ProviderProfileRowPresentation.make(
+            profiles: [profile],
+            isActive: { _ in true }
+        )
+        XCTAssertFalse(rows[0].isViewing)
+    }
+
+    func testActiveAccountChipsCoverBothProvidersAndFlagTheViewedOne() {
+        let claudeID = UUID()
+        let codexID = UUID()
+        let claude = Profile(
+            id: claudeID,
+            name: "jc@example.com",
+            providerConfiguration: .claude
+        )
+        let codex = Profile(
+            id: codexID,
+            name: "codex",
+            providerConfiguration: .codex(
+                CodexProfileConfiguration()
+            )
+        )
+
+        let chips = ActiveAccountChipPresentation.make(
+            activeClaudeProfile: claude,
+            activeCodexProfile: codex,
+            viewedProfileID: codexID
+        )
+
+        XCTAssertEqual(chips.count, 2)
+        XCTAssertEqual(chips[0].id, claudeID)
+        XCTAssertEqual(chips[0].providerName, "Claude")
+        XCTAssertEqual(chips[0].profileName, "jc@example.com")
+        XCTAssertFalse(chips[0].isViewing)
+        XCTAssertEqual(chips[1].id, codexID)
+        XCTAssertEqual(chips[1].providerName, "Codex")
+        XCTAssertTrue(chips[1].isViewing)
+    }
+
+    func testActiveAccountChipsOmitProviderWithNoActiveProfile() {
+        let claude = Profile(name: "Solo Claude")
+        let chips = ActiveAccountChipPresentation.make(
+            activeClaudeProfile: claude,
+            activeCodexProfile: nil,
+            viewedProfileID: claude.id
+        )
+
+        XCTAssertEqual(chips.count, 1)
+        XCTAssertEqual(chips[0].providerName, "Claude")
+        XCTAssertTrue(chips[0].isViewing)
     }
 
     func testUnknownRemovedProfileIsNotLabeledClaude() throws {

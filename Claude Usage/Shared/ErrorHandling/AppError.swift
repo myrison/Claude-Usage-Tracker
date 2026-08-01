@@ -43,6 +43,16 @@ struct AppError: Error, LocalizedError, CustomStringConvertible {
     /// Context information (file, line, function)
     let context: ErrorContext?
 
+    /// Server-advertised retry delay (from a `Retry-After` response header),
+    /// when the error originated from a rate-limited or throttled HTTP
+    /// response. `nil` when no such hint was present.
+    let retryAfter: TimeInterval?
+
+    /// HTTP status code, when the error originated from an HTTP response.
+    /// `nil` when the error has no associated HTTP response (e.g. a
+    /// connection failure that never reached the server).
+    let statusCode: Int?
+
     // MARK: - Initialization
 
     init(
@@ -54,6 +64,8 @@ struct AppError: Error, LocalizedError, CustomStringConvertible {
         recoverySuggestion: String? = nil,
         providerCategory: ProviderErrorCategory? = nil,
         recoveryActions: [ProviderRecoveryAction] = [],
+        retryAfter: TimeInterval? = nil,
+        statusCode: Int? = nil,
         file: String = #file,
         line: Int = #line,
         function: String = #function
@@ -76,6 +88,8 @@ struct AppError: Error, LocalizedError, CustomStringConvertible {
             }
         self.providerCategory = providerCategory
         self.recoveryActions = recoveryActions
+        self.retryAfter = retryAfter
+        self.statusCode = statusCode
         self.context = ErrorContext(
             file: (file as NSString).lastPathComponent,
             line: line,
@@ -364,13 +378,19 @@ extension AppError {
         )
     }
 
-    static func apiRateLimited(file: String = #file, line: Int = #line, function: String = #function) -> AppError {
+    static func apiRateLimited(
+        retryAfter: TimeInterval? = nil,
+        file: String = #file,
+        line: Int = #line,
+        function: String = #function
+    ) -> AppError {
         return AppError(
             code: .apiRateLimited,
             message: "error.api_rate_limited".localized,
             technicalDetails: "Too many requests to the API",
             isRecoverable: true,
             recoverySuggestion: "error.api_rate_limited.suggestion".localized,
+            retryAfter: retryAfter,
             file: file,
             line: line,
             function: function

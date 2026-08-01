@@ -144,6 +144,10 @@ enum LegacyPopoverBannerDetail: Equatable {
         case .disabled, .unlinked, .dependencyMissing,
              .invalidConfiguration:
             return NormalizedUsageFailureVocabulary.configuration
+        case .rateLimited:
+            return NormalizedUsageFailureVocabulary.rateLimited
+        case .serverError:
+            return NormalizedUsageFailureVocabulary.serverError
         case .transport, .protocolMismatch, .malformedResponse,
              .timedOut, .persistence, .unknown, nil:
             return NormalizedUsageFailureVocabulary.refreshFailed
@@ -157,6 +161,21 @@ enum LegacyPopoverBannerDetail: Equatable {
         return NormalizedUsageStrings.localized(
             localization.key,
             default: localization.default
+        )
+    }
+
+    /// Formats a sanitized technical detail string (HTTP status / URL error
+    /// domain+code, already free of paths, tokens, org identifiers, and
+    /// response bodies — see `ProviderRefreshFailure.detail`) for display
+    /// below the human explanation. The wrapper text is localized; the
+    /// technical fragment itself is left as-is since it's already a safe,
+    /// English-language system/API string.
+    static func technicalDetailText(_ detail: String?) -> String? {
+        guard let detail else { return nil }
+        return NormalizedUsageStrings.formatted(
+            "popover.banner.technical_detail",
+            default: "Details: %@",
+            arguments: [detail]
         )
     }
 
@@ -174,6 +193,23 @@ enum LegacyPopoverBannerDetail: Equatable {
             "popover.banner.last_success",
             default: "Last successful refresh: %@",
             arguments: [formatted(date)]
+        )
+    }
+
+    /// A "Retrying at {time}" line shown alongside the explanation when the
+    /// engine knows the next scheduled attempt won't start before a
+    /// specific time (backoff, or a server-provided `Retry-After` hint).
+    /// `nil` when no such time is known, so the caller can omit the line
+    /// entirely rather than show empty/placeholder text.
+    static func retryText(
+        _ retryNotBefore: Date?,
+        formatted: (Date) -> String
+    ) -> String? {
+        guard let retryNotBefore else { return nil }
+        return NormalizedUsageStrings.formatted(
+            "popover.banner.retrying_at",
+            default: "Retrying at %@",
+            arguments: [formatted(retryNotBefore)]
         )
     }
 }
@@ -321,6 +357,7 @@ struct PopoverContentView: View {
                 || presentation.notices.contains {
                     $0.kind == .loading
                 },
+            onSelectProfile: manager.setViewedProfile,
             onRefresh: triggerRefresh,
             onManageProfiles:
                 navigationActions.manageProfiles,
@@ -329,6 +366,8 @@ struct PopoverContentView: View {
         )
 
         PopoverDivider()
+
+        activeAccountsSection()
 
         let resolvedBanner: LegacyPopoverBanner? =
             presentation.providerID == .claude
@@ -398,6 +437,13 @@ struct PopoverContentView: View {
                     detail: LegacyPopoverBannerDetail.explanation(
                         for: manager.lastRefreshFailureKind
                     ),
+                    technicalDetail: LegacyPopoverBannerDetail.technicalDetailText(
+                        manager.lastRefreshFailureDetail
+                    ),
+                    retryText: LegacyPopoverBannerDetail.retryText(
+                        manager.lastRefreshFailureRetryAt,
+                        formatted: Self.absoluteTimeText
+                    ),
                     lastSuccessText:
                         LegacyPopoverBannerDetail.lastSuccessText(
                             manager.lastSuccessfulRefreshTime,
@@ -424,11 +470,51 @@ struct PopoverContentView: View {
     }
 
     @ViewBuilder
+    private func activeAccountsSection() -> some View {
+        let chips = ActiveAccountChipPresentation.make(
+            activeClaudeProfile: profileManager.activeClaudeProfile,
+            activeCodexProfile: profileManager.activeCodexProfile,
+            viewedProfileID: displayedProfile?.id
+        )
+        if !chips.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(
+                    NormalizedUsageStrings.localized(
+                        "popover.active_accounts.title",
+                        default: "Active accounts"
+                    )
+                )
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(.secondary)
+                .accessibilityHidden(true)
+
+                HStack(spacing: 6) {
+                    ForEach(chips) { chip in
+                        ActiveAccountChipView(chip: chip) {
+                            manager.setViewedProfile(chip.id)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    // A viewed profile that is not its provider's active profile always
+    // shows its tag here (with a "Make Active" affordance), even outside
+    // multi-profile display mode, so switching the popover's view (via the
+    // header switcher or an "Active accounts" chip) never leaves the user
+    // without a way to see — or fix — the active/viewed mismatch.
+    @ViewBuilder
     private func normalizedProfileTag(
         presentation: NormalizedUsagePresentation
     ) -> some View {
-        if profileManager.displayMode == .multi,
-           let viewingProfile = displayedProfile {
+        if let viewingProfile = displayedProfile,
+           profileManager.displayMode == .multi
+               || !profileManager.isActive(viewingProfile) {
             HStack(spacing: 8) {
                 profileAvatar(for: viewingProfile)
 
@@ -444,6 +530,7 @@ struct PopoverContentView: View {
 
                 Spacer()
                 activeBadge(for: viewingProfile)
+                makeActiveButton(for: viewingProfile)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
@@ -499,6 +586,42 @@ struct PopoverContentView: View {
         }
     }
 
+    // Deliberately separate from `activeBadge`: activation stays an
+    // explicit, opt-in action, so this only ever appears — and only ever
+    // does one thing — when the viewed profile genuinely isn't active.
+    @ViewBuilder
+    private func makeActiveButton(for profile: Profile) -> some View {
+        if !profileManager.isActive(profile) {
+            let title = NormalizedUsageStrings.localized(
+                "menu.provider.make_active",
+                default: "Make Active"
+            )
+            Button(action: {
+                Task {
+                    await profileManager.activateProfile(profile.id)
+                }
+            }) {
+                Text(title)
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(.accentColor)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule()
+                            .strokeBorder(
+                                Color.accentColor.opacity(0.4),
+                                lineWidth: 1
+                            )
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("popover.profile.make_active")
+            .accessibilityLabel(
+                "\(title): \(profile.name)"
+            )
+        }
+    }
+
     private static let absoluteTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -536,32 +659,43 @@ struct PopoverDivider: View {
 struct ProfileSwitcherCompact: View {
     @ObservedObject private var profileManager: ProfileManager
     @State private var isHovered = false
+    let viewedProfileName: String
+    let viewedProfileID: UUID?
+    let onSelectProfile: (UUID) -> Void
     let onManageProfiles: () -> Void
 
     init(
         profileManager: ProfileManager,
+        viewedProfileName: String,
+        viewedProfileID: UUID?,
+        onSelectProfile: @escaping (UUID) -> Void,
         onManageProfiles: @escaping () -> Void
     ) {
         _profileManager = ObservedObject(
             wrappedValue: profileManager
         )
+        self.viewedProfileName = viewedProfileName
+        self.viewedProfileID = viewedProfileID
+        self.onSelectProfile = onSelectProfile
         self.onManageProfiles = onManageProfiles
     }
 
     private var rows: [ProviderProfileRowPresentation] {
         ProviderProfileRowPresentation.make(
             profiles: profileManager.profiles,
-            isActive: profileManager.isActive
+            isActive: profileManager.isActive,
+            viewedProfileID: viewedProfileID
         )
     }
 
     var body: some View {
         Menu {
             ForEach(rows) { row in
+                // Selecting a row switches what the popover is showing —
+                // it never activates that profile. Activation only
+                // happens via the explicit "Make Active" affordance.
                 Button(action: {
-                    Task {
-                        await profileManager.activateProfile(row.id)
-                    }
+                    onSelectProfile(row.id)
                 }) {
                     ProviderProfileMenuRow(row: row)
                 }
@@ -580,10 +714,14 @@ struct ProfileSwitcherCompact: View {
             }
             .accessibilityIdentifier("popover.action.manage_profiles")
         } label: {
-            Text(profileManager.activeProfile?.name ?? "popover.no_profile".localized)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundColor(.primary)
-                .lineLimit(1)
+            Text(
+                viewedProfileName.isEmpty
+                    ? "popover.no_profile".localized
+                    : viewedProfileName
+            )
+            .font(.system(size: 13, weight: .bold))
+            .foregroundColor(.primary)
+            .lineLimit(1)
         }
         .menuStyle(.borderlessButton)
         .buttonStyle(.plain)
@@ -724,19 +862,91 @@ private struct ProviderProfileMenuRow: View {
 
             Spacer()
 
-            if row.isActive {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .accessibilityLabel(
-                        NormalizedUsageStrings.localized(
-                            "popover.normalized.profile.active",
-                            default: "Active"
+            HStack(spacing: 4) {
+                if row.isViewing {
+                    Image(systemName: "eye.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .accessibilityLabel(
+                            NormalizedUsageStrings.localized(
+                                "popover.normalized.profile.viewing",
+                                default: "Viewing"
+                            )
                         )
-                    )
+                }
+                if row.isActive {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .accessibilityLabel(
+                            NormalizedUsageStrings.localized(
+                                "popover.normalized.profile.active",
+                                default: "Active"
+                            )
+                        )
+                }
             }
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier(row.accessibilityIdentifier)
+    }
+}
+
+// MARK: - Active Account Chip
+
+/// One row in the "Active accounts" section: `<Provider> · <Profile>`,
+/// tappable to switch the popover to that account. Purely a view switch —
+/// see `ProfileSwitcherCompact` for why activation never happens here.
+private struct ActiveAccountChipView: View {
+    let chip: ActiveAccountChipPresentation
+    let onTap: () -> Void
+
+    private var accessibilityLabel: String {
+        let base = "\(chip.providerName) · \(chip.profileName)"
+        guard chip.isViewing else { return base }
+        return base + ", " + NormalizedUsageStrings.localized(
+            "popover.normalized.profile.viewing",
+            default: "Viewing"
+        )
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 4) {
+                Text(chip.providerName)
+                    .font(.system(size: 9, weight: .semibold))
+                Text("·")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+                Text(chip.profileName)
+                    .font(.system(size: 9, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundColor(
+                chip.isViewing ? .accentColor : .primary
+            )
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                Capsule()
+                    .fill(
+                        chip.isViewing
+                            ? Color.accentColor.opacity(0.12)
+                            : Color.primary.opacity(0.05)
+                    )
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(
+                        chip.isViewing
+                            ? Color.accentColor.opacity(0.4)
+                            : Color.clear,
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(chip.accessibilityIdentifier)
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 
@@ -1155,6 +1365,15 @@ struct ExpandableStatusBanner: View {
     /// Root-cause explanation for the failure, if any. `nil` for banners
     /// (like staleness) that have no distinct cause beyond time passing.
     let detail: String?
+    /// Sanitized technical diagnostic line (HTTP status or URL error
+    /// domain/code), shown below `detail` when known. `nil` omits the line
+    /// entirely — most banners (credential errors, staleness) have no
+    /// underlying transport error to surface.
+    var technicalDetail: String? = nil
+    /// "Retrying at {time}" line, shown only when the engine knows when the
+    /// next scheduled attempt will start (backoff / `Retry-After`). `nil`
+    /// omits the line entirely.
+    var retryText: String? = nil
     let lastSuccessText: String
     let color: Color
     let onRetry: () -> Void
@@ -1194,6 +1413,23 @@ struct ExpandableStatusBanner: View {
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let technicalDetail {
+                        Text(technicalDetail)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier(
+                                "popover.banner.technical_detail"
+                            )
+                    }
+                    if let retryText {
+                        Text(retryText)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .accessibilityIdentifier(
+                                "popover.banner.retry_text"
+                            )
                     }
                     Text(lastSuccessText)
                         .font(.system(size: 10))

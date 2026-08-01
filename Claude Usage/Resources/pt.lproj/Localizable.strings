@@ -608,6 +608,7 @@
 /* ==================== */
 /* MARK: - Popover/Menu Bar */
 /* ==================== */
+"popover.active_accounts.title" = "Contas ativas";
 "popover.manage_profiles" = "Gerenciar Perfis";
 "popover.no_profile" = "Sem Perfil";
 "popover.profiles_count" = "%d perfis";
@@ -914,6 +915,8 @@
 "popover.banner.updated_ago" = "Atualizado há %dm";
 "popover.banner.last_success" = "Última atualização bem-sucedida: %@";
 "popover.banner.never_succeeded" = "Ainda não houve atualização bem-sucedida.";
+"popover.banner.retrying_at" = "Tentando novamente às %@";
+"popover.banner.technical_detail" = "Detalhes: %@";
 
 // MARK: - Overage Balance
 "popover.overage_balance" = "Saldo";
@@ -1117,8 +1120,10 @@
 "popover.normalized.health.unsupported" = "Conta não suportada";
 "popover.normalized.notice.configuration" = "Este perfil precisa de atenção antes de poder ser atualizado.";
 "popover.normalized.notice.degraded" = "Alguns detalhes de uso estão indisponíveis.";
+"popover.normalized.notice.rate_limited" = "Limitado por taxa pela Claude — tentará novamente automaticamente.";
 "popover.normalized.notice.refresh_failed" = "Não foi possível atualizar o uso.";
 "popover.normalized.notice.refreshing" = "Atualizando uso…";
+"popover.normalized.notice.server_error" = "O serviço da Claude retornou um erro — tentará novamente automaticamente.";
 "popover.normalized.notice.stale" = "O uso pode estar desatualizado.";
 "popover.normalized.notice.unauthenticated" = "Faça login novamente para atualizar o uso.";
 "popover.normalized.notice.unavailable" = "O provedor está indisponível no momento.";
@@ -1131,6 +1136,7 @@
 "popover.normalized.profile.not_connected" = "Não conectado";
 "popover.normalized.profile.not_linked" = "Não vinculado";
 "popover.normalized.profile.relink_required" = "Revinculação necessária";
+"popover.normalized.profile.viewing" = "Visualizando";
 "popover.normalized.reset.at" = "Reinicia %@";
 "popover.normalized.reset.both" = "Reinicia em %@ (%@)";
 "popover.normalized.reset.in" = "Reinicia em %@";

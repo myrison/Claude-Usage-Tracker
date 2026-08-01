@@ -588,6 +588,7 @@
 /* ==================== */
 /* MARK: - Popover/Menu Bar */
 /* ==================== */
+"popover.active_accounts.title" = "Comptes actifs";
 "popover.manage_profiles" = "Gérer les Profils";
 "popover.no_profile" = "Aucun Profil";
 "popover.profiles_count" = "%d profils";
@@ -894,6 +895,8 @@
 "popover.banner.updated_ago" = "Mis à jour il y a %dm";
 "popover.banner.last_success" = "Dernière actualisation réussie : %@";
 "popover.banner.never_succeeded" = "Aucune actualisation réussie pour l'instant.";
+"popover.banner.retrying_at" = "Nouvelle tentative à %@";
+"popover.banner.technical_detail" = "Détails : %@";
 
 // MARK: - Overage Balance
 "popover.overage_balance" = "Solde";
@@ -1097,8 +1100,10 @@
 "popover.normalized.health.unsupported" = "Compte non pris en charge";
 "popover.normalized.notice.configuration" = "Ce profil nécessite une action avant de pouvoir être actualisé.";
 "popover.normalized.notice.degraded" = "Certains détails d'utilisation ne sont pas disponibles.";
+"popover.normalized.notice.rate_limited" = "Limité par débit par Claude — nouvelle tentative automatique.";
 "popover.normalized.notice.refresh_failed" = "L'utilisation n'a pas pu être actualisée.";
 "popover.normalized.notice.refreshing" = "Actualisation de l'utilisation…";
+"popover.normalized.notice.server_error" = "Le service de Claude a renvoyé une erreur — nouvelle tentative automatique.";
 "popover.normalized.notice.stale" = "L'utilisation risque d'être obsolète.";
 "popover.normalized.notice.unauthenticated" = "Reconnectez-vous pour actualiser l'utilisation.";
 "popover.normalized.notice.unavailable" = "Le fournisseur est actuellement indisponible.";
@@ -1111,6 +1116,7 @@
 "popover.normalized.profile.not_connected" = "Non connecté";
 "popover.normalized.profile.not_linked" = "Non lié";
 "popover.normalized.profile.relink_required" = "Nouvelle liaison requise";
+"popover.normalized.profile.viewing" = "Affichage";
 "popover.normalized.reset.at" = "Réinitialisation %@";
 "popover.normalized.reset.both" = "Réinitialisation dans %@ (%@)";
 "popover.normalized.reset.in" = "Réinitialisation dans %@";

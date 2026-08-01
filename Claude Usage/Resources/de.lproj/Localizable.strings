@@ -610,6 +610,7 @@
 /* ==================== */
 /* MARK: - Popover/Menu Bar */
 /* ==================== */
+"popover.active_accounts.title" = "Aktive Konten";
 "popover.manage_profiles" = "Profile Verwalten";
 "popover.no_profile" = "Kein Profil";
 "popover.profiles_count" = "%d Profile";
@@ -916,6 +917,8 @@
 "popover.banner.updated_ago" = "Vor %dm aktualisiert";
 "popover.banner.last_success" = "Letzte erfolgreiche Aktualisierung: %@";
 "popover.banner.never_succeeded" = "Noch keine erfolgreiche Aktualisierung.";
+"popover.banner.retrying_at" = "Erneuter Versuch um %@";
+"popover.banner.technical_detail" = "Details: %@";
 
 // MARK: - Overage Balance
 "popover.overage_balance" = "Guthaben";
@@ -1119,8 +1122,10 @@
 "popover.normalized.health.unsupported" = "Nicht unterstütztes Konto";
 "popover.normalized.notice.configuration" = "Dieses Profil erfordert Aufmerksamkeit, bevor es aktualisiert werden kann.";
 "popover.normalized.notice.degraded" = "Einige Nutzungsdetails sind nicht verfügbar.";
+"popover.normalized.notice.rate_limited" = "Von Claude ratenbegrenzt – wird automatisch erneut versucht.";
 "popover.normalized.notice.refresh_failed" = "Die Nutzung konnte nicht aktualisiert werden.";
 "popover.normalized.notice.refreshing" = "Nutzung wird aktualisiert …";
+"popover.normalized.notice.server_error" = "Der Claude-Dienst hat einen Fehler zurückgegeben – wird automatisch erneut versucht.";
 "popover.normalized.notice.stale" = "Die Nutzung ist möglicherweise veraltet.";
 "popover.normalized.notice.unauthenticated" = "Melden Sie sich erneut an, um die Nutzung zu aktualisieren.";
 "popover.normalized.notice.unavailable" = "Der Anbieter ist derzeit nicht verfügbar.";
@@ -1133,6 +1138,7 @@
 "popover.normalized.profile.not_connected" = "Nicht verbunden";
 "popover.normalized.profile.not_linked" = "Nicht verknüpft";
 "popover.normalized.profile.relink_required" = "Erneute Verknüpfung erforderlich";
+"popover.normalized.profile.viewing" = "Wird angezeigt";
 "popover.normalized.reset.at" = "Setzt zurück am %@";
 "popover.normalized.reset.both" = "Setzt in %@ zurück (%@)";
 "popover.normalized.reset.in" = "Setzt in %@ zurück";
