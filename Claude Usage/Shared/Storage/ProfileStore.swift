@@ -102,6 +102,8 @@ class ProfileStore {
         static let lastFocusedProfileId = "lastFocusedProfileId_v1"
         static let displayMode = "profileDisplayMode"
         static let multiProfileConfig = "multiProfileDisplayConfig"
+        static let providerBadgeGlyphEnabled = "providerBadgeGlyphEnabled_v1"
+        static let providerBadgeTintEnabled = "providerBadgeTintEnabled_v1"
         static let pendingCredentialUsageUnlinks =
             "profileCredentialUsageUnlinks_v1"
         static let pendingCodexConfigurationMutations =
@@ -508,6 +510,28 @@ class ProfileStore {
             LoggingService.shared.logStorageError("loadMultiProfileConfig", error: error)
             return .default
         }
+    }
+
+    // MARK: - Provider Badge
+
+    /// Two independent toggles, both off by default (unchanged behavior out
+    /// of the box). Turning both on is the combined glyph+tint look — there
+    /// is no separate stored "combined" option.
+
+    func saveProviderBadgeGlyphEnabled(_ enabled: Bool) {
+        defaults.set(String(enabled), forKey: Keys.providerBadgeGlyphEnabled)
+    }
+
+    func loadProviderBadgeGlyphEnabled() -> Bool {
+        defaults.string(forKey: Keys.providerBadgeGlyphEnabled) == "true"
+    }
+
+    func saveProviderBadgeTintEnabled(_ enabled: Bool) {
+        defaults.set(String(enabled), forKey: Keys.providerBadgeTintEnabled)
+    }
+
+    func loadProviderBadgeTintEnabled() -> Bool {
+        defaults.string(forKey: Keys.providerBadgeTintEnabled) == "true"
     }
 
     // MARK: - Credential Helpers

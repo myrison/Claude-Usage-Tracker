@@ -165,6 +165,24 @@ struct AppearanceSettingsView: View {
                 .disabled(isMultiProfileMode)
                 .opacity(isMultiProfileMode ? 0.5 : 1.0)
 
+                // Provider Badge — global across display modes, so it lives
+                // outside the single-profile-only card above and stays
+                // usable in multi-profile mode too.
+                SettingsSectionCard(
+                    title: NSLocalizedString(
+                        "appearance.provider_badge_title",
+                        value: "Provider badge",
+                        comment: ""
+                    ),
+                    subtitle: NSLocalizedString(
+                        "appearance.provider_badge_description",
+                        value: "Distinguish Claude and Codex items in the menu bar without clicking.",
+                        comment: ""
+                    )
+                ) {
+                    providerBadgeToggles
+                }
+
                 // Metrics Configuration
                 SettingsSectionCard(
                     title: "appearance.menu_bar_metrics".localized,
@@ -232,6 +250,56 @@ struct AppearanceSettingsView: View {
     }
 
     // MARK: - Helper Methods
+
+    /// Lets the user independently enable a provider glyph and/or a provider
+    /// background tint so Claude vs Codex status items are visually
+    /// distinguished in the menu bar without clicking. Both default off
+    /// (unchanged current behavior); turning both on is the combined look —
+    /// there is no separate combined option. Global (like
+    /// `multiProfileConfig`), not per-profile, since it applies to every
+    /// provider's status items at once.
+    @ViewBuilder
+    private var providerBadgeToggles: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.cardPadding) {
+            SettingToggle(
+                title: NSLocalizedString(
+                    "appearance.provider_badge_glyph_title",
+                    value: "Provider glyph",
+                    comment: ""
+                ),
+                description: NSLocalizedString(
+                    "appearance.provider_badge_glyph_description",
+                    value: "Show a small provider mark before each item's content.",
+                    comment: ""
+                ),
+                isOn: Binding(
+                    get: { profileManager.providerBadgeGlyphEnabled },
+                    set: { newValue in
+                        profileManager.updateProviderBadgeGlyphEnabled(newValue)
+                    }
+                )
+            )
+
+            SettingToggle(
+                title: NSLocalizedString(
+                    "appearance.provider_badge_tint_title",
+                    value: "Provider background tint",
+                    comment: ""
+                ),
+                description: NSLocalizedString(
+                    "appearance.provider_badge_tint_description",
+                    value: "Show a faint provider-colored background behind each item.",
+                    comment: ""
+                ),
+                isOn: Binding(
+                    get: { profileManager.providerBadgeTintEnabled },
+                    set: { newValue in
+                        profileManager.updateProviderBadgeTintEnabled(newValue)
+                    }
+                )
+            )
+        }
+    }
 
     @ViewBuilder
     private var legacyClaudeMetricConfiguration: some View {
