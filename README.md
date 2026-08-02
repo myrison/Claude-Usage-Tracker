@@ -25,12 +25,12 @@
   ![Swift](https://img.shields.io/badge/Swift-5.0+-orange?style=flat-square&logo=swift)
   ![SwiftUI](https://img.shields.io/badge/SwiftUI-5.0+-blue?style=flat-square&logo=swift)
   ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
-  ![Version](https://img.shields.io/badge/version-3.0.3-blue?style=flat-square)
+  ![Version](https://img.shields.io/badge/version-3.0.5-blue?style=flat-square)
   ![Languages](https://img.shields.io/badge/languages-9-purple?style=flat-square)
 
   <sub>🇬🇧 English • 🇪🇸 Español • 🇫🇷 Français • 🇩🇪 Deutsch • 🇮🇹 Italiano • 🇵🇹 Português • 🇯🇵 日本語 • 🇰🇷 한국어 • 🇨🇳 简体中文</sub>
 
-  ### [Download Latest Release](https://github.com/revenium/Claude-Usage-Tracker/releases/latest/download/Claude-Usage.zip)
+  ### [Download Latest Release](https://github.com/revenium/Claude-Usage-Tracker/releases/latest/download/Claude-Usage.dmg)
 
   <sub>macOS 14.0+ (Sonoma) | ~6 MB | Native Swift/SwiftUI | Officially Signed</sub>
 
@@ -76,6 +76,10 @@ experience.
 ---
 
 ## What's New
+
+- **v3.0.5 (2026-08-02)**: Releases now ship a single notarized disk image — download `Claude-Usage.dmg`, open it, drag the app to Applications. This replaces the zip, which macOS Archive Utility could corrupt on extraction (breaking the embedded framework's code signature and triggering a false "Apple could not verify this app" warning)
+
+- **v3.0.4 (2026-08-01)**: Menu bar provider badges — two independent Appearance toggles (both off by default) that distinguish Claude and Codex accounts at a glance: a monochrome provider glyph and/or a muted provider-colored background tint
 
 - **v3.0.3 (2026-03-10)**: 6-tier pace system (Comfortable → Runaway) with colored pace markers on progress bars, 3 color modes (Multi-Color/Greyscale/Single Color) for menu bar and statusline, label toggles (Ctx/Usage/Reset), 24-hour time format, terminal-matching preview colors, CPU spin-loop fix in menu bar rendering
 
@@ -156,12 +160,12 @@ brew uninstall --cask claude-usage
 
 #### Option 2: Direct Download
 
-**[Download Claude-Usage.zip](https://github.com/revenium/Claude-Usage-Tracker/releases/latest/download/Claude-Usage.zip)**
+**[Download Claude-Usage.dmg](https://github.com/revenium/Claude-Usage-Tracker/releases/latest/download/Claude-Usage.dmg)**
 
-1. Download the `.zip` file from the link above
-2. Extract the zip file (double-click or use Archive Utility)
-3. Drag `Claude Usage.app` to your Applications folder
-4. Double-click to launch - that's it!
+1. Download the `.dmg` file from the link above
+2. Open the disk image (double-click)
+3. Drag `Claude Usage.app` to the `Applications` shortcut in the window
+4. Eject the disk image, then launch the app from Applications - that's it!
 
 **v2.0.0+ Note**: The app is now officially signed with an Apple Developer certificate. You can install and run it like any other Mac application - no security warnings or workarounds needed.
 
