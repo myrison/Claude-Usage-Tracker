@@ -3,55 +3,21 @@ import Charts
 import UsageCore
 
 // MARK: - Always-active vibrancy background
+/// Clean popover material with no tint overlay. The previous
+/// `.hudWindow` + solid black/white tint stack muddied the background into
+/// a flat gray and defeated the system material's vibrancy in both
+/// appearances; `.popover` tracks the native menu/popover look across
+/// light and dark mode on its own.
 struct VisualEffectBackground: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let container = NSView()
-
-        // Base vibrancy layer
+    func makeNSView(context: Context) -> NSVisualEffectView {
         let effectView = NSVisualEffectView()
-        effectView.material = .hudWindow
+        effectView.material = .popover
         effectView.blendingMode = .behindWindow
         effectView.state = .active
-        effectView.isEmphasized = true
-        effectView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(effectView)
-
-        // Solid tint overlay for more density
-        let tintView = NSView()
-        tintView.wantsLayer = true
-        if NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
-            tintView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.25).cgColor
-        } else {
-            tintView.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.4).cgColor
-        }
-        tintView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(tintView)
-
-        NSLayoutConstraint.activate([
-            effectView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            effectView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            effectView.topAnchor.constraint(equalTo: container.topAnchor),
-            effectView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            tintView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            tintView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            tintView.topAnchor.constraint(equalTo: container.topAnchor),
-            tintView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-
-        return container
+        return effectView
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        // Update tint for appearance changes
-        if let tintView = nsView.subviews.last {
-            tintView.wantsLayer = true
-            if NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
-                tintView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.25).cgColor
-            } else {
-                tintView.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.4).cgColor
-            }
-        }
-    }
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
 /// Native macOS popover interface - minimal, flat, system-style
@@ -243,16 +209,6 @@ struct PopoverContentView: View {
         )
     }
 
-    private func profileInitials(for name: String) -> String {
-        let words = name.split(separator: " ")
-        if words.count >= 2 {
-            return String(words[0].prefix(1) + words[1].prefix(1)).uppercased()
-        } else if let first = words.first {
-            return String(first.prefix(2)).uppercased()
-        }
-        return "?"
-    }
-
     private var displayedProfile: Profile? {
         if let clickedProfileID = manager.clickedProfileId {
             return profileManager.profiles.first {
@@ -331,9 +287,22 @@ struct PopoverContentView: View {
                 now: now
             )
         }
-        .padding(.bottom, 8)
-        .frame(width: 280)
-        .background(VisualEffectBackground())
+        .padding(.bottom, 10)
+        .frame(width: PopoverDesign.width)
+        .background(
+            ZStack {
+                VisualEffectBackground()
+                // Readability scrim: behind-window vibrancy alone lets
+                // whatever sits under the popover (e.g. a bright window
+                // beneath a dark menu bar) bleed through and wash out
+                // text and status colors. A translucent layer of the
+                // system window background keeps a hint of vibrancy at
+                // the edges while guaranteeing contrast, per the HIG
+                // guidance on legibility over vibrant materials.
+                Color(nsColor: .windowBackgroundColor)
+                    .opacity(0.6)
+            }
+        )
         .opacity(appeared ? 1 : 0)
         .scaleEffect(appeared ? 1 : 0.96, anchor: .top)
         .onAppear {
@@ -350,24 +319,21 @@ struct PopoverContentView: View {
         now: Date
     ) -> some View {
         ProviderPopoverHeader(
-            profileManager: profileManager,
             presentation: presentation,
             claudeStatus: manager.status,
             isRefreshing: isRefreshing
                 || presentation.notices.contains {
                     $0.kind == .loading
                 },
-            onSelectProfile: manager.setViewedProfile,
+            isViewedProfileActive: displayedProfile.map {
+                profileManager.isActive($0)
+            },
             onRefresh: triggerRefresh,
-            onManageProfiles:
-                navigationActions.manageProfiles,
             onPreferences:
                 navigationActions.preferences
         )
 
         PopoverDivider()
-
-        activeAccountsSection()
 
         let resolvedBanner: LegacyPopoverBanner? =
             presentation.providerID == .claude
@@ -385,6 +351,9 @@ struct PopoverContentView: View {
             claudeBanner(resolvedBanner: resolvedBanner)
         }
 
+        // Usage for the viewed account is the popover's primary content
+        // and comes first; the accounts switcher is navigation and sits
+        // pinned below the scrolling usage area.
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 normalizedProfileTag(
@@ -401,7 +370,12 @@ struct PopoverContentView: View {
                 )
             }
         }
-        .frame(maxHeight: 520)
+        .frame(maxHeight: 460)
+
+        PopoverDivider()
+            .padding(.top, 2)
+
+        activeAccountsSection()
     }
 
     private func triggerRefresh() {
@@ -471,75 +445,128 @@ struct PopoverContentView: View {
 
     @ViewBuilder
     private func activeAccountsSection() -> some View {
-        let chips = ActiveAccountChipPresentation.make(
-            activeClaudeProfile: profileManager.activeClaudeProfile,
-            activeCodexProfile: profileManager.activeCodexProfile,
+        let groups = AccountChipGroup.make(
+            profiles: profileManager.profiles,
+            isActive: profileManager.isActive,
             viewedProfileID: displayedProfile?.id
         )
-        if !chips.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(
-                    NormalizedUsageStrings.localized(
-                        "popover.active_accounts.title",
-                        default: "Active accounts"
+        if !groups.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
+                    PopoverSectionHeader(
+                        title: NormalizedUsageStrings.localized(
+                            "popover.accounts.title",
+                            default: "Accounts"
+                        )
                     )
-                )
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(.secondary)
-                .accessibilityHidden(true)
+                    .padding(.leading, 2)
+                    .accessibilityHidden(true)
 
-                HStack(spacing: 6) {
-                    ForEach(chips) { chip in
-                        ActiveAccountChipView(chip: chip) {
-                            manager.setViewedProfile(chip.id)
+                    Spacer()
+
+                    // Direct route to profile management; removing the
+                    // header switcher menu removed the popover's only
+                    // "Manage Profiles" entry point.
+                    Button(action: navigationActions.manageProfiles) {
+                        Text("popover.manage_profiles".localized)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(
+                        "popover.action.manage_profiles"
+                    )
+                }
+
+                // Bounded: with many accounts the chip rows scroll
+                // inside the footer instead of growing the popover
+                // past screen height.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(groups) { group in
+                            VStack(alignment: .leading, spacing: 4) {
+                                // Caption only earns its row when there
+                                // is a second provider to distinguish
+                                // from.
+                                if groups.count > 1 {
+                                    Text(group.providerName)
+                                        .font(
+                                            .system(
+                                                size: 10,
+                                                weight: .medium
+                                            )
+                                        )
+                                        .foregroundColor(.secondary)
+                                        .padding(.leading, 2)
+                                }
+
+                                PopoverChipFlowLayout(spacing: 6) {
+                                    ForEach(group.chips) { chip in
+                                        AccountChipView(chip: chip) {
+                                            manager.setViewedProfile(
+                                                chip.id
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
+                .frame(maxHeight: 150)
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 6)
+            .padding(.horizontal, PopoverDesign.outerInset)
+            .padding(.top, 8)
             .padding(.bottom, 2)
             .accessibilityElement(children: .contain)
         }
     }
 
-    // A viewed profile that is not its provider's active profile always
-    // shows its tag here (with a "Make Active" affordance), even outside
-    // multi-profile display mode, so switching the popover's view (via the
-    // header switcher or an "Active accounts" chip) never leaves the user
-    // without a way to see — or fix — the active/viewed mismatch.
+    // Shown only when the viewed profile is not its provider's active
+    // profile: one short fixed-label strip pairing the state with the
+    // single action that changes it. Deliberately contains no account
+    // names — names live in the header and the accounts chips, where
+    // truncation is graceful; a prose sentence with an embedded name can
+    // never be guaranteed to fit the popover's width. When viewing the
+    // active profile the strip disappears entirely (the header pill and
+    // the chips' green dot already carry that state).
     @ViewBuilder
     private func normalizedProfileTag(
         presentation: NormalizedUsagePresentation
     ) -> some View {
         if let viewingProfile = displayedProfile,
-           profileManager.displayMode == .multi
-               || !profileManager.isActive(viewingProfile) {
+           !profileManager.isActive(viewingProfile) {
             HStack(spacing: 8) {
-                profileAvatar(for: viewingProfile)
+                Image(systemName: "eye")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.accentColor)
+                    .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(viewingProfile.name)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                    Text(presentation.providerName)
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                }
+                Text(
+                    NormalizedUsageStrings.localized(
+                        "popover.viewing_strip.not_active",
+                        default: "Not active"
+                    )
+                )
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.primary)
+                .lineLimit(1)
 
-                Spacer()
-                activeBadge(for: viewingProfile)
+                Spacer(minLength: 8)
                 makeActiveButton(for: viewingProfile)
+                    .fixedSize()
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.primary.opacity(0.03))
+                RoundedRectangle(
+                    cornerRadius: PopoverDesign.cardRadius,
+                    style: .continuous
+                )
+                .fill(Color.accentColor.opacity(0.08))
             )
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.horizontal, PopoverDesign.outerInset)
+            .padding(.top, 8)
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier(
                 "popover.profile."
@@ -548,47 +575,9 @@ struct PopoverContentView: View {
         }
     }
 
-    private func profileAvatar(for profile: Profile) -> some View {
-        ZStack {
-            Circle()
-                .fill(Color.accentColor.opacity(0.15))
-                .frame(width: 20, height: 20)
-
-            Text(profileInitials(for: profile.name))
-                .font(
-                    .system(
-                        size: 8,
-                        weight: .bold,
-                        design: .rounded
-                    )
-                )
-                .foregroundColor(.accentColor)
-        }
-    }
-
-    @ViewBuilder
-    private func activeBadge(for profile: Profile) -> some View {
-        if profileManager.isActive(profile) {
-            Text(
-                NormalizedUsageStrings.localized(
-                    "popover.normalized.profile.active",
-                    default: "Active"
-                )
-            )
-            .font(.system(size: 8, weight: .semibold))
-            .foregroundColor(.accentColor)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(
-                Capsule()
-                    .fill(Color.accentColor.opacity(0.12))
-            )
-        }
-    }
-
-    // Deliberately separate from `activeBadge`: activation stays an
-    // explicit, opt-in action, so this only ever appears — and only ever
-    // does one thing — when the viewed profile genuinely isn't active.
+    // Activation stays an explicit, opt-in action, so this only ever
+    // appears — and only ever does one thing — when the viewed profile
+    // genuinely isn't active.
     @ViewBuilder
     private func makeActiveButton(for profile: Profile) -> some View {
         if !profileManager.isActive(profile) {
@@ -602,19 +591,27 @@ struct PopoverContentView: View {
                 }
             }) {
                 Text(title)
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(.accentColor)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
                     .background(
                         Capsule()
                             .strokeBorder(
-                                Color.accentColor.opacity(0.4),
+                                Color.accentColor.opacity(0.45),
                                 lineWidth: 1
                             )
                     )
+                    .contentShape(Capsule())
             }
             .buttonStyle(.plain)
+            .help(
+                NormalizedUsageStrings.formatted(
+                    "popover.make_active.help",
+                    default: "Make %@ the active account its provider uses. Viewing usage never changes this.",
+                    arguments: [profile.name]
+                )
+            )
             .accessibilityIdentifier("popover.profile.make_active")
             .accessibilityLabel(
                 "\(title): \(profile.name)"
@@ -654,254 +651,24 @@ struct PopoverDivider: View {
     }
 }
 
-// MARK: - Profile Switcher Compact (for header)
+// MARK: - Account Chip
 
-struct ProfileSwitcherCompact: View {
-    @ObservedObject private var profileManager: ProfileManager
-    @State private var isHovered = false
-    let viewedProfileName: String
-    let viewedProfileID: UUID?
-    let onSelectProfile: (UUID) -> Void
-    let onManageProfiles: () -> Void
-
-    init(
-        profileManager: ProfileManager,
-        viewedProfileName: String,
-        viewedProfileID: UUID?,
-        onSelectProfile: @escaping (UUID) -> Void,
-        onManageProfiles: @escaping () -> Void
-    ) {
-        _profileManager = ObservedObject(
-            wrappedValue: profileManager
-        )
-        self.viewedProfileName = viewedProfileName
-        self.viewedProfileID = viewedProfileID
-        self.onSelectProfile = onSelectProfile
-        self.onManageProfiles = onManageProfiles
-    }
-
-    private var rows: [ProviderProfileRowPresentation] {
-        ProviderProfileRowPresentation.make(
-            profiles: profileManager.profiles,
-            isActive: profileManager.isActive,
-            viewedProfileID: viewedProfileID
-        )
-    }
-
-    var body: some View {
-        Menu {
-            ForEach(rows) { row in
-                // Selecting a row switches what the popover is showing —
-                // it never activates that profile. Activation only
-                // happens via the explicit "Make Active" affordance.
-                Button(action: {
-                    onSelectProfile(row.id)
-                }) {
-                    ProviderProfileMenuRow(row: row)
-                }
-                .accessibilityIdentifier(row.accessibilityIdentifier)
-            }
-
-            Divider()
-
-            Button(action: onManageProfiles) {
-                HStack {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 12))
-                    Text("popover.manage_profiles".localized)
-                        .font(.system(size: 12, weight: .medium))
-                }
-            }
-            .accessibilityIdentifier("popover.action.manage_profiles")
-        } label: {
-            Text(
-                viewedProfileName.isEmpty
-                    ? "popover.no_profile".localized
-                    : viewedProfileName
-            )
-            .font(.system(size: 13, weight: .bold))
-            .foregroundColor(.primary)
-            .lineLimit(1)
-        }
-        .menuStyle(.borderlessButton)
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("popover.profile.switcher")
-    }
-}
-
-// MARK: - Profile Switcher Bar
-
-struct ProfileSwitcherBar: View {
-    @StateObject private var profileManager = ProfileManager.shared
-    @State private var isHovered = false
-    let onManageProfiles: () -> Void
-
-    private var rows: [ProviderProfileRowPresentation] {
-        ProviderProfileRowPresentation.make(
-            profiles: profileManager.profiles,
-            isActive: profileManager.isActive
-        )
-    }
-
-    var body: some View {
-        Menu {
-            ForEach(rows) { row in
-                Button(action: {
-                    Task {
-                        await profileManager.activateProfile(row.id)
-                    }
-                }) {
-                    ProviderProfileMenuRow(row: row)
-                }
-            }
-
-            Divider()
-
-            Button(action: onManageProfiles) {
-                HStack {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 12))
-                    Text("popover.manage_profiles".localized)
-                        .font(.system(size: 12, weight: .medium))
-                }
-            }
-        } label: {
-            HStack(spacing: 8) {
-                // Profile avatar
-                ZStack {
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 28, height: 28)
-
-                    Text(profileInitials)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .foregroundColor(.white)
-                }
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(profileManager.activeProfile?.name ?? "popover.no_profile".localized)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-
-                    HStack(spacing: 4) {
-                        if profileManager.profiles.count > 1 {
-                            Text(String(format: "popover.profiles_count".localized, profileManager.profiles.count))
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("popover.profile_count_singular".localized)
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(.secondary)
-                        }
-
-                        Text("•")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary.opacity(0.5))
-
-                        Text("common.switch".localized)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                Spacer()
-
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundColor(.secondary)
-            }
-            .padding(8)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
-            )
-        }
-        .menuStyle(.borderlessButton)
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
-            }
-        }
-    }
-
-    private var profileInitials: String {
-        guard let name = profileManager.activeProfile?.name else { return "?" }
-        let words = name.split(separator: " ")
-        if words.count >= 2 {
-            return String(words[0].prefix(1) + words[1].prefix(1)).uppercased()
-        } else if let first = words.first {
-            return String(first.prefix(2)).uppercased()
-        }
-        return "?"
-    }
-}
-
-private struct ProviderProfileMenuRow: View {
-    let row: ProviderProfileRowPresentation
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: row.systemImage)
-                .font(.system(size: 11))
-                .frame(width: 14)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(row.name)
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-                Text(
-                    "\(row.providerName) · "
-                        + row.connectionDescription
-                )
-                .font(.system(size: 9))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-            }
-
-            Spacer()
-
-            HStack(spacing: 4) {
-                if row.isViewing {
-                    Image(systemName: "eye.fill")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(.secondary)
-                        .accessibilityLabel(
-                            NormalizedUsageStrings.localized(
-                                "popover.normalized.profile.viewing",
-                                default: "Viewing"
-                            )
-                        )
-                }
-                if row.isActive {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 10, weight: .semibold))
-                        .accessibilityLabel(
-                            NormalizedUsageStrings.localized(
-                                "popover.normalized.profile.active",
-                                default: "Active"
-                            )
-                        )
-                }
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier(row.accessibilityIdentifier)
-    }
-}
-
-// MARK: - Active Account Chip
-
-/// One row in the "Active accounts" section: `<Provider> · <Profile>`,
-/// tappable to switch the popover to that account. Purely a view switch —
-/// see `ProfileSwitcherCompact` for why activation never happens here.
-private struct ActiveAccountChipView: View {
-    let chip: ActiveAccountChipPresentation
+/// One chip in the "Accounts" section, tappable to switch the popover to
+/// that account. Purely a view switch — see
+/// `MenuBarManager.setViewedProfile(_:)` for why activation never
+/// happens here.
+struct AccountChipView: View {
+    let chip: AccountChipPresentation
     let onTap: () -> Void
 
     private var accessibilityLabel: String {
-        let base = "\(chip.providerName) · \(chip.profileName)"
+        var base = "\(chip.providerName) · \(chip.profileName)"
+        if chip.isActive {
+            base += ", " + NormalizedUsageStrings.localized(
+                "popover.normalized.profile.active",
+                default: "Active"
+            )
+        }
         guard chip.isViewing else { return base }
         return base + ", " + NormalizedUsageStrings.localized(
             "popover.normalized.profile.viewing",
@@ -909,42 +676,77 @@ private struct ActiveAccountChipView: View {
         )
     }
 
+    @State private var isHovered = false
+
+    private var helpText: String {
+        var parts = ["\(chip.providerName) · \(chip.profileName)"]
+        if chip.isActive {
+            parts.append(
+                NormalizedUsageStrings.localized(
+                    "popover.normalized.profile.active",
+                    default: "Active"
+                )
+            )
+        }
+        if chip.isViewing {
+            parts.append(
+                NormalizedUsageStrings.localized(
+                    "popover.normalized.profile.viewing",
+                    default: "Viewing"
+                )
+            )
+        }
+        return parts.joined(separator: " · ")
+    }
+
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 4) {
-                Text(chip.providerName)
-                    .font(.system(size: 9, weight: .semibold))
-                Text("·")
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondary)
+            HStack(spacing: 5) {
                 Text(chip.profileName)
-                    .font(.system(size: 9, weight: .medium))
+                    .font(PopoverDesign.chipFont)
                     .lineLimit(1)
+                    .truncationMode(.middle)
+
+                if chip.isActive {
+                    Circle()
+                        .fill(Color.adaptiveGreen)
+                        .frame(width: 5, height: 5)
+                        .accessibilityHidden(true)
+                }
             }
             .foregroundColor(
                 chip.isViewing ? .accentColor : .primary
             )
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
             .background(
                 Capsule()
                     .fill(
                         chip.isViewing
-                            ? Color.accentColor.opacity(0.12)
-                            : Color.primary.opacity(0.05)
+                            ? Color.accentColor.opacity(0.14)
+                            : isHovered
+                                ? PopoverDesign.hoverFill
+                                : PopoverDesign.cardFill
                     )
             )
             .overlay(
                 Capsule()
                     .strokeBorder(
                         chip.isViewing
-                            ? Color.accentColor.opacity(0.4)
+                            ? Color.accentColor.opacity(0.45)
                             : Color.clear,
                         lineWidth: 1
                     )
             )
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
+        .help(helpText)
         .accessibilityIdentifier(chip.accessibilityIdentifier)
         .accessibilityLabel(accessibilityLabel)
     }
@@ -994,16 +796,16 @@ struct APICostCard: View {
     let apiUsage: APIUsage
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             // Header
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("API Cost")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(PopoverDesign.rowTitleFont)
                         .foregroundColor(.primary)
 
                     Text("This Month")
-                        .font(.system(size: 10))
+                        .font(PopoverDesign.metaFont)
                         .foregroundColor(.secondary)
                 }
 
@@ -1012,7 +814,8 @@ struct APICostCard: View {
                 // Total cost
                 if let formatted = apiUsage.formattedAPICost {
                     Text(formatted)
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .font(PopoverDesign.valueFont)
+                        .monospacedDigit()
                         .foregroundColor(.primary)
                 }
             }
@@ -1050,12 +853,7 @@ struct APICostCard: View {
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
-        )
+        .popoverCard()
     }
 }
 
@@ -1239,66 +1037,53 @@ struct APIUsageCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             // Header
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("menubar.api_credits".localized)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(PopoverDesign.rowTitleFont)
                         .foregroundColor(.primary)
 
                     Text("menubar.anthropic_console".localized)
-                        .font(.system(size: 10))
+                        .font(PopoverDesign.metaFont)
                         .foregroundColor(.secondary)
                 }
 
                 Spacer()
 
                 Text("\(Int(displayPercentage))%")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .font(PopoverDesign.valueFont)
+                    .monospacedDigit()
                     .foregroundColor(usageColor)
             }
 
-            // Progress bar
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 2.5)
-                        .fill(Color.primary.opacity(0.08))
-
-                    RoundedRectangle(cornerRadius: 2.5)
-                        .fill(usageColor)
-                        .frame(width: geometry.size.width * min(displayPercentage / 100.0, 1.0))
-                        .animation(.easeInOut(duration: 0.6), value: displayPercentage)
-                }
-            }
-            .frame(height: 4)
+            PopoverProgressBar(
+                fraction: min(displayPercentage / 100.0, 1.0),
+                color: usageColor
+            )
 
             // Used / Remaining
             HStack {
                 Text(apiUsage.formattedUsed)
-                    .font(.system(size: 10))
+                    .font(PopoverDesign.metaFont)
                     .foregroundColor(.secondary)
 
                 Spacer()
 
                 Text(apiUsage.formattedRemaining)
-                    .font(.system(size: 10))
+                    .font(PopoverDesign.metaFont)
                     .foregroundColor(.secondary)
             }
 
             // Reset Time
             if apiUsage.resetsAt > Date() {
                 Text(resetTimeText(for: apiUsage.resetsAt))
-                    .font(.system(size: 9))
+                    .font(PopoverDesign.metaFont)
                     .foregroundColor(.secondary)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
-        )
+        .popoverCard()
     }
 
     private func resetTimeText(for reset: Date) -> String {
@@ -1323,25 +1108,30 @@ struct StatusBannerView: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundColor(color)
             Text(message)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.primary)
-                .lineLimit(1)
+                .lineLimit(2)
             Spacer()
             if onTap != nil {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 9))
+                    .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(.secondary)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .background(color.opacity(0.12))
-        .cornerRadius(6)
-        .padding(.horizontal, 10)
-        .padding(.top, 4)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(
+                cornerRadius: PopoverDesign.cardRadius,
+                style: .continuous
+            )
+            .fill(color.opacity(0.12))
+        )
+        .padding(.horizontal, PopoverDesign.outerInset)
+        .padding(.top, 6)
         // Without an explicit hit-testing shape, `onTapGesture` only
         // registers over the row's rendered content (icon/text), not the
         // `Spacer()` that fills most of the row — including the area right
@@ -1389,15 +1179,15 @@ struct ExpandableStatusBanner: View {
             }) {
                 HStack(spacing: 8) {
                     Image(systemName: icon)
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .foregroundColor(color)
                     Text(message)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.primary)
-                        .lineLimit(1)
+                        .lineLimit(2)
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 9))
+                        .font(.system(size: 9, weight: .semibold))
                         .foregroundColor(.secondary)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 }
@@ -1444,16 +1234,21 @@ struct ExpandableStatusBanner: View {
                     .padding(.top, 2)
                     .accessibilityIdentifier("popover.banner.retry")
                 }
-                .padding(.leading, 19)
+                .padding(.leading, 20)
                 .transition(.opacity)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .background(color.opacity(0.12))
-        .cornerRadius(6)
-        .padding(.horizontal, 10)
-        .padding(.top, 4)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(
+                cornerRadius: PopoverDesign.cardRadius,
+                style: .continuous
+            )
+            .fill(color.opacity(0.12))
+        )
+        .padding(.horizontal, PopoverDesign.outerInset)
+        .padding(.top, 6)
         .accessibilityElement(children: .contain)
     }
 }

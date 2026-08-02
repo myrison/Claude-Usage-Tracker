@@ -63,142 +63,69 @@ struct NormalizedUsageDisplayPreferences: Equatable {
     }
 }
 
-struct ProviderProfileRowPresentation: Equatable, Identifiable {
-    let id: UUID
-    let name: String
-    let providerName: String
-    let connectionDescription: String
-    let systemImage: String
-    let isActive: Bool
-    /// Whether this row is the profile the popover is currently showing.
-    /// Independent of `isActive`: a profile can be viewed without being
-    /// its provider's active profile, and vice versa.
-    let isViewing: Bool
-
-    var accessibilityIdentifier: String {
-        "popover.profile.switcher.\(id.uuidString)"
-    }
-
-    /// `isActive` is resolved per-row rather than against one shared id,
-    /// since this list mixes Claude and Codex profiles that each have their
-    /// own independent active slot — pass `ProfileManager.isActive(_:)`.
-    static func make(
-        profiles: [Profile],
-        isActive: (Profile) -> Bool,
-        viewedProfileID: UUID? = nil
-    ) -> [ProviderProfileRowPresentation] {
-        profiles.map { profile in
-            switch profile.providerConfiguration {
-            case .claude:
-                return ProviderProfileRowPresentation(
-                    id: profile.id,
-                    name: profile.name,
-                    providerName: "Claude",
-                    connectionDescription:
-                        claudeConnectionDescription(profile),
-                    systemImage: "sparkles",
-                    isActive: isActive(profile),
-                    isViewing: profile.id == viewedProfileID
-                )
-            case .codex(let configuration):
-                let connectionDescription: String
-                if let linkedHome = configuration.linkedHome {
-                    connectionDescription =
-                        linkedHome.filesystemIdentity == nil
-                            ? NormalizedUsageStrings.localized(
-                                "popover.normalized.profile.relink_required",
-                                default: "Relink required"
-                            )
-                            : NormalizedUsageStrings.localized(
-                                "popover.normalized.profile.linked",
-                                default: "Linked"
-                            )
-                } else {
-                    connectionDescription =
-                        NormalizedUsageStrings.localized(
-                            "popover.normalized.profile.not_linked",
-                            default: "Not linked"
-                        )
-                }
-                return ProviderProfileRowPresentation(
-                    id: profile.id,
-                    name: profile.name,
-                    providerName: "Codex",
-                    connectionDescription: connectionDescription,
-                    systemImage:
-                        "chevron.left.forwardslash.chevron.right",
-                    isActive: isActive(profile),
-                    isViewing: profile.id == viewedProfileID
-                )
-            }
-        }
-    }
-
-    private static func claudeConnectionDescription(
-        _ profile: Profile
-    ) -> String {
-        if profile.cliAccountName != nil || profile.hasCliAccount
-            || profile.cliCredentialsJSON != nil {
-            return NormalizedUsageStrings.localized(
-                "popover.normalized.profile.cli_linked",
-                default: "CLI linked"
-            )
-        }
-        if profile.claudeSessionKey != nil {
-            return NormalizedUsageStrings.localized(
-                "popover.normalized.profile.account_linked",
-                default: "Account linked"
-            )
-        }
-        if profile.apiSessionKey != nil {
-            return NormalizedUsageStrings.localized(
-                "popover.normalized.profile.api_linked",
-                default: "API linked"
-            )
-        }
-        return NormalizedUsageStrings.localized(
-            "popover.normalized.profile.not_connected",
-            default: "Not connected"
-        )
-    }
-}
-
-/// One chip in the popover's "Active accounts" section: the currently
-/// active profile for a single provider. Surfaces the one-active-profile-
-/// per-provider state (a Claude profile and a Codex profile can be active
-/// simultaneously) that the header alone cannot show, since the header
-/// only ever describes the single profile being viewed.
-struct ActiveAccountChipPresentation: Equatable, Identifiable {
+/// One chip in the popover's "Accounts" section. The section lists every
+/// configured profile — a partial list (e.g. only the active ones) reads
+/// as arbitrary to anyone with more profiles than chips. `isActive` marks
+/// each provider's currently active profile; `isViewing` marks the one
+/// the popover is showing. Tapping a chip views it; activation stays an
+/// explicit separate action.
+struct AccountChipPresentation: Equatable, Identifiable {
     let id: UUID
     let providerName: String
     let profileName: String
     let isViewing: Bool
+    let isActive: Bool
 
     var accessibilityIdentifier: String {
-        "popover.active_accounts.chip.\(id.uuidString)"
+        "popover.accounts.chip.\(id.uuidString)"
     }
+}
 
-    /// Builds one chip per provider that currently has an active profile.
-    /// A provider with no active profile (e.g. never configured) is
-    /// omitted rather than shown as empty.
+/// All chips for one provider, rendered under a small provider caption so
+/// the one-active-profile-per-provider rule is visible from the grouping
+/// itself.
+struct AccountChipGroup: Equatable, Identifiable {
+    let providerName: String
+    let chips: [AccountChipPresentation]
+
+    var id: String { providerName }
+
+    /// Groups every profile by provider, preserving profile order within
+    /// each group. Provider order is Claude first, then Codex, matching
+    /// the switcher and status item ordering elsewhere. Providers with no
+    /// profiles are omitted.
     static func make(
-        activeClaudeProfile: Profile?,
-        activeCodexProfile: Profile?,
+        profiles: [Profile],
+        isActive: (Profile) -> Bool,
         viewedProfileID: UUID?
-    ) -> [ActiveAccountChipPresentation] {
-        [
-            activeClaudeProfile.map { ($0, "Claude") },
-            activeCodexProfile.map { ($0, "Codex") }
-        ]
-        .compactMap { $0 }
-        .map { profile, providerName in
-            ActiveAccountChipPresentation(
-                id: profile.id,
-                providerName: providerName,
-                profileName: profile.name,
-                isViewing: profile.id == viewedProfileID
-            )
+    ) -> [AccountChipGroup] {
+        var claude: [AccountChipPresentation] = []
+        var codex: [AccountChipPresentation] = []
+        for profile in profiles {
+            // One switch, so a new provider case is a compile error in
+            // exactly one place instead of silently landing in the wrong
+            // group.
+            func chip(named providerName: String) -> AccountChipPresentation {
+                AccountChipPresentation(
+                    id: profile.id,
+                    providerName: providerName,
+                    profileName: profile.name,
+                    isViewing: profile.id == viewedProfileID,
+                    isActive: isActive(profile)
+                )
+            }
+            switch profile.providerConfiguration {
+            case .claude:
+                claude.append(chip(named: "Claude"))
+            case .codex:
+                codex.append(chip(named: "Codex"))
+            }
         }
+        return [
+            AccountChipGroup(providerName: "Claude", chips: claude),
+            AccountChipGroup(providerName: "Codex", chips: codex)
+        ]
+        .filter { !$0.chips.isEmpty }
     }
 }
 
@@ -856,15 +783,15 @@ struct ProviderPopoverHeader: View {
         string: "https://status.claude.com"
     )!
 
-    @ObservedObject var profileManager: ProfileManager
     let presentation: NormalizedUsagePresentation
     let claudeStatus: ClaudeStatus
     let isRefreshing: Bool
-    /// Selecting a profile from the switcher menu — a view change, not an
-    /// activation. See `MenuBarManager.setViewedProfile(_:)`.
-    let onSelectProfile: (UUID) -> Void
+    /// Whether the viewed profile is its provider's active profile; `nil`
+    /// when unknown (e.g. the profile was just removed). Drives the
+    /// header's Active/Viewing state pill — the single at-a-glance answer
+    /// to "is the account I'm looking at the one my tools are using?".
+    let isViewedProfileActive: Bool?
     let onRefresh: () -> Void
-    let onManageProfiles: () -> Void
     let onPreferences: () -> Void
 
     private var claudeStatusColor: Color {
@@ -917,10 +844,11 @@ struct ProviderPopoverHeader: View {
 
     @ViewBuilder
     private var statusRow: some View {
-        let content = HStack(spacing: 4) {
+        let content = HStack(spacing: 5) {
             Text(presentation.providerName)
-                .font(.system(size: 9, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
             Text("·")
+                .font(PopoverDesign.metaFont)
             if presentation.providerID == .claude {
                 Circle()
                     .fill(claudeStatusColor)
@@ -928,7 +856,9 @@ struct ProviderPopoverHeader: View {
                     .accessibilityHidden(true)
             }
             Text(providerStatusText)
+                .font(PopoverDesign.metaFont)
                 .lineLimit(1)
+                .truncationMode(.tail)
         }
         if presentation.providerID == .claude {
             Button(action: {
@@ -954,17 +884,143 @@ struct ProviderPopoverHeader: View {
         return identity
     }
 
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                ProfileSwitcherCompact(
-                    profileManager: profileManager,
-                    viewedProfileName: presentation.profileName,
-                    viewedProfileID: presentation.profileID,
-                    onSelectProfile: onSelectProfile,
-                    onManageProfiles: onManageProfiles
-                )
+    private var profileInitials: String {
+        let words = presentation.profileName.split(separator: " ")
+        if words.count >= 2 {
+            return String(
+                words[0].prefix(1) + words[1].prefix(1)
+            ).uppercased()
+        } else if let first = words.first {
+            return String(first.prefix(2)).uppercased()
+        }
+        return "?"
+    }
 
+    private var providerAccent: Color {
+        PopoverDesign.providerAccent(
+            named: presentation.providerName
+        )
+    }
+
+    private var avatar: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            providerAccent.opacity(0.95),
+                            providerAccent.opacity(0.7)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: 30, height: 30)
+
+            Text(profileInitials)
+                .font(
+                    .system(
+                        size: 11,
+                        weight: .bold,
+                        design: .rounded
+                    )
+                )
+                .foregroundColor(.white)
+        }
+        .accessibilityHidden(true)
+    }
+
+    /// The account line repeats the profile name for most single-account
+    /// setups; only render it when it adds information the name doesn't.
+    private var showsAccountLine: Bool {
+        accountDescription.caseInsensitiveCompare(
+            presentation.profileName
+        ) != .orderedSame
+    }
+
+    /// Compact Active/Viewing pill beside the profile name. Uses short
+    /// fixed labels — state is stated structurally here so no other part
+    /// of the popover needs a prose sentence to explain it.
+    @ViewBuilder
+    private var statePill: some View {
+        if let isViewedProfileActive {
+            let label = isViewedProfileActive
+                ? NormalizedUsageStrings.localized(
+                    "popover.normalized.profile.active",
+                    default: "Active"
+                )
+                : NormalizedUsageStrings.localized(
+                    "popover.normalized.profile.viewing",
+                    default: "Viewing"
+                )
+            HStack(spacing: 3) {
+                if isViewedProfileActive {
+                    Circle()
+                        .fill(Color.adaptiveGreen)
+                        .frame(width: 5, height: 5)
+                } else {
+                    Image(systemName: "eye")
+                        .font(.system(size: 7, weight: .semibold))
+                }
+                Text(label)
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundColor(
+                isViewedProfileActive
+                    ? Color.adaptiveGreen
+                    : Color.accentColor
+            )
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                Capsule()
+                    .fill(
+                        (isViewedProfileActive
+                            ? Color.adaptiveGreen
+                            : Color.accentColor)
+                            .opacity(0.13)
+                    )
+            )
+            .accessibilityIdentifier("popover.header.state")
+            .accessibilityLabel(label)
+        }
+    }
+
+    var body: some View {
+        // Two tiers: the top row holds identity and actions; the status
+        // and account lines sit below at (almost) full popover width so
+        // they never share horizontal space with the buttons — sharing
+        // is what truncated "All Systems Operational".
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .center, spacing: 10) {
+                avatar
+
+                HStack(spacing: 6) {
+                    // Plain identity, not a control: switching accounts
+                    // is the accounts section's job, and a dropdown here
+                    // would duplicate it behind a hidden affordance.
+                    Text(
+                        presentation.profileName.isEmpty
+                            ? NormalizedUsageStrings.localized(
+                                "popover.no_profile",
+                                default: "No profile"
+                            )
+                            : presentation.profileName
+                    )
+                    .font(PopoverDesign.identityFont)
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                    .accessibilityIdentifier("popover.profile.switcher")
+
+                    statePill
+                }
+
+                Spacer(minLength: 8)
+
+                headerButtons
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
                 statusRow
                     .foregroundColor(.secondary)
                     .accessibilityElement(children: .combine)
@@ -973,25 +1029,32 @@ struct ProviderPopoverHeader: View {
                             .providerHeaderAccessibilityIdentifier
                     )
 
-                Text(accountDescription)
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .accessibilityLabel(
-                        NormalizedUsageStrings.localized(
-                            "popover.normalized.accessibility.account",
-                            default: "Account"
+                if showsAccountLine {
+                    Text(accountDescription)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .accessibilityLabel(
+                            NormalizedUsageStrings.localized(
+                                "popover.normalized.accessibility.account",
+                                default: "Account"
+                            )
+                            + ": \(accountDescription)"
                         )
-                        + ": \(accountDescription)"
-                    )
-                    .accessibilityIdentifier(
-                        presentation.accountAccessibilityIdentifier
-                    )
+                        .accessibilityIdentifier(
+                            presentation.accountAccessibilityIdentifier
+                        )
+                }
             }
+            .padding(.leading, 40)
+        }
+        .padding(.horizontal, PopoverDesign.outerInset)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+    }
 
-            Spacer()
-
-            HStack(alignment: .center, spacing: 2) {
+    private var headerButtons: some View {
+        HStack(alignment: .center, spacing: 2) {
                 HeaderIconButton(
                     icon: "arrow.clockwise",
                     isRefreshing: isRefreshing,
@@ -1018,10 +1081,7 @@ struct ProviderPopoverHeader: View {
                     )
                 )
                 .accessibilityIdentifier("popover.action.settings")
-            }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
     }
 }
 
@@ -1032,7 +1092,10 @@ struct NormalizedUsageView: View {
     let now: Date
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(
+            alignment: .leading,
+            spacing: PopoverDesign.sectionSpacing
+        ) {
             ForEach(presentation.notices) { notice in
                 NormalizedUsageNoticeView(notice: notice)
             }
@@ -1056,7 +1119,7 @@ struct NormalizedUsageView: View {
                 }
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, PopoverDesign.outerInset)
         .padding(.vertical, 8)
     }
 
@@ -1115,25 +1178,37 @@ private struct NormalizedUsageNoticeView: View {
     }
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             Image(systemName: icon)
-                .frame(width: 14)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.secondary)
+                .frame(width: 20, height: 20)
+                .background(
+                    RoundedRectangle(
+                        cornerRadius: 5,
+                        style: .continuous
+                    )
+                    .fill(Color.primary.opacity(0.06))
+                )
             Text(
                 NormalizedUsageStrings.localized(
                     notice.localizationKey,
                     default: notice.defaultMessage
                 )
             )
+            .font(PopoverDesign.metaFont)
             .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .font(.system(size: 10, weight: .medium))
         .foregroundColor(.secondary)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
         .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(Color.primary.opacity(0.05))
+            RoundedRectangle(
+                cornerRadius: PopoverDesign.cardRadius,
+                style: .continuous
+            )
+            .fill(PopoverDesign.cardFill)
         )
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier(notice.accessibilityIdentifier)
@@ -1230,12 +1305,12 @@ private struct NormalizedUsageEmptyStateView: View {
                         default: message.value
                     )
             )
-            .font(.system(size: 11))
+            .font(PopoverDesign.metaFont)
             .foregroundColor(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .padding(10)
+        .popoverCard()
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier(state.accessibilityIdentifier)
     }
@@ -1263,7 +1338,7 @@ private struct NormalizedUsageSummaryView: View {
                         default: "Usage summary"
                     )
                 )
-                .font(.system(size: 12, weight: .semibold))
+                .font(PopoverDesign.rowTitleFont)
             }
             .accessibilityIdentifier("popover.summary.disclosure")
 
@@ -1275,18 +1350,11 @@ private struct NormalizedUsageSummaryView: View {
                         display: timeDisplay
                     )
                 )
-                .font(.system(size: 9))
+                .font(PopoverDesign.metaFont)
                 .foregroundColor(.secondary)
             }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(
-                    Color.primary.opacity(0.1),
-                    lineWidth: 0.5
-                )
-        )
+        .popoverCard()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("popover.summary")
     }
@@ -1391,7 +1459,7 @@ private struct NormalizedUsageCreditsView: View {
                         default: "Credits"
                     )
                 )
-                .font(.system(size: 12, weight: .semibold))
+                .font(PopoverDesign.rowTitleFont)
                 Spacer()
                 Text(
                     NormalizedUsageStrings.localized(
@@ -1432,14 +1500,7 @@ private struct NormalizedUsageCreditsView: View {
                 )
             }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(
-                    Color.primary.opacity(0.1),
-                    lineWidth: 0.5
-                )
-        )
+        .popoverCard()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("popover.credits")
     }

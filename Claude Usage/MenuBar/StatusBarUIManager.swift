@@ -633,7 +633,7 @@ final class StatusBarUIManager {
 
     /// Adds a thin green underline to an image to indicate the active profile.
     /// The canvas is 2pts taller than the source so the icon shifted up by 2pts is
-    /// not clipped. The 1pt underline occupies the bottom row of the original height.
+    /// not clipped. A 1.5pt rounded underline, inset 1pt per side, sits at the bottom.
     private func addGreenUnderline(to image: NSImage) -> NSImage {
         let newSize = NSSize(width: image.size.width, height: image.size.height + 2)
         let newImage = NSImage(size: newSize)
@@ -643,7 +643,8 @@ final class StatusBarUIManager {
         // NSRect.zero passed as `from:` is AppKit's sentinel meaning "draw entire image".
         image.draw(at: NSPoint(x: 0, y: 2), from: NSRect(origin: .zero, size: image.size), operation: .copy, fraction: 1.0)
         NSColor.systemGreen.setFill()
-        NSBezierPath(rect: NSRect(x: 1, y: 0, width: image.size.width - 2, height: 1)).fill()
+        let underlineRect = NSRect(x: 1, y: 0, width: image.size.width - 2, height: 1.5)
+        NSBezierPath(roundedRect: underlineRect, xRadius: 0.75, yRadius: 0.75).fill()
         return newImage
     }
 

@@ -1141,189 +1141,77 @@ final class NormalizedUsagePresentationTests: HostedAppTestCase {
         XCTAssertFalse(clickedPreferences.usePaceColoring)
     }
 
-    func testMixedProviderRowsPreserveOrderIdentityAndProviderState()
-        throws
-    {
-        let claudeID = UUID()
-        let codexID = UUID()
-        let legacyCodexID = UUID()
-        let verifiedCodexID = UUID()
-        let claude = Profile(
-            id: claudeID,
-            name: "Claude work",
-            providerConfiguration: .claude,
-            claudeSessionKey: "session"
-        )
-        let codex = Profile(
-            id: codexID,
-            name: "Codex work",
-            providerConfiguration: .codex(
-                CodexProfileConfiguration()
-            )
-        )
-        let legacyHome = try JSONDecoder().decode(
-            CanonicalCodexHome.self,
-            from: Data(#"{"path":"/tmp/legacy-codex-home"}"#.utf8)
-        )
-        let legacyCodex = Profile(
-            id: legacyCodexID,
-            name: "Legacy Codex",
-            providerConfiguration: .codex(
-                CodexProfileConfiguration(
-                    linkedHome: legacyHome
-                )
-            )
-        )
-        let temporaryHome = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                "normalized-usage-\(UUID().uuidString)",
-                isDirectory: true
-            )
-        try FileManager.default.createDirectory(
-            at: temporaryHome,
-            withIntermediateDirectories: true
-        )
-        defer {
-            try? FileManager.default.removeItem(at: temporaryHome)
-        }
-        let verifiedHome = try CodexHomeCanonicalizer()
-            .canonicalize(temporaryHome.path)
-        let verifiedCodex = Profile(
-            id: verifiedCodexID,
-            name: "Verified Codex",
-            providerConfiguration: .codex(
-                CodexProfileConfiguration(
-                    linkedHome: verifiedHome
-                )
-            )
-        )
-
-        let rows = ProviderProfileRowPresentation.make(
-            profiles: [
-                codex,
-                legacyCodex,
-                verifiedCodex,
-                claude
-            ],
-            isActive: { $0.id == codexID }
-        )
-
-        XCTAssertEqual(
-            rows.map(\.id),
-            [
-                codexID,
-                legacyCodexID,
-                verifiedCodexID,
-                claudeID
-            ]
-        )
-        XCTAssertEqual(
-            rows.map(\.providerName),
-            ["Codex", "Codex", "Codex", "Claude"]
-        )
-        XCTAssertEqual(rows[0].connectionDescription, "Not linked")
-        XCTAssertEqual(
-            rows[1].connectionDescription,
-            "Relink required"
-        )
-        XCTAssertEqual(rows[2].connectionDescription, "Linked")
-        XCTAssertEqual(
-            rows[3].connectionDescription,
-            "Account linked"
-        )
-        XCTAssertTrue(rows[0].isActive)
-        XCTAssertFalse(rows[3].isActive)
-        XCTAssertNotEqual(rows[0].systemImage, rows[3].systemImage)
-        XCTAssertEqual(
-            rows[0].accessibilityIdentifier,
-            "popover.profile.switcher.\(codexID.uuidString)"
-        )
-    }
-
-    func testProviderProfileRowViewingIsIndependentOfActive() {
-        let activeClaudeID = UUID()
-        let viewedCodexID = UUID()
-        let claude = Profile(
-            id: activeClaudeID,
-            name: "Active Claude",
-            providerConfiguration: .claude
-        )
-        let codex = Profile(
-            id: viewedCodexID,
-            name: "Viewed Codex",
-            providerConfiguration: .codex(
-                CodexProfileConfiguration()
-            )
-        )
-
-        // Claude is the active profile (for its own provider), but Codex
-        // is the one currently being viewed — the switcher menu must be
-        // able to represent that split, since selecting a row changes
-        // only what's viewed, never what's active.
-        let rows = ProviderProfileRowPresentation.make(
-            profiles: [claude, codex],
-            isActive: { $0.id == activeClaudeID },
-            viewedProfileID: viewedCodexID
-        )
-
-        XCTAssertTrue(rows[0].isActive)
-        XCTAssertFalse(rows[0].isViewing)
-        XCTAssertFalse(rows[1].isActive)
-        XCTAssertTrue(rows[1].isViewing)
-    }
-
-    func testProviderProfileRowDefaultsToNoViewingWithoutViewedID() {
-        let profile = Profile(name: "Solo")
-        let rows = ProviderProfileRowPresentation.make(
-            profiles: [profile],
-            isActive: { _ in true }
-        )
-        XCTAssertFalse(rows[0].isViewing)
-    }
-
-    func testActiveAccountChipsCoverBothProvidersAndFlagTheViewedOne() {
-        let claudeID = UUID()
-        let codexID = UUID()
-        let claude = Profile(
-            id: claudeID,
+    func testAccountChipGroupsListEveryProfileGroupedByProvider() {
+        let claudeActive = Profile(
+            id: UUID(),
             name: "jc@example.com",
             providerConfiguration: .claude
         )
+        let claudeOther = Profile(
+            id: UUID(),
+            name: "jason@example.com",
+            providerConfiguration: .claude
+        )
         let codex = Profile(
-            id: codexID,
+            id: UUID(),
             name: "codex",
             providerConfiguration: .codex(
                 CodexProfileConfiguration()
             )
         )
 
-        let chips = ActiveAccountChipPresentation.make(
-            activeClaudeProfile: claude,
-            activeCodexProfile: codex,
-            viewedProfileID: codexID
+        let groups = AccountChipGroup.make(
+            profiles: [claudeActive, codex, claudeOther],
+            isActive: { $0.id == claudeActive.id || $0.id == codex.id },
+            viewedProfileID: claudeOther.id
         )
 
-        XCTAssertEqual(chips.count, 2)
-        XCTAssertEqual(chips[0].id, claudeID)
-        XCTAssertEqual(chips[0].providerName, "Claude")
-        XCTAssertEqual(chips[0].profileName, "jc@example.com")
-        XCTAssertFalse(chips[0].isViewing)
-        XCTAssertEqual(chips[1].id, codexID)
-        XCTAssertEqual(chips[1].providerName, "Codex")
-        XCTAssertTrue(chips[1].isViewing)
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(groups[0].providerName, "Claude")
+        XCTAssertEqual(
+            groups[0].chips.map(\.id),
+            [claudeActive.id, claudeOther.id]
+        )
+        XCTAssertEqual(groups[1].providerName, "Codex")
+        XCTAssertEqual(groups[1].chips.map(\.id), [codex.id])
+
+        let activeChip = groups[0].chips[0]
+        XCTAssertTrue(activeChip.isActive)
+        XCTAssertFalse(activeChip.isViewing)
+
+        let viewedChip = groups[0].chips[1]
+        XCTAssertFalse(viewedChip.isActive)
+        XCTAssertTrue(viewedChip.isViewing)
+
+        let codexChip = groups[1].chips[0]
+        XCTAssertTrue(codexChip.isActive)
+        XCTAssertFalse(codexChip.isViewing)
     }
 
-    func testActiveAccountChipsOmitProviderWithNoActiveProfile() {
+    func testAccountChipGroupsOmitProviderWithNoProfiles() {
         let claude = Profile(name: "Solo Claude")
-        let chips = ActiveAccountChipPresentation.make(
-            activeClaudeProfile: claude,
-            activeCodexProfile: nil,
+
+        let groups = AccountChipGroup.make(
+            profiles: [claude],
+            isActive: { _ in true },
             viewedProfileID: claude.id
         )
 
-        XCTAssertEqual(chips.count, 1)
-        XCTAssertEqual(chips[0].providerName, "Claude")
-        XCTAssertTrue(chips[0].isViewing)
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].providerName, "Claude")
+        XCTAssertEqual(groups[0].chips.count, 1)
+        XCTAssertTrue(groups[0].chips[0].isActive)
+        XCTAssertTrue(groups[0].chips[0].isViewing)
+    }
+
+    func testAccountChipGroupsAreEmptyForNoProfiles() {
+        XCTAssertTrue(
+            AccountChipGroup.make(
+                profiles: [],
+                isActive: { _ in false },
+                viewedProfileID: nil
+            ).isEmpty
+        )
     }
 
     func testUnknownRemovedProfileIsNotLabeledClaude() throws {
