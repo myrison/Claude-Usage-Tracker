@@ -391,7 +391,7 @@ struct EnterKeyStep: View {
                 ErrorLogger.shared.log(appError, severity: .error)
 
                 await MainActor.run {
-                    let errorMessage = "\(appError.message)\n\nError Code: \(appError.code.rawValue)"
+                    let errorMessage = SetupErrorMessage.text(for: appError)
                     wizardState.validationState = .error(errorMessage)
                 }
             }
@@ -429,7 +429,7 @@ struct EnterKeyStep: View {
                 ErrorLogger.shared.log(appError, severity: .error)
 
                 await MainActor.run {
-                    let errorMessage = "\(appError.message)\n\nError Code: \(appError.code.rawValue)"
+                    let errorMessage = SetupErrorMessage.text(for: appError)
                     wizardState.validationState = .error(errorMessage)
                 }
             }
@@ -643,10 +643,24 @@ struct ConfirmStep: View {
                     .strokeBorder(DesignTokens.Colors.cardBorder, lineWidth: 1)
             )
 
+            // Saving is the only thing that can fail on this step, and the
+            // failure had nowhere to surface: the button simply stopped
+            // spinning and the credential was never stored.
+            if case .error(let message) = wizardState.validationState {
+                WizardStatusBox(message: message, type: .error)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             // Navigation buttons
             HStack(spacing: 10) {
                 Button(action: {
                     withAnimation {
+                        // A save failure belongs to the attempt that produced
+                        // it. Leaving the step retires it, so returning here
+                        // does not accuse a save that never ran.
+                        if case .error = wizardState.validationState {
+                            wizardState.validationState = .idle
+                        }
                         wizardState.currentStep = .selectOrg
                     }
                 }) {
@@ -731,7 +745,9 @@ struct ConfirmStep: View {
                 ErrorLogger.shared.log(appError, severity: .error)
 
                 await MainActor.run {
-                    wizardState.validationState = .error("\(appError.message)\n\nError Code: \(appError.code.rawValue)")
+                    wizardState.validationState = .error(
+                        SetupErrorMessage.text(for: appError)
+                    )
                     isSaving = false
                 }
             }
