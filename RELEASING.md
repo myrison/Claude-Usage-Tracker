@@ -41,10 +41,21 @@ be hard-coded in the project.
 
 ## One-time owner setup
 
-As of July 30, 2026, the repository has no Actions variables, secrets, or
-environments. The inherited `gh-pages` branch contains prior-owner artifacts,
-but GitHub Pages is not configured. Complete every item below before creating
-the first Revenium release.
+**Status: complete as of August 3, 2026.** All variables, secrets, and the
+protected `release` environment below are configured, and v3.1.0 was the first
+release produced end-to-end by the workflow (v3.0.3–v3.0.5 were built and
+uploaded manually while this setup was incomplete). Keep this section as the
+reference for credential rotation or for standing the pipeline up again.
+
+Two operational notes learned during setup:
+
+- Exporting the Developer ID certificate with `security export` fails with
+  "User interaction is not allowed" from any non-interactive shell; run the
+  export from a real Terminal session where the keychain prompts can appear.
+- The `HOMEBREW_TAP_TOKEN` fine-grained PAT must be created with **resource
+  owner `revenium`** (the organization). A token whose resource owner is a
+  personal account cannot be granted permissions on the org-owned tap
+  repository, no matter what its permission list says.
 
 ### 1. Protect the release environment
 
@@ -124,18 +135,15 @@ that the configured identity is the intended long-term Revenium signer.
 
 ### 4. Configure the Revenium Homebrew tap
 
-`revenium/homebrew-tap` exists but does not yet contain a cask. Create a
-fine-grained token (or GitHub App credential) with Contents write access only
-to that repository and save it as the `HOMEBREW_TAP_TOKEN` repository secret in
-`revenium/Claude-Usage-Tracker`.
+`revenium/homebrew-tap` contains `Casks/claude-usage.rb` (created by the
+v3.1.0 release). The workflow authenticates with the `HOMEBREW_TAP_TOKEN`
+repository secret: a fine-grained token with resource owner `revenium` and
+Contents write access to only that repository. The current token
+(`homebrew-tap-cask-update`) **expires August 3, 2027** — the cask job will
+start failing then until a replacement token is generated and the secret
+updated.
 
-The first successful release creates:
-
-```text
-Casks/claude-usage.rb
-```
-
-Later releases update only its version and SHA-256. The workflow runs
+Releases update only the cask's version and SHA-256. The workflow runs
 `brew audit`, `brew fetch`, and a dry-run install before committing the cask.
 
 ### 5. Remove the inherited Pages hazard
@@ -240,7 +248,21 @@ The release job checks that:
 - `CURRENT_PROJECT_VERSION` is numeric.
 - Every required variable and secret is present.
 
-### 4. Watch the release workflow
+### 4. Approve and watch the release workflow
+
+The run pauses on the protected `release` environment until an authorized
+reviewer approves it — in the run's page on github.com/…/actions, or from the
+CLI (works for the initial run and for any `gh run rerun`, which pauses on the
+same gate again):
+
+```bash
+REPO="revenium/Claude-Usage-Tracker"
+RUN_ID=$(gh run list --repo "$REPO" --workflow Release --limit 1 --json databaseId --jq '.[0].databaseId')
+ENV_ID=$(gh api "repos/$REPO/actions/runs/$RUN_ID/pending_deployments" --jq '.[0].environment.id')
+gh api "repos/$REPO/actions/runs/$RUN_ID/pending_deployments" \
+  -X POST -F "environment_ids[]=$ENV_ID" -f state=approved \
+  -f comment="Approving release deployment"
+```
 
 Monitor:
 

@@ -77,6 +77,8 @@ experience.
 
 ## What's New
 
+- **v3.1.0 (2026-08-02)**: Redesigned menu bar popover — native vibrancy material, grouped cards with uppercase section headers, usage for the account you clicked shown first, a complete Accounts list grouped by provider (green dot = active, accent = viewing), and an explicit "Make Active" button so browsing an account never changes the active one
+
 - **v3.0.5 (2026-08-02)**: Releases now ship a single notarized disk image — download `Claude-Usage.dmg`, open it, drag the app to Applications. This replaces the zip, which macOS Archive Utility could corrupt on extraction (breaking the embedded framework's code signature and triggering a false "Apple could not verify this app" warning)
 
 - **v3.0.4 (2026-08-01)**: Menu bar provider badges — two independent Appearance toggles (both off by default) that distinguish Claude and Codex accounts at a glance: a monochrome provider glyph and/or a muted provider-colored background tint
