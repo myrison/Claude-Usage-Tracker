@@ -50,21 +50,37 @@ struct PersonalUsageView: View {
                 // Professional Status Card
                 HStack(spacing: DesignTokens.Spacing.medium) {
                     Circle()
-                        .fill(currentCredentials?.hasClaudeAI == true ? Color.green : Color.secondary.opacity(0.4))
+                        .fill(statusDotColor)
                         .frame(width: DesignTokens.StatusDot.standard, height: DesignTokens.StatusDot.standard)
 
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.extraSmall) {
-                        Text(currentCredentials?.hasClaudeAI == true ? "general.connected".localized : "general.not_connected".localized)
+                        Text(statusTitle)
                             .font(DesignTokens.Typography.bodyMedium)
 
                         if let creds = currentCredentials, creds.hasClaudeAI {
                             Text(maskKey(creds.claudeSessionKey ?? ""))
                                 .font(DesignTokens.Typography.captionMono)
                                 .foregroundColor(.secondary)
+                                // The Retry Save button narrows this column
+                                // when a credential is held; the masked key
+                                // is a glance-check, not something to wrap.
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         }
                     }
 
                     Spacer()
+
+                    // The credential works but is not in the Keychain, so it
+                    // is lost at quit unless this succeeds.
+                    if isActiveCredentialSessionOnly {
+                        Button(action: retryCredentialSave) {
+                            Text("personal.retry_save".localized)
+                                .font(DesignTokens.Typography.body)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.regular)
+                    }
 
                     // Remove button integrated into status card
                     if currentCredentials?.hasClaudeAI == true {
@@ -213,6 +229,37 @@ struct PersonalUsageView: View {
         let prefix = String(key.prefix(12))
         let suffix = String(key.suffix(4))
         return "\(prefix)•••••\(suffix)"
+    }
+
+    /// True when the active Claude profile's credential is being held in
+    /// memory because secure storage refused it.
+    private var isActiveCredentialSessionOnly: Bool {
+        guard let id = profileManager.activeClaudeProfile?.id else {
+            return false
+        }
+        return profileManager.sessionOnlyCredentialProfileIDs.contains(id)
+    }
+
+    private var statusDotColor: Color {
+        guard currentCredentials?.hasClaudeAI == true else {
+            return Color.secondary.opacity(0.4)
+        }
+        return isActiveCredentialSessionOnly ? .orange : .green
+    }
+
+    private var statusTitle: String {
+        guard currentCredentials?.hasClaudeAI == true else {
+            return "general.not_connected".localized
+        }
+        return isActiveCredentialSessionOnly
+            ? "personal.connected_not_saved".localized
+            : "general.connected".localized
+    }
+
+    private func retryCredentialSave() {
+        profileManager.retrySessionOnlyCredentialSave(
+            profileID: profileManager.activeClaudeProfile?.id
+        )
     }
 
     private func removeCredentials() {
@@ -570,6 +617,9 @@ struct ConfirmStep: View {
     let apiService: ClaudeAPIService
     let onSave: () -> Void
     @State private var isSaving = false
+    /// Set only when the save failed because secure storage refused the
+    /// credential, which is the one case the user can knowingly accept.
+    @State private var offerSessionOnly = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -649,6 +699,16 @@ struct ConfirmStep: View {
             if case .error(let message) = wizardState.validationState {
                 WizardStatusBox(message: message, type: .error)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                if offerSessionOnly {
+                    Button(action: { saveConfiguration(acceptSessionOnly: true) }) {
+                        Text("setup.use_session_only".localized)
+                            .font(DesignTokens.Typography.body)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isSaving)
+                    .accessibilityIdentifier("setup.use_session_only")
+                }
             }
 
             // Navigation buttons
@@ -677,7 +737,7 @@ struct ConfirmStep: View {
 
                 Spacer()
 
-                Button(action: saveConfiguration) {
+                Button(action: { saveConfiguration() }) {
                     HStack(spacing: 6) {
                         if isSaving {
                             ProgressView()
@@ -703,7 +763,7 @@ struct ConfirmStep: View {
         return originalKey != wizardState.sessionKey
     }
 
-    private func saveConfiguration() {
+    private func saveConfiguration(acceptSessionOnly: Bool = false) {
         guard let profileId = ProfileManager.shared.activeClaudeProfile?.id else { return }
 
         isSaving = true
@@ -716,7 +776,8 @@ struct ConfirmStep: View {
                 creds.organizationId = wizardState.selectedOrgId
                 try ProfileManager.shared.saveCredentials(
                     for: profileId,
-                    credentials: creds
+                    credentials: creds,
+                    acceptingSessionOnly: acceptSessionOnly
                 )
 
                 // Update statusline scripts if key or org changed (only if already installed)
@@ -748,6 +809,11 @@ struct ConfirmStep: View {
                     wizardState.validationState = .error(
                         SetupErrorMessage.text(for: appError)
                     )
+                    offerSessionOnly =
+                        !acceptSessionOnly
+                        && SetupErrorMessage.isCredentialStorageFailure(
+                            appError
+                        )
                     isSaving = false
                 }
             }

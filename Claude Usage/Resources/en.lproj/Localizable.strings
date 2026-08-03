@@ -1051,6 +1051,15 @@
 "error.credential_storage_unavailable.suggestion" = "This copy of Claude Usage Tracker isn’t signed with a Keychain access group, so macOS blocks it from storing credentials. Install the signed release from the project’s Releases page, then try again.";
 "error.credential_storage_failed" = "Your session key couldn’t be saved to the macOS Keychain";
 "error.credential_storage_failed.suggestion" = "Your existing settings were left unchanged. Make sure your login keychain is unlocked in Keychain Access, then try again.";
+"popover.banner.credentials_not_saved" = "Credentials not saved (%d)";
+"popover.banner.credentials_not_saved.detail" = "Saved for this session only — lost at quit.";
+"popover.banner.credentials_not_saved.retry" = "Retry Save";
+"personal.connected_not_saved" = "Connected — not saved";
+"personal.retry_save" = "Retry Save";
+"quit.credentials_unsaved.title" = "Credentials couldn’t be saved";
+"quit.credentials_unsaved.body" = "Quitting will require entering them again.";
+"quit.credentials_unsaved.quit" = "Quit Anyway";
+"setup.use_session_only" = "Use for this session only";
 
 /* ==================== */
 /* MARK: - Provider Parity */

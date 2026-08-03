@@ -85,6 +85,117 @@ class ProfileStore {
     private var unresolvedLocators: Set<ProfileSecretLocator> = []
     private var unresolvedUsageProfileIDs: Set<UUID> = []
 
+    /// Credentials the secure store refused, held for this session only.
+    ///
+    /// These used to be written back into preferences so the app could retry
+    /// later, which put live session keys in `~/Library/Preferences` in
+    /// cleartext on every install where the Keychain was unavailable — and it
+    /// was silent, so nobody knew. Nothing in here is ever serialized. If the
+    /// secure store never accepts the value it is gone when the app quits,
+    /// and the user is asked to sign in again.
+    private var sessionOnlySecrets: [ProfileSecretLocator: String] = [:]
+
+    /// Drops a held credential. Every path that removes a secret must call
+    /// this: the load path overlays held values when secure storage reports
+    /// absent, so a hold that outlives its deletion resurrects the very
+    /// credential the user removed.
+    private func discardHeldSecret(at locator: ProfileSecretLocator) {
+        guard sessionOnlySecrets.removeValue(forKey: locator) != nil else {
+            return
+        }
+        notifySessionOnlyChange()
+    }
+
+    /// Drops every held credential for a profile — used when the whole
+    /// profile goes away, so no stale banner or quit warning survives it.
+    private func discardHeldSecrets(for profileID: UUID) {
+        let before = sessionOnlySecrets.count
+        sessionOnlySecrets = sessionOnlySecrets.filter {
+            $0.key.profileID != profileID
+        }
+        if sessionOnlySecrets.count != before {
+            notifySessionOnlyChange()
+        }
+    }
+
+    /// Profiles holding a credential that is not in secure storage.
+    ///
+    /// The UI must tell the user, because these do not survive a relaunch.
+    var profilesWithSessionOnlyCredentials: Set<UUID> {
+        Set(sessionOnlySecrets.keys.map(\.profileID))
+    }
+
+    /// Called whenever the session-only set changes, so an observable layer
+    /// can republish it. A direct callback rather than a notification: this
+    /// file posts nothing today and the coupling is one-to-one.
+    var sessionOnlySecretsDidChange: ((Set<UUID>) -> Void)?
+
+    private func notifySessionOnlyChange() {
+        sessionOnlySecretsDidChange?(profilesWithSessionOnlyCredentials)
+    }
+
+    /// Re-attempts secure storage for credentials being held in memory.
+    ///
+    /// Backs the Retry affordances and the final write before quitting.
+    /// Routes through the same secret store as an ordinary write, so it picks
+    /// up a Keychain that has since become reachable.
+    ///
+    /// - Returns: true when nothing is being held for the requested scope.
+    @discardableResult
+    func retrySessionOnlyPersistence(profileID: UUID? = nil) -> Bool {
+        let targets = sessionOnlySecrets.filter { locator, _ in
+            profileID == nil || locator.profileID == profileID
+        }
+        guard !targets.isEmpty else {
+            return true
+        }
+
+        var changed = false
+        for (locator, value) in targets {
+            do {
+                try secretStore.write(value, to: locator)
+                credentialBaselines[locator] = .value(value)
+                sessionOnlySecrets.removeValue(forKey: locator)
+                unresolvedLocators.remove(locator)
+                changed = true
+            } catch {
+                LoggingService.shared.logError(
+                    "ProfileStore: Secure storage still refuses "
+                        + "\(locator.safeDescription)",
+                    error: error
+                )
+            }
+        }
+        if changed {
+            notifySessionOnlyChange()
+        }
+
+        return !sessionOnlySecrets.contains { locator, _ in
+            profileID == nil || locator.profileID == profileID
+        }
+    }
+
+    /// Records a credential the secure store would not take, so the session
+    /// keeps working without the value ever reaching disk.
+    private func holdInMemoryOnly(
+        _ value: String,
+        at locator: ProfileSecretLocator,
+        error: Error
+    ) {
+        sessionOnlySecrets[locator] = value
+        // The baseline describes secure storage, which does not have this
+        // value. Claiming otherwise would suppress the next write attempt.
+        credentialBaselines.removeValue(forKey: locator)
+        unresolvedLocators.remove(locator)
+        notifySessionOnlyChange()
+        LoggingService.shared.logError(
+            "ProfileStore: Secure storage refused \(locator.safeDescription); "
+                + "holding it for this session only and never writing it to "
+                + "preferences",
+            error: error
+        )
+    }
+
     private enum Keys {
         static let profiles = "profiles_v3"
         /// Legacy single-slot active id. Read-only after migration: a fresh
@@ -251,6 +362,7 @@ class ProfileStore {
                     || profiles[profileIndex].currentUsageMigrationRetry != nil
                 profiles[profileIndex].credentialMigrationRetry = .init()
                 profiles[profileIndex].currentUsageMigrationRetry = nil
+                discardHeldSecrets(for: profiles[profileIndex].id)
                 profiles[profileIndex].claudeSessionKey = nil
                 profiles[profileIndex].apiSessionKey = nil
                 profiles[profileIndex].cliCredentialsJSON = nil
@@ -307,15 +419,14 @@ class ProfileStore {
                         credentialBaselines[locator] = .value(retryValue)
                         unresolvedLocators.remove(locator)
                     } catch {
-                        // Preserve this field only. Other independently verified
-                        // fields can still be scrubbed from the same profile.
+                        // Scrub the plaintext either way. Leaving it in
+                        // preferences is what put cleartext session keys on
+                        // disk; the value survives in memory for this session
+                        // so the user is not cut off mid-use.
+                        profiles[profileIndex].credentialMigrationRetry
+                            .setValue(nil, for: field)
                         profiles[profileIndex].setSecretValue(retryValue, for: field)
-                        credentialBaselines[locator] = .value(retryValue)
-                        unresolvedLocators.remove(locator)
-                        LoggingService.shared.logError(
-                            "ProfileStore: Secure migration remains retryable for \(locator.safeDescription)",
-                            error: error
-                        )
+                        holdInMemoryOnly(retryValue, at: locator, error: error)
                     }
                     continue
                 }
@@ -324,7 +435,28 @@ class ProfileStore {
                     let result = try secretStore.read(locator)
                     credentialBaselines[locator] = result
                     unresolvedLocators.remove(locator)
-                    profiles[profileIndex].setSecretValue(result.value, for: field)
+                    if let held = sessionOnlySecrets[locator] {
+                        // A held value is always newer than whatever storage
+                        // has. Gating this on `.absent` meant a *replacement*
+                        // whose write was refused got silently reverted to
+                        // the old value still sitting in the Keychain.
+                        //
+                        // Retry too: a locked Keychain may since have been
+                        // unlocked, so a transient refusal does not cost the
+                        // user their credential at quit.
+                        do {
+                            try secretStore.write(held, to: locator)
+                            credentialBaselines[locator] = .value(held)
+                            sessionOnlySecrets.removeValue(forKey: locator)
+                            notifySessionOnlyChange()
+                        } catch {
+                            credentialBaselines.removeValue(forKey: locator)
+                        }
+                        profiles[profileIndex].setSecretValue(held, for: field)
+                    } else {
+                        profiles[profileIndex]
+                            .setSecretValue(result.value, for: field)
+                    }
                 } catch {
                     // Unresolved is neither absent nor permission to delete.
                     credentialBaselines.removeValue(forKey: locator)
@@ -540,6 +672,132 @@ class ProfileStore {
     ///
     /// A nil secret is a verified deletion here. This is intentionally
     /// different from `saveProfiles`, where nil is credential-neutral.
+    /// Saves credentials, accepting session-only storage if the Keychain
+    /// refuses.
+    ///
+    /// The ordinary path fails closed and loud: a refused write rolls back
+    /// and throws, so nothing half-succeeds behind the user's back. This
+    /// variant exists for the one case where the user has been told the
+    /// consequence and chosen it anyway — the setup wizard's "use for this
+    /// session only". The credential is held in memory exactly as elsewhere,
+    /// so the popover banner, the Settings card, and the quit guard all pick
+    /// it up.
+    func saveProfileCredentialsAcceptingSessionOnly(
+        _ profileId: UUID,
+        credentials: ProfileCredentials
+    ) throws {
+        do {
+            try saveProfileCredentials(profileId, credentials: credentials)
+        } catch let error as ProfileStoreError {
+            guard case .credentialTransactionFailed = error else {
+                // A rollback that could not complete leaves storage in an
+                // unknown state. Holding a value on top of that would be
+                // guessing, so it still surfaces.
+                throw error
+            }
+            try holdCredentialsForSessionOnly(
+                profileId,
+                credentials: credentials
+            )
+        }
+    }
+
+    /// Writes the metadata and keeps the secrets in memory only.
+    private func holdCredentialsForSessionOnly(
+        _ profileId: UUID,
+        credentials: ProfileCredentials
+    ) throws {
+        var profiles = try loadProfilesWithVerifiedMigration()
+        guard let index = profiles.firstIndex(where: { $0.id == profileId }) else {
+            throw ProfileStoreError.profileNotFound(profileId)
+        }
+        profiles[index].claudeSessionKey = credentials.claudeSessionKey
+        profiles[index].organizationId = credentials.organizationId
+        profiles[index].apiSessionKey = credentials.apiSessionKey
+        profiles[index].apiOrganizationId = credentials.apiOrganizationId
+        profiles[index].apiSessionKeyExpiry = credentials.apiSessionKeyExpiry
+        profiles[index].cliCredentialsJSON = credentials.cliCredentialsJSON
+        profiles[index].credentialMigrationRetry = .init()
+
+        // Snapshot for the same reason performCredentialTransaction takes
+        // one: after a failed persist, whether metadata actually reverted is
+        // something to observe, not assume.
+        let previousProfileData = defaults.data(forKey: Keys.profiles)
+        var heldHere: [ProfileSecretLocator] = []
+        var written: [(ProfileSecretLocator, ProfileSecretReadResult)] = []
+        for field in ProfileSecretField.allCases {
+            guard let value = credentials.secretValue(for: field) else {
+                continue
+            }
+            let locator = ProfileSecretLocator(
+                profileID: profileId,
+                field: field
+            )
+            // Snapshot before mutating, so a later metadata failure can undo
+            // this write the same way performCredentialTransaction does.
+            let previous = try? secretStore.read(locator)
+            do {
+                try secretStore.write(value, to: locator)
+                credentialBaselines[locator] = .value(value)
+                sessionOnlySecrets.removeValue(forKey: locator)
+                notifySessionOnlyChange()
+                if let previous {
+                    written.append((locator, previous))
+                }
+            } catch {
+                // Retrying here also disambiguates why the transaction
+                // failed: if the writes succeed now, the original failure was
+                // the metadata persist, not storage, and nothing is held.
+                holdInMemoryOnly(value, at: locator, error: error)
+                heldHere.append(locator)
+            }
+        }
+
+        do {
+            // Metadata only — Profile.encode carries no secret material.
+            try persistProfiles(profiles)
+        } catch {
+            // A hold is only durable if the profile it belongs to is. Never
+            // keep a secret for a profile that failed to persist.
+            for locator in heldHere {
+                sessionOnlySecrets.removeValue(forKey: locator)
+            }
+            if !heldHere.isEmpty {
+                notifySessionOnlyChange()
+            }
+            // Nor may a secret stay in the Keychain paired with metadata that
+            // never landed, while the caller is told the save failed.
+            var rollbackFailedFields: [ProfileSecretField] = []
+            for (locator, previous) in written {
+                do {
+                    try restoreSecret(previous, at: locator)
+                    credentialBaselines[locator] = previous
+                    unresolvedLocators.remove(locator)
+                } catch {
+                    // Never claim a baseline the restore did not achieve: a
+                    // later ordinary save consults it and would skip
+                    // rewriting a value that has actually diverged.
+                    credentialBaselines.removeValue(forKey: locator)
+                    unresolvedLocators.insert(locator)
+                    rollbackFailedFields.append(locator.field)
+                }
+            }
+            guard rollbackFailedFields.isEmpty else {
+                // persistProfiles can fail to put the old metadata back. If
+                // it did, saying "metadata: restored" here would be the same
+                // kind of lie about stored state this change exists to stop.
+                let metadataRollbackFailed =
+                    defaults.data(forKey: Keys.profiles) != previousProfileData
+                throw ProfileStoreError.credentialRollbackFailed(
+                    profileId,
+                    rollbackFailedFields,
+                    metadata: metadataRollbackFailed
+                )
+            }
+            throw error
+        }
+    }
+
     func saveProfileCredentials(_ profileId: UUID, credentials: ProfileCredentials) throws {
         var profiles = try loadProfilesWithVerifiedMigration()
         guard let index = profiles.firstIndex(where: { $0.id == profileId }) else {
@@ -929,6 +1187,7 @@ class ProfileStore {
             try secretStore.delete(locator)
             credentialBaselines[locator] = .absent
             unresolvedLocators.remove(locator)
+            discardHeldSecret(at: locator)
         }
     }
 
@@ -984,6 +1243,9 @@ class ProfileStore {
             throw ProfileProviderConfigurationError.profileSetChanged
         }
         try persistProfiles(remaining)
+        // The profile is gone; nothing may keep warning about credentials
+        // belonging to it, and no later load may write one back.
+        discardHeldSecrets(for: profileId)
     }
 
     // MARK: - Current Usage
@@ -1438,14 +1700,16 @@ class ProfileStore {
             let desiredValue = profile.secretValue(for: field)
 
             if let retryValue = prepared.credentialMigrationRetry.value(for: field) {
+                // Whatever happens, this value does not go back to disk.
+                prepared.credentialMigrationRetry.setValue(nil, for: field)
                 do {
                     try secretStore.write(retryValue, to: locator)
-                    prepared.credentialMigrationRetry.setValue(nil, for: field)
                     credentialBaselines[locator] = .value(retryValue)
+                    sessionOnlySecrets.removeValue(forKey: locator)
+                    notifySessionOnlyChange()
                 } catch {
-                    // Legacy plaintext wins until it can be independently
-                    // verified in secure storage.
                     prepared.setSecretValue(retryValue, for: field)
+                    holdInMemoryOnly(retryValue, at: locator, error: error)
                     continue
                 }
             }
@@ -1464,14 +1728,14 @@ class ProfileStore {
                 try secretStore.write(desiredValue, to: locator)
                 prepared.credentialMigrationRetry.setValue(nil, for: field)
                 credentialBaselines[locator] = .value(desiredValue)
+                sessionOnlySecrets.removeValue(forKey: locator)
+                notifySessionOnlyChange()
             } catch {
-                // Only the changed/unverified field receives a retry fallback.
-                prepared.credentialMigrationRetry.setValue(desiredValue, for: field)
-                credentialBaselines[locator] = .value(desiredValue)
-                LoggingService.shared.logError(
-                    "ProfileStore: Secure update remains retryable for \(locator.safeDescription)",
-                    error: error
-                )
+                // The old fallback wrote this value into preferences as
+                // plaintext. Hold it in memory instead: usable now, gone at
+                // quit, never on disk.
+                prepared.credentialMigrationRetry.setValue(nil, for: field)
+                holdInMemoryOnly(desiredValue, at: locator, error: error)
             }
         }
 
@@ -1547,10 +1811,14 @@ class ProfileStore {
             try secretStore.write(value, to: locator)
             credentialBaselines[locator] = .value(value)
             unresolvedLocators.remove(locator)
+            // Secure storage now owns it; a stale hold would only be a
+            // second, divergent copy.
+            discardHeldSecret(at: locator)
         } else {
             try secretStore.delete(locator)
             credentialBaselines[locator] = .absent
             unresolvedLocators.remove(locator)
+            discardHeldSecret(at: locator)
         }
     }
 
@@ -1699,6 +1967,17 @@ class ProfileStore {
                         )
                     ],
                 candidateProfiles: profiles
+            )
+            // The transaction only calls replaceSecret for a *changed*
+            // field. A session-only credential was never written, so removing
+            // it is not a change and replaceSecret — the only other place
+            // that drops the hold — never runs. Unlink succeeded, so the
+            // credential is gone either way.
+            discardHeldSecret(
+                at: ProfileSecretLocator(
+                    profileID: profileID,
+                    field: targetField
+                )
             )
             try removePendingCredentialUsageUnlink(for: profileID)
         } catch {
@@ -1883,6 +2162,14 @@ class ProfileStore {
                     profileID: marker.profileID
                 )
             }
+            // Unconditionally, not just when storage had a value to delete.
+            // A session-only credential is never in storage, so `.absent` is
+            // exactly the state it presents — and replaceSecret, the only
+            // other place that drops the hold, is skipped for it. Forward
+            // completion is the removal intent regardless of what storage
+            // happens to hold, the same reason the retry plaintext below is
+            // cleared here.
+            discardHeldSecret(at: locator)
             profiles[index].setSecretValue(nil, for: field)
             if marker.component == .claude {
                 profiles[index].organizationId = nil
