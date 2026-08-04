@@ -13,100 +13,158 @@ class StatuslineService {
     /// Swift script that fetches Claude usage data from the API.
     /// Installed to ~/.claude/fetch-claude-usage.swift and executed by the bash statusline script.
     /// The session key and organization ID are injected into this script when statusline is enabled.
-    private func generateSwiftScript(sessionKey: String, organizationId: String) -> String {
+    /// How old published usage may be before the script refuses to show it.
+    /// Comfortably longer than the app's refresh cadence, short enough that a
+    /// closed app stops rendering rather than lying.
+    static let usageCacheStaleAfter: TimeInterval = 15 * 60
+
+    /// Publishes rendered usage for the statusline script.
+    ///
+    /// Usage numbers only. The app is the sole credential holder; this file
+    /// is how the script gets data without ever touching a secret or the
+    /// Keychain. Atomic so a concurrent read never sees a half-written file,
+    /// and 0600 because there is no reason for anything but this user to
+    /// read it.
+    ///
+    /// The mode is set on the temporary file *before* it is moved into place,
+    /// not on the destination afterwards. `Data.write(options: .atomic)`
+    /// writes a temp file and renames it, so the new inode briefly carries
+    /// umask-default permissions — a world-readable window on every refresh,
+    /// which is every few minutes forever.
+    func publishUsageForStatusline(
+        utilization: Int,
+        resetsAt: String?
+    ) throws {
+        let directory = Constants.ClaudePaths.claudeDirectory
+        if !FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
+        var payload: [String: Any] = [
+            "utilization": utilization,
+            "writtenAt": Date().timeIntervalSince1970
+        ]
+        if let resetsAt {
+            payload["resetsAt"] = resetsAt
+        }
+        let data = try JSONSerialization.data(
+            withJSONObject: payload,
+            options: [.sortedKeys]
+        )
+        let destination = directory
+            .appendingPathComponent(Self.usageCacheFilename)
+        // Same directory, so the rename below stays on one filesystem and is
+        // therefore atomic.
+        let temporary = directory.appendingPathComponent(
+            ".\(Self.usageCacheFilename).\(UUID().uuidString)"
+        )
+        guard FileManager.default.createFile(
+            atPath: temporary.path,
+            contents: data,
+            attributes: [.posixPermissions: 0o600]
+        ) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        do {
+            guard rename(temporary.path, destination.path) == 0 else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            throw error
+        }
+    }
+
+    /// Test seam: renders the production template without needing profile
+    /// state, so the generated text can be asserted directly.
+    func renderScriptForTesting() -> String {
+        generateSwiftScript()
+    }
+
+    /// Marks a script that reads published usage and holds no credential.
+    ///
+    /// Grep-able on purpose: an installed script without it predates this
+    /// change and still has a session key baked into its source, so it must
+    /// be rewritten rather than left alone. Detection is by absence, so the
+    /// marker never has to match anything a previous version wrote.
+    ///
+    /// Bumping the version forces a rewrite on every install, which is safe —
+    /// the replacement depends on no profile state.
+    static let publishedUsageMarker =
+        "claude-usage-tracker:reads-published-usage:v1"
+
+    /// Where the app publishes rendered usage for the statusline.
+    ///
+    /// Usage numbers only — utilization, reset time, when it was written.
+    /// No credential, no organization identifier, nothing the script could
+    /// leak. That is what lets a 0600 file replace a Keychain read.
+    static let usageCacheFilename = "claude-usage-statusline.json"
+
+    private func generateSwiftScript() -> String {
         return """
 #!/usr/bin/env swift
+// \(Self.publishedUsageMarker)
 
 import Foundation
-func readSessionKey() -> String? {
-    // Session key injected from Keychain by Claude Usage app
-    let injectedKey = "\(sessionKey)"
-    let trimmedKey = injectedKey.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmedKey.isEmpty ? nil : trimmedKey
-}
-func readOrganizationId() -> String? {
-    // Organization ID injected from settings by Claude Usage app
-    let injectedOrgId = "\(organizationId)"
-    let trimmedOrgId = injectedOrgId.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmedOrgId.isEmpty ? nil : trimmedOrgId
-}
-func fetchUsageData(sessionKey: String, orgId: String) async throws -> (utilization: Int, resetsAt: String?) {
-    // Build URL safely - validate orgId doesn't contain path traversal
-    guard !orgId.contains(".."), !orgId.contains("/") else {
-        throw NSError(domain: "ClaudeAPI", code: 5, userInfo: [NSLocalizedDescriptionKey: "Invalid organization ID"])
+
+// This script holds no credential and performs no Keychain access. It reads
+// usage the app has already fetched and published. Earlier versions embedded
+// the session key as a string literal in this file, at 0o755.
+let staleAfterSeconds: Double = \(Int(Self.usageCacheStaleAfter))
+
+func readPublishedUsage() -> (utilization: Int, resetsAt: String?)? {
+    let path = ("~/.claude/\(Self.usageCacheFilename)" as NSString)
+        .expandingTildeInPath
+    guard let data = FileManager.default.contents(atPath: path),
+          let object = try? JSONSerialization.jsonObject(with: data),
+          let json = object as? [String: Any],
+          let utilization = json["utilization"] as? Int,
+          let writtenAt = json["writtenAt"] as? Double else {
+        return nil
     }
-
-    guard let url = URL(string: "https://claude.ai/api/organizations/\\(orgId)/usage") else {
-        throw NSError(domain: "ClaudeAPI", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
+    // Better to show nothing than yesterday's number as if it were current.
+    guard Date().timeIntervalSince1970 - writtenAt <= staleAfterSeconds else {
+        return nil
     }
-
-    var request = URLRequest(url: url)
-    request.setValue("sessionKey=\\(sessionKey)", forHTTPHeaderField: "Cookie")
-    request.setValue("application/json", forHTTPHeaderField: "Accept")
-    request.httpMethod = "GET"
-
-    let (data, response) = try await URLSession.shared.data(for: request)
-
-    guard let httpResponse = response as? HTTPURLResponse,
-          httpResponse.statusCode == 200 else {
-        throw NSError(domain: "ClaudeAPI", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to fetch usage"])
-    }
-
-    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-       let fiveHour = json["five_hour"] as? [String: Any],
-       let utilization = fiveHour["utilization"] as? Int {
-        let resetsAt = fiveHour["resets_at"] as? String
-        return (utilization, resetsAt)
-    }
-
-    throw NSError(domain: "ClaudeAPI", code: 4, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
+    return (utilization, json["resetsAt"] as? String)
 }
 
-// Main execution
-// Use Task to run async code, RunLoop keeps script alive until exit() is called
-Task {
-    guard let sessionKey = readSessionKey() else {
-        print("ERROR:NO_SESSION_KEY")
-        exit(1)
-    }
 
-    guard let orgId = readOrganizationId() else {
-        print("ERROR:NO_ORG_CONFIGURED")
-        exit(1)
-    }
-
-    do {
-        let (utilization, resetsAt) = try await fetchUsageData(sessionKey: sessionKey, orgId: orgId)
-
-        // Output format: UTILIZATION|RESETS_AT
-        if let resets = resetsAt {
-            print("\\(utilization)|\\(resets)")
-        } else {
-            print("\\(utilization)|")
-        }
-        exit(0)
-    } catch {
-        print("ERROR:\\(error.localizedDescription)")
-        exit(1)
-    }
+// No network call, no credential, no async work: the app has already done
+// the fetching. This script only formats what it published.
+guard let usage = readPublishedUsage() else {
+    // Absent or stale. Say nothing rather than render a number that may be
+    // hours old as if it were current.
+    print("ERROR:NO_FRESH_USAGE")
+    exit(1)
 }
 
-// Keep script alive while async Task executes
-RunLoop.main.run()
+// Output format: UTILIZATION|RESETS_AT
+print("\\(usage.utilization)|\\(usage.resetsAt ?? \"\")")
+exit(0)
 """
     }
 
     /// Placeholder Swift script for when statusline is disabled
-    /// This script returns an error indicating no session key is available
-    private let placeholderSwiftScript = """
+    ///
+    /// Carries the marker like the real script. Without it, a disabled
+    /// statusline looks to the upgrade check exactly like a stale script and
+    /// gets "remediated" on the next launch — silently undoing the user's
+    /// choice and logging that a credential was removed when none was there.
+    private var placeholderSwiftScript: String {
+        """
 #!/usr/bin/env swift
+// \(Self.publishedUsageMarker)
 
 import Foundation
 
-// No session key available - statusline is disabled
+// Statusline is disabled. Holds no credential, like the enabled script.
 print("ERROR:NO_SESSION_KEY")
 exit(1)
 """
+    }
 
     /// Bash script that builds the statusline display.
     /// Installed to ~/.claude/statusline-command.sh and configured in Claude Code settings.json.
@@ -556,9 +614,16 @@ printf "%s\\n" "$output"
 
     // MARK: - Installation
 
-    /// Installs statusline scripts with session key injection from active profile
-    /// - Parameter injectSessionKey: If true, injects the session key from active profile into the Swift script
-    func installScripts(injectSessionKey: Bool = false) throws {
+    /// Installs the statusline scripts.
+    ///
+    /// - Parameter configureForActiveProfile: when true, install the real
+    ///   script; when false, the placeholder. The script never touches a
+    ///   credential or the Keychain — it only reads usage the app has already
+    ///   published. The flag is named for the *precondition* it enforces: an
+    ///   active profile with a session key, without which nothing would
+    ///   publish and the statusline would stay empty. The parameter used to
+    ///   say "inject" because the credential really was written into the file.
+    func installScripts(configureForActiveProfile: Bool = false) throws {
         let claudeDir = Constants.ClaudePaths.claudeDirectory
 
         if !FileManager.default.fileExists(atPath: claudeDir.path) {
@@ -569,33 +634,36 @@ printf "%s\\n" "$output"
         let swiftDestination = claudeDir.appendingPathComponent("fetch-claude-usage.swift")
         let swiftScriptContent: String
 
-        if injectSessionKey {
-            // Load session key and org ID from active profile
+        if configureForActiveProfile {
             guard let activeClaudeProfile = ProfileManager.shared.activeClaudeProfile else {
                 throw StatuslineError.noActiveProfile
             }
 
-            guard let sessionKey = activeClaudeProfile.claudeSessionKey else {
+            // The script itself needs no credential — but nothing publishes
+            // usage without one, so the statusline would sit permanently
+            // empty. Failing here is clearer than enabling a feature that
+            // silently shows nothing.
+            //
+            // This gate is for *enabling* the statusline only. Never gate
+            // credential remediation on it: see
+            // `rewriteScriptEmbeddingCredentialIfNeeded`.
+            guard activeClaudeProfile.claudeSessionKey != nil else {
                 throw StatuslineError.sessionKeyNotFound
             }
 
-            guard let organizationId = activeClaudeProfile.organizationId else {
-                throw StatuslineError.organizationNotConfigured
-            }
-
-            swiftScriptContent = generateSwiftScript(sessionKey: sessionKey, organizationId: organizationId)
-            LoggingService.shared.log("Injected session key and org ID from profile '\(activeClaudeProfile.name)' into statusline")
+            swiftScriptContent = generateSwiftScript()
+            LoggingService.shared.log(
+                "Enabled statusline for profile "
+                    + "'\(activeClaudeProfile.name)'; the script reads usage "
+                    + "the app publishes and never touches a credential"
+            )
         } else {
             // Install placeholder script
             swiftScriptContent = placeholderSwiftScript
             LoggingService.shared.log("Installed placeholder statusline Swift script")
         }
 
-        try swiftScriptContent.write(to: swiftDestination, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o755],
-            ofItemAtPath: swiftDestination.path
-        )
+        try writeSwiftScript(swiftScriptContent)
 
         // Install bash script
         let bashDestination = claudeDir.appendingPathComponent("statusline-command.sh")
@@ -606,6 +674,21 @@ printf "%s\\n" "$output"
         )
 
         print("[StatuslineService] Bash script installed to: \(bashDestination.path)")
+    }
+
+    /// Writes the statusline Swift script and marks it executable.
+    ///
+    /// The mode is `0o755` because the bash script executes it. That is also
+    /// why the script must never contain a credential — every process on the
+    /// machine can read it.
+    private func writeSwiftScript(_ content: String) throws {
+        let destination = Constants.ClaudePaths.claudeDirectory
+            .appendingPathComponent("fetch-claude-usage.swift")
+        try content.write(to: destination, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: destination.path
+        )
     }
 
     /// Removes the session key from the statusline Swift script
@@ -717,7 +800,7 @@ PROFILE_NAME="\(profileName)"
 
         if enabled {
             // Install scripts with session key injection
-            try installScripts(injectSessionKey: true)
+            try installScripts(configureForActiveProfile: true)
 
             // Update settings.json
             var settings: [String: Any] = [:]
@@ -767,14 +850,22 @@ PROFILE_NAME="\(profileName)"
     }
 
     /// Writes usage data to cache file for fast bash script access
+    ///
+    /// Also publishes the same numbers for the Swift script. The bash script
+    /// reads the key/value cache first and falls back to the script, so both
+    /// must come from one derivation — two derivations could disagree and the
+    /// statusline would show a different figure depending on which path
+    /// happened to serve it.
     func writeUsageCache(usage: ClaudeUsage, profileName: String? = nil) {
         let cachePath = Constants.ClaudePaths.claudeDirectory
             .appendingPathComponent(".statusline-usage-cache")
 
         let formatter = ISO8601DateFormatter()
+        let utilization = Int(usage.effectiveSessionPercentage)
+        let resetsAt = formatter.string(from: usage.sessionResetTime)
         var cacheContent = """
-        UTILIZATION=\(Int(usage.effectiveSessionPercentage))
-        RESETS_AT=\(formatter.string(from: usage.sessionResetTime))
+        UTILIZATION=\(utilization)
+        RESETS_AT=\(resetsAt)
         TIMESTAMP=\(Int(Date().timeIntervalSince1970))
         """
 
@@ -783,12 +874,103 @@ PROFILE_NAME="\(profileName)"
         }
 
         try? cacheContent.write(to: cachePath, atomically: true, encoding: .utf8)
+
+        // Best effort, like the write above: a statusline that misses one
+        // refresh shows the previous number and recovers on the next one.
+        // Failing a usage refresh over it would be worse than that.
+        try? publishUsageForStatusline(
+            utilization: utilization,
+            resetsAt: resetsAt
+        )
     }
 
     /// Updates scripts only if already installed (installation is optional)
     func updateScriptsIfInstalled() throws {
         guard isInstalled else { return }
-        try installScripts(injectSessionKey: true)
+        try installScripts(configureForActiveProfile: true)
+    }
+
+    /// True when an installed script still carries its credential in source.
+    ///
+    /// Detected by the absence of the marker rather than by hunting for
+    /// key-shaped strings: a script written before this change has no marker
+    /// whatever its contents, and a future format change can bump the marker
+    /// to force another rewrite.
+    var installedScriptNeedsRewrite: Bool {
+        let script = Constants.ClaudePaths.claudeDirectory
+            .appendingPathComponent("fetch-claude-usage.swift")
+        guard let contents = try? String(contentsOf: script, encoding: .utf8)
+        else {
+            return false
+        }
+        return !contents.contains(Self.publishedUsageMarker)
+    }
+
+    /// Whether Claude Code is currently configured to run the statusline.
+    ///
+    /// `settings.json` is where enabling and disabling is recorded, so it is
+    /// the honest source of truth for which script belongs on disk. Reading it
+    /// involves no profile state and no credential, which is what makes it
+    /// safe to consult during remediation.
+    private var statuslineIsEnabledInClaudeSettings: Bool {
+        let settings = Constants.ClaudePaths.claudeDirectory
+            .appendingPathComponent("settings.json")
+        guard let data = try? Data(contentsOf: settings),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let json = object as? [String: Any] else {
+            return false
+        }
+        return json["statusLine"] != nil
+    }
+
+    /// Rewrites an installed script that predates the runtime read.
+    ///
+    /// An upgrade leaves the old script in place otherwise, so the session
+    /// key stays in a world-readable file on disk indefinitely — the app
+    /// would have fixed the format for new installs and left existing users
+    /// exposed.
+    ///
+    /// - Returns: whether a rewrite happened.
+    @discardableResult
+    func rewriteScriptEmbeddingCredentialIfNeeded() -> Bool {
+        guard isInstalled, installedScriptNeedsRewrite else {
+            return false
+        }
+        do {
+            // Deliberately not `installScripts(configureForActiveProfile:)`.
+            // That path refuses when the active profile is missing or has no
+            // session key — conditions neither replacement cares about, since
+            // both read published usage and hold no credential. Routing
+            // remediation through it meant a profile in that state left the
+            // old 0755 script, and the live credential inside it, sitting on
+            // disk. The one case that most needs cleaning is a profile whose
+            // key has since been removed from the app but is still baked into
+            // the script.
+            //
+            // Which script to write is the user's own enable/disable choice,
+            // read from settings.json. A pre-change *placeholder* has no
+            // marker either, so remediating it with the enabled script would
+            // silently switch the statusline back on.
+            let enabled = statuslineIsEnabledInClaudeSettings
+            try writeSwiftScript(
+                enabled ? generateSwiftScript() : placeholderSwiftScript
+            )
+            LoggingService.shared.log(
+                "Statusline: replaced a pre-marker script with the "
+                    + "\(enabled ? "published-usage reader" : "placeholder"); "
+                    + "no credential is written to disk"
+            )
+            return true
+        } catch {
+            // Best effort so a filesystem error cannot fail launch. The
+            // exposure persists until the next attempt, so it is logged
+            // rather than swallowed silently.
+            LoggingService.shared.logError(
+                "Statusline: could not rewrite the embedded-credential script",
+                error: error
+            )
+            return false
+        }
     }
 
     /// Checks if active profile has a valid session key
@@ -809,7 +991,6 @@ PROFILE_NAME="\(profileName)"
 enum StatuslineError: Error, LocalizedError {
     case noActiveProfile
     case sessionKeyNotFound
-    case organizationNotConfigured
 
     var errorDescription: String? {
         switch self {
@@ -817,8 +998,6 @@ enum StatuslineError: Error, LocalizedError {
             return "No active profile found. Please create or select a profile first."
         case .sessionKeyNotFound:
             return "Session key not found in active profile. Please configure your session key first."
-        case .organizationNotConfigured:
-            return "Organization not configured in active profile. Please select an organization in the app settings."
         }
     }
 }
