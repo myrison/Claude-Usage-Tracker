@@ -61,6 +61,139 @@ final class FaultingProfileDefaults: ProfileDefaultsStore {
     }
 }
 
+// MARK: - Isolation from real user storage
+
+/// In-memory stand-in for the preferences domain.
+///
+/// Unlike `FaultingProfileDefaults` this injects no faults; it exists purely
+/// so a test never reaches `UserDefaults.standard`.
+final class IsolatedProfileDefaults: ProfileDefaultsStore {
+    private var storage: [String: Any] = [:]
+
+    func data(forKey defaultName: String) -> Data? {
+        storage[defaultName] as? Data
+    }
+
+    func string(forKey defaultName: String) -> String? {
+        storage[defaultName] as? String
+    }
+
+    func set(_ value: Any?, forKey defaultName: String) {
+        storage[defaultName] = value
+    }
+
+    func removeObject(forKey defaultName: String) {
+        storage.removeValue(forKey: defaultName)
+    }
+}
+
+/// In-memory stand-in for the Keychain, with the same read semantics: a
+/// missing item is `.absent`, never an error.
+final class IsolatedProfileSecrets: ProfileSecretStore {
+    private var values: [ProfileSecretLocator: String] = [:]
+
+    func read(_ locator: ProfileSecretLocator) throws
+        -> ProfileSecretReadResult {
+        values[locator].map(ProfileSecretReadResult.value) ?? .absent
+    }
+
+    func write(_ value: String, to locator: ProfileSecretLocator) throws {
+        values[locator] = value
+    }
+
+    func delete(_ locator: ProfileSecretLocator) throws {
+        values.removeValue(forKey: locator)
+    }
+}
+
+/// In-memory stand-in for per-profile usage files.
+///
+/// `ProfileStore` defaults this to `ProfileUsageFileStore()`, which resolves
+/// to the real `~/Library/Application Support/Claude Usage/profile-data`.
+/// Leaving it un-injected made "isolated" cover the defaults and the Keychain
+/// but not the disk — the Codex branch of `loadProfilesWithVerifiedMigration`
+/// reads it, so the isolation held only for as long as no test happened to
+/// take that path.
+final class IsolatedProfileUsageFiles: ProfileCurrentUsageFileStoring {
+    private var usage: [UUID: ProfileCurrentUsage] = [:]
+
+    func loadCurrentUsage(for profileID: UUID) throws -> ProfileCurrentUsage? {
+        usage[profileID]
+    }
+
+    func saveCurrentUsage(
+        _ value: ProfileCurrentUsage,
+        for profileID: UUID
+    ) throws {
+        usage[profileID] = value
+    }
+
+    @discardableResult
+    func updateCurrentUsage(
+        for profileID: UUID,
+        transform: (inout ProfileCurrentUsage) throws -> Void
+    ) throws -> ProfileCurrentUsage {
+        var value = usage[profileID] ?? ProfileCurrentUsage()
+        try transform(&value)
+        usage[profileID] = value
+        return value
+    }
+
+    func deleteCurrentUsage(for profileID: UUID) throws {
+        usage.removeValue(forKey: profileID)
+    }
+
+    func deleteAllData(for profileID: UUID) throws {
+        usage.removeValue(forKey: profileID)
+    }
+}
+
+/// A `ProfileStore` backed entirely by memory.
+///
+/// Every one of `ProfileStore`'s three dependencies defaults to real user
+/// storage — `UserDefaults.standard`, `KeychainService.shared`, and the real
+/// Application Support directory — so an un-injected store in a test reads
+/// and writes all three. That is not hypothetical: a test in this suite once
+/// built `ProfileManager()` on the shared store and came one step from
+/// writing six live session keys into the developer's Keychain and rewriting
+/// their preferences file.
+///
+/// All three are injected here. If `ProfileStore` ever gains a fourth
+/// dependency, it must be injected too, or "isolated" quietly becomes
+/// partial again.
+@MainActor
+func makeIsolatedProfileStore(
+    defaults: IsolatedProfileDefaults = IsolatedProfileDefaults(),
+    secrets: IsolatedProfileSecrets = IsolatedProfileSecrets(),
+    usageFiles: IsolatedProfileUsageFiles? = nil
+) -> ProfileStore {
+    // Built here rather than as a default argument: default expressions are
+    // evaluated in a nonisolated context, and this type is main-actor bound
+    // through `ProfileCurrentUsageFileStoring`.
+    ProfileStore(
+        defaults: defaults,
+        secretStore: secrets,
+        usageFileStore: usageFiles ?? IsolatedProfileUsageFiles()
+    )
+}
+
+/// A `ProfileManager` whose **profile storage** is isolated.
+///
+/// Prefer this over `ProfileManager()` in every test. The bare initialiser
+/// resolves `profileStore` to `.shared`; nothing about the call site makes
+/// that visible, which is exactly why it keeps happening.
+///
+/// Scope, stated precisely so the next author is not misled: only
+/// `profileStore` is injected. `historyService`, `cliSyncService` — which
+/// touches `~/.claude/.credentials.json` — `lifecycleEventSink` and the
+/// activation effects still resolve to their shared, live implementations.
+/// Nothing leaks today because the current call sites never activate a
+/// profile, but a test that *does* activate one needs those injected too.
+@MainActor
+func makeIsolatedProfileManager() -> ProfileManager {
+    ProfileManager(profileStore: makeIsolatedProfileStore())
+}
+
 /// Builds `profiles_v3` data in the **frozen legacy on-disk format**: the v3
 /// profile record plus the `credentialMigrationRetry` plaintext envelope.
 ///

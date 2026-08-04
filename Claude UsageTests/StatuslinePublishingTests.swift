@@ -174,6 +174,48 @@ final class StatuslinePublishingTests: XCTestCase {
         }
     }
 
+    /// The sibling cache gets the same treatment. It carries `PROFILE_NAME`,
+    /// which the bash script renders, so it is if anything the more
+    /// identifying of the two files — it should not have been the one left at
+    /// umask default.
+    func testTheLegacyCacheIsNotWorldReadableEither() throws {
+        for percentage in [10.0, 20.0] {
+            StatuslineService.shared.writeUsageCache(
+                usage: makeUsage(sessionPercentage: percentage),
+                profileName: "Work"
+            )
+
+            let cache = configDirectory
+                .appendingPathComponent(".statusline-usage-cache")
+            let attributes = try FileManager.default
+                .attributesOfItem(atPath: cache.path)
+            XCTAssertEqual(
+                attributes[.posixPermissions] as? NSNumber,
+                NSNumber(value: 0o600),
+                "Wrong mode after writing \(percentage)"
+            )
+        }
+    }
+
+    /// Switching to a private write must not have dropped the contents the
+    /// bash script parses.
+    func testTheLegacyCacheStillCarriesEverythingBashReads() throws {
+        StatuslineService.shared.writeUsageCache(
+            usage: makeUsage(sessionPercentage: 55),
+            profileName: "Work"
+        )
+
+        let cache = try String(
+            contentsOf: configDirectory
+                .appendingPathComponent(".statusline-usage-cache"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(cache.contains("UTILIZATION=55"))
+        XCTAssertTrue(cache.contains("PROFILE_NAME=Work"))
+        XCTAssertTrue(cache.contains("TIMESTAMP="))
+        XCTAssertTrue(cache.contains("RESETS_AT="))
+    }
+
     /// The rename-into-place must not leave scratch files behind.
     func testPublishingLeavesNoTemporaryFiles() throws {
         StatuslineService.shared.writeUsageCache(usage: makeUsage(
@@ -225,6 +267,191 @@ final class StatuslinePublishingTests: XCTestCase {
         StatuslineService.shared.writeUsageCache(usage: usage)
 
         XCTAssertEqual(try publishedPayload()["utilization"] as? Int, 0)
+    }
+
+    // MARK: - CLAUDE_CONFIG_DIR
+
+    /// The app honours `CLAUDE_CONFIG_DIR`, so the scripts must too. A user
+    /// with it set had the app writing to one directory and the statusline
+    /// reading another, which showed up as a permanently empty statusline.
+    ///
+    /// This runs the generated script for real rather than asserting on its
+    /// text: the point is where it *looks*, and only executing it proves that.
+    func testTheGeneratedScriptReadsFromTheConfiguredDirectory() throws {
+        StatuslineService.shared.writeUsageCache(usage: makeUsage(
+            sessionPercentage: 64
+        ))
+        let script = configDirectory.appendingPathComponent("render.swift")
+        try StatuslineService.shared.renderScriptForTesting()
+            .write(to: script, atomically: true, encoding: .utf8)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["swift", script.path]
+        // Deliberately NOT the real ~/.claude: if the script ignored this and
+        // fell back to the home directory, it would read the developer's own
+        // usage file and the test would pass for the wrong reason.
+        var environment = ProcessInfo.processInfo.environment
+        environment["CLAUDE_CONFIG_DIR"] = configDirectory.path
+        process.environment = environment
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        let printed = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        XCTAssertEqual(process.terminationStatus, 0, "Script failed: \(printed)")
+        XCTAssertTrue(
+            printed.hasPrefix("64|"),
+            "Expected the utilization published into CLAUDE_CONFIG_DIR, got "
+                + "'\(printed)'"
+        )
+    }
+
+    /// Resolution has to happen when the script runs. Interpolating the path
+    /// at generation time would freeze whichever directory the app saw first,
+    /// which is the bug in a subtler form.
+    func testTheGeneratedScriptResolvesTheDirectoryAtRuntime() {
+        let script = StatuslineService.shared.renderScriptForTesting()
+
+        XCTAssertTrue(script.contains("CLAUDE_CONFIG_DIR"))
+        XCTAssertFalse(
+            script.contains(configDirectory.path),
+            "The active directory was baked into the script text"
+        )
+    }
+
+    /// The bash half reads the fast-path cache and locates the Swift script,
+    /// so it needs the same resolution or the two halves disagree.
+    func testTheBashScriptResolvesTheDirectoryAtRuntime() throws {
+        // `false` installs the placeholder and the bash script, which needs no
+        // profile — the production path, with nothing stubbed.
+        try StatuslineService.shared.installScripts()
+
+        let bash = try String(
+            contentsOf: configDirectory
+                .appendingPathComponent("statusline-command.sh"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            bash.contains("${CLAUDE_CONFIG_DIR:-$HOME/.claude}"),
+            "The bash script must resolve the directory at run time"
+        )
+        XCTAssertFalse(
+            bash.contains("$HOME/.claude/"),
+            "A hardcoded path remains in the bash script"
+        )
+    }
+
+    /// settings.json tells Claude Code where the script is, so it has to name
+    /// the directory the app actually installed into. This one is a concrete
+    /// path by necessity — it is a value, not a script that can resolve a
+    /// variable itself.
+    /// Asserts what settings.json actually receives, by driving the write.
+    ///
+    /// Checking the `installedCommandPath` accessor alone was not enough: its
+    /// consumer could have been reverted to a hardcoded `~/.claude` path and
+    /// the suite would still have passed.
+    func testClaudeSettingsPointAtTheInstalledScript() throws {
+        try StatuslineService.shared.applyStatuslineSettings(enabled: true)
+
+        let statusLine = try XCTUnwrap(
+            try settingsJSON()["statusLine"] as? [String: Any]
+        )
+        let command = try XCTUnwrap(statusLine["command"] as? String)
+        XCTAssertTrue(
+            command.contains(configDirectory.path),
+            "settings.json points outside the configured directory: \(command)"
+        )
+        XCTAssertEqual(statusLine["type"] as? String, "command")
+    }
+
+    /// Enabling must not discard the rest of the user's settings.
+    func testEnablingPreservesOtherSettings() throws {
+        try #"{"model":"opus","statusLine":{"type":"command","command":"old"}}"#
+            .write(
+                to: configDirectory.appendingPathComponent("settings.json"),
+                atomically: true,
+                encoding: .utf8
+            )
+
+        try StatuslineService.shared.applyStatuslineSettings(enabled: true)
+
+        let settings = try settingsJSON()
+        XCTAssertEqual(settings["model"] as? String, "opus")
+        let statusLine = try XCTUnwrap(settings["statusLine"] as? [String: Any])
+        XCTAssertNotEqual(statusLine["command"] as? String, "old")
+    }
+
+    /// Disabling removes only the statusline entry.
+    func testDisablingRemovesOnlyTheStatuslineEntry() throws {
+        try StatuslineService.shared.applyStatuslineSettings(enabled: true)
+
+        try StatuslineService.shared.applyStatuslineSettings(enabled: false)
+
+        XCTAssertNil(try settingsJSON()["statusLine"])
+    }
+
+    private func settingsJSON() throws -> [String: Any] {
+        let data = try Data(
+            contentsOf: configDirectory
+                .appendingPathComponent("settings.json")
+        )
+        return try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+    }
+
+    /// Claude Code hands `statusLine.command` to a shell, so the path has to
+    /// survive word splitting. Now that `CLAUDE_CONFIG_DIR` can point
+    /// anywhere, a directory with a space in its name would otherwise split
+    /// into two arguments and the statusline would never start.
+    ///
+    /// Verified by letting a real shell parse it rather than by inspecting
+    /// the string: quoting rules are exactly what one gets wrong by eye.
+    func testTheSettingsCommandSurvivesASpaceInTheDirectory() throws {
+        let spaced = configDirectory
+            .appendingPathComponent("Config Dir With Spaces")
+        try FileManager.default.createDirectory(
+            at: spaced,
+            withIntermediateDirectories: true
+        )
+        setenv("CLAUDE_CONFIG_DIR", spaced.path, 1)
+
+        let command = StatuslineService.statuslineCommand
+
+        // `set -- <command>` makes the shell split it exactly as it would
+        // when running it; then print the arguments one per line.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = [
+            "-c",
+            "set -- \(command); printf '%s\\n' \"$#\" \"$2\""
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        let lines = (String(data: data, encoding: .utf8) ?? "")
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        XCTAssertEqual(
+            lines.first,
+            "2",
+            "The command split into \(lines.first ?? "?") words, not 2 — the "
+                + "path is not quoted. Command was: \(command)"
+        )
+        XCTAssertEqual(
+            lines.count > 1 ? lines[1] : "",
+            spaced.appendingPathComponent("statusline-command.sh").path,
+            "The shell reconstructed a different path"
+        )
     }
 
     // MARK: - Remediating a script that still embeds a credential
