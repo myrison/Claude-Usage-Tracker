@@ -56,7 +56,11 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     }
 
     @MainActor
-    func testLegacyProfileDecodesAndReencodesAsExplicitRetryEnvelope() throws {
+    /// Decoding a legacy record still recovers every secret — that is what
+    /// makes an existing install rescuable — but re-encoding emits none of
+    /// them, in any shape. The old contract re-emitted them as an explicit
+    /// envelope, which is precisely the behaviour being retired.
+    func testLegacyProfileDecodesEverySecretAndReencodesNone() throws {
         let id = UUID()
         let legacyObject: [[String: Any]] = [[
             "id": id.uuidString,
@@ -79,8 +83,12 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         XCTAssertFalse(text.contains("\"claudeSessionKey\""))
         XCTAssertFalse(text.contains("\"apiSessionKey\""))
         XCTAssertFalse(text.contains("\"cliCredentialsJSON\""))
-        XCTAssertTrue(text.contains("\"credentialMigrationRetry\""))
-        XCTAssertTrue(text.contains("LEGACY_CLAUDE_FIXTURE"))
+        XCTAssertFalse(text.contains("\"credentialMigrationRetry\""))
+        // By value, not just by key: a secret must not survive a round trip
+        // under any name.
+        XCTAssertFalse(text.contains("LEGACY_CLAUDE_FIXTURE"))
+        XCTAssertFalse(text.contains("LEGACY_API_FIXTURE"))
+        XCTAssertFalse(text.contains("LEGACY_CLI_FIXTURE"))
     }
 
     func testSuccessfulLegacyMigrationScrubsAllPlaintext() throws {
@@ -304,12 +312,14 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         var retry = ProfileCredentialMigrationRetry()
         retry.setValue("OLD_RETRY", for: .claudeSessionKey)
         defaults.set(
-            try JSONEncoder().encode([
-                Profile(
-                    id: profileID,
-                    name: "Before",
-                    organizationId: "old-org",
-                    credentialMigrationRetry: retry
+            try legacyProfilesData([
+                (
+                    Profile(
+                        id: profileID,
+                        name: "Before",
+                        organizationId: "old-org"
+                    ),
+                    retry
                 )
             ]),
             forKey: "profiles_v3"
@@ -371,12 +381,8 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
             for: .apiSessionKey
         )
         defaults.set(
-            try JSONEncoder().encode([
-                Profile(
-                    id: profileID,
-                    name: "CLI retry",
-                    credentialMigrationRetry: retry
-                )
+            try legacyProfilesData([
+                (Profile(id: profileID, name: "CLI retry"), retry)
             ]),
             forKey: "profiles_v3"
         )
@@ -1243,6 +1249,176 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         )
     }
 
+    // MARK: - Adoption debt lifecycle
+
+    /// (c) The whole cycle: adopt at decode, record the debt, let the
+    /// migration loop secure the value, rewrite the plist, clear the debt.
+    @MainActor
+    func testAdoptionSecuresTheValueAndScrubsTheStoredPlaintext() throws {
+        let profileID = UUID()
+        seedLegacyProfile(
+            id: profileID,
+            claude: "LIFECYCLE_CLAUDE",
+            api: "LIFECYCLE_API",
+            cli: "LIFECYCLE_CLI"
+        )
+        let secrets = MockProfileSecretStore()
+        let store = retain(
+            ProfileStore(defaults: defaults, secretStore: secrets)
+        )
+
+        let profiles = try store.loadProfilesWithVerifiedMigration()
+
+        XCTAssertEqual(profiles.first?.claudeSessionKey, "LIFECYCLE_CLAUDE")
+        XCTAssertEqual(
+            secrets.values[locator(profileID, .claudeSessionKey)],
+            "LIFECYCLE_CLAUDE"
+        )
+        let persisted = try persistedProfileText()
+        XCTAssertFalse(persisted.contains("LIFECYCLE_CLAUDE"))
+        XCTAssertFalse(persisted.contains("LIFECYCLE_API"))
+        XCTAssertFalse(persisted.contains("LIFECYCLE_CLI"))
+        XCTAssertTrue(
+            store.profilesWithSessionOnlyCredentials.isEmpty,
+            "Secured, so nothing should still be held"
+        )
+    }
+
+    /// (b) A value carried by the adoption debt must light the same Phase 0
+    /// machinery a refused write does — verified, not assumed, since the
+    /// banner and quit guard are the only things standing between the user
+    /// and silent loss.
+    @MainActor
+    func testDebtHeldValueDrivesTheSessionOnlyMachinery() throws {
+        let profileID = UUID()
+        seedLegacyProfile(
+            id: profileID,
+            claude: "MACHINERY_CLAUDE",
+            api: "MACHINERY_API",
+            cli: "MACHINERY_CLI"
+        )
+        let secrets = MockProfileSecretStore()
+        secrets.writeErrors[.claudeSessionKey] = TestError.expected
+        let store = retain(
+            ProfileStore(defaults: defaults, secretStore: secrets)
+        )
+
+        _ = try store.loadProfilesWithVerifiedMigration()
+
+        XCTAssertTrue(
+            store.profilesWithSessionOnlyCredentials.contains(profileID),
+            "The banner reads off exactly this set"
+        )
+        XCTAssertEqual(
+            QuitCredentialGuard.outcome(
+                remaining: store.profilesWithSessionOnlyCredentials,
+                orderedProfiles: [(id: profileID, name: "Legacy")]
+            ),
+            .confirm(accountNames: ["Legacy"]),
+            "Quitting must warn about a legacy value that never got secured"
+        )
+    }
+
+    /// (a) The crash window: adopted, but the launch died before the value
+    /// was secured or the plist rewritten. The plaintext is still on disk, so
+    /// the next launch must adopt it identically rather than lose it.
+    @MainActor
+    func testInterruptedAdoptionIsRepeatedIdenticallyOnTheNextLaunch() throws {
+        let profileID = UUID()
+        seedLegacyProfile(
+            id: profileID,
+            claude: "CRASH_CLAUDE",
+            api: "CRASH_API",
+            cli: "CRASH_CLI"
+        )
+        let secrets = MockProfileSecretStore()
+        secrets.writeErrors[.claudeSessionKey] = TestError.expected
+        secrets.writeErrors[.apiSessionKey] = TestError.expected
+        secrets.writeErrors[.cliCredentialsJSON] = TestError.expected
+        let backing = FaultingProfileDefaults()
+        backing.storage["profiles_v3"] = defaults.data(forKey: "profiles_v3")
+        backing.corruptNextProfileWrite = true
+        let interrupted = retain(
+            ProfileStore(defaults: backing, secretStore: secrets)
+        )
+
+        // The rewrite is corrupted, so the launch cannot complete.
+        _ = try? interrupted.loadProfilesWithVerifiedMigration()
+
+        // Nothing was secured and nothing was scrubbed, so the value must
+        // still be recoverable from disk.
+        let stillStored = try XCTUnwrap(
+            backing.data(forKey: "profiles_v3")
+                .flatMap { String(data: $0, encoding: .utf8) }
+        )
+        XCTAssertTrue(stillStored.contains("CRASH_CLAUDE"))
+
+        // Next launch, with secure storage working again.
+        secrets.writeErrors.removeAll()
+        let relaunched = retain(
+            ProfileStore(defaults: backing, secretStore: secrets)
+        )
+        let recovered = try XCTUnwrap(
+            relaunched.loadProfilesWithVerifiedMigration().first
+        )
+
+        XCTAssertEqual(recovered.claudeSessionKey, "CRASH_CLAUDE")
+        XCTAssertEqual(
+            secrets.values[locator(profileID, .claudeSessionKey)],
+            "CRASH_CLAUDE",
+            "Zero loss across the crash window"
+        )
+        XCTAssertTrue(relaunched.profilesWithSessionOnlyCredentials.isEmpty)
+    }
+
+    /// Any verified persist settles the debt, not just the load path's own
+    /// rewrite. Several public methods decode (adopting the plaintext) and
+    /// persist that same record directly; if only the load path cleared the
+    /// debt, they would leave it set and the next load would force a rewrite
+    /// nothing needs — one that can fail verification and turn a clean read
+    /// into a hard error.
+    @MainActor
+    func testAnyVerifiedPersistSettlesTheAdoptionDebt() throws {
+        let profileID = UUID()
+        seedLegacyProfile(
+            id: profileID,
+            claude: "DEBT_CLAUDE",
+            api: "DEBT_API",
+            cli: "DEBT_CLI"
+        )
+        let secrets = MockProfileSecretStore()
+        let backing = FaultingProfileDefaults()
+        backing.storage["profiles_v3"] = defaults.data(forKey: "profiles_v3")
+        let store = retain(
+            ProfileStore(defaults: backing, secretStore: secrets)
+        )
+
+        // Decoded here, not via the store: calling loadProfiles first would
+        // run the verified load, which clears the debt itself and would hide
+        // exactly the bypass this test is about.
+        let seeded = try JSONDecoder().decode(
+            [Profile].self,
+            from: try XCTUnwrap(backing.data(forKey: "profiles_v3"))
+        )
+        try store.saveProfilesThrowing(seeded)
+        XCTAssertFalse(
+            try XCTUnwrap(
+                backing.data(forKey: "profiles_v3")
+                    .flatMap { String(data: $0, encoding: .utf8) }
+            ).contains("DEBT_CLAUDE"),
+            "That persist already scrubbed the plaintext"
+        )
+
+        // Armed only now: with the debt settled there is nothing left to
+        // rewrite, so this load must not write at all.
+        backing.corruptNextProfileWrite = true
+        XCTAssertNoThrow(
+            try store.loadProfilesWithVerifiedMigration(),
+            "A clean read must not be turned into a hard error by a rewrite "
+                + "that nothing needs"
+        )
+    }
+
     // MARK: - Opt-in session-only save (setup wizard's explicit choice)
 
     /// The default save path fails closed and loud. This one exists only for
@@ -1279,6 +1455,39 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
             try persistedProfileText().contains("OPTIN_SESSION_ONLY"),
             "Opting in must not put the secret on disk — that is the whole point"
         )
+    }
+
+    /// "Cannot read the prior state" is not "there was no prior state".
+    /// Swallowing it would roll back to the wrong thing later.
+    @MainActor
+    func testOptInSaveSurfacesAnUnreadablePriorState() throws {
+        let profileID = UUID()
+        let secrets = MockProfileSecretStore()
+        let store = retain(
+            ProfileStore(defaults: defaults, secretStore: secrets)
+        )
+        try seedProfilesForTesting(
+            [Profile(id: profileID, name: "Unreadable")],
+            in: store
+        )
+        secrets.readErrors[.claudeSessionKey] = TestError.expected
+
+        var credentials = ProfileCredentials()
+        credentials.claudeSessionKey = "VALUE"
+        credentials.organizationId = "org"
+
+        XCTAssertThrowsError(
+            try store.saveProfileCredentialsAcceptingSessionOnly(
+                profileID,
+                credentials: credentials
+            )
+        ) { error in
+            guard case ProfileStoreError.credentialReadUnresolved = error else {
+                return XCTFail(
+                    "Expected credentialReadUnresolved, got \(error)"
+                )
+            }
+        }
     }
 
     /// A hold is only durable if the profile it belongs to is.

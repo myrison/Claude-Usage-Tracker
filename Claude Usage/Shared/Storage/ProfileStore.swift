@@ -95,6 +95,16 @@ class ProfileStore {
     /// and the user is asked to sign in again.
     private var sessionOnlySecrets: [ProfileSecretLocator: String] = [:]
 
+    /// Profiles whose legacy plaintext was adopted at the decode boundary and
+    /// whose stored record therefore still contains it.
+    ///
+    /// Adoption happens during decode and cannot write preferences itself, so
+    /// it records the debt here; the next load pays it by rewriting. Without
+    /// this the envelope would be emptied in memory before the load path
+    /// could notice it needed to scrub disk — the plaintext would be adopted
+    /// and then left exactly where it was.
+    private var profilesAwaitingPlaintextScrub: Set<UUID> = []
+
     /// Drops a held credential. Every path that removes a secret must call
     /// this: the load path overlays held values when secure storage reports
     /// absent, so a hold that outlives its deletion resurrects the very
@@ -350,7 +360,9 @@ class ProfileStore {
             return []
         }
 
-        var needsRewrite = false
+        // Adoption at the decode boundary already emptied the envelopes, so
+        // the loop below cannot see that disk still holds plaintext.
+        var needsRewrite = !profilesAwaitingPlaintextScrub.isEmpty
 
         for profileIndex in profiles.indices {
             if profiles[profileIndex].deletionInProgress {
@@ -538,6 +550,8 @@ class ProfileStore {
         }
 
         if needsRewrite {
+            // persistProfiles clears the debt itself, once the write is
+            // verified — a throw leaves it set, so nothing is lost.
             try persistProfiles(profiles)
             LoggingService.shared.log("ProfileStore: Verified profile credential migration rewrite")
         }
@@ -668,10 +682,6 @@ class ProfileStore {
 
     // MARK: - Credential Helpers
 
-    /// Explicitly replaces the complete credential set for a profile.
-    ///
-    /// A nil secret is a verified deletion here. This is intentionally
-    /// different from `saveProfiles`, where nil is credential-neutral.
     /// Saves credentials, accepting session-only storage if the Keychain
     /// refuses.
     ///
@@ -725,25 +735,50 @@ class ProfileStore {
         let previousProfileData = defaults.data(forKey: Keys.profiles)
         var heldHere: [ProfileSecretLocator] = []
         var written: [(ProfileSecretLocator, ProfileSecretReadResult)] = []
+
+        // Every prior state is read before anything is written, exactly as
+        // performCredentialTransaction does it. Reading inside the write loop
+        // meant a later unreadable field threw after earlier fields were
+        // already committed, past the only rollback — the caller was told the
+        // save failed while part of the set was durably in the Keychain.
+        //
+        // An unreadable prior state is still surfaced rather than swallowed:
+        // "cannot tell" downgraded to "no previous value" would roll back to
+        // the wrong thing. It just has to be discovered before the first
+        // mutation, not after.
+        var priorStates: [ProfileSecretField: ProfileSecretReadResult] = [:]
         for field in ProfileSecretField.allCases {
-            guard let value = credentials.secretValue(for: field) else {
+            guard credentials.secretValue(for: field) != nil else {
                 continue
             }
             let locator = ProfileSecretLocator(
                 profileID: profileId,
                 field: field
             )
-            // Snapshot before mutating, so a later metadata failure can undo
-            // this write the same way performCredentialTransaction does.
-            let previous = try? secretStore.read(locator)
+            do {
+                priorStates[field] = try secretStore.read(locator)
+            } catch {
+                credentialBaselines.removeValue(forKey: locator)
+                unresolvedLocators.insert(locator)
+                throw ProfileStoreError.credentialReadUnresolved(locator)
+            }
+        }
+
+        for field in ProfileSecretField.allCases {
+            guard let value = credentials.secretValue(for: field),
+                  let previous = priorStates[field] else {
+                continue
+            }
+            let locator = ProfileSecretLocator(
+                profileID: profileId,
+                field: field
+            )
             do {
                 try secretStore.write(value, to: locator)
                 credentialBaselines[locator] = .value(value)
                 sessionOnlySecrets.removeValue(forKey: locator)
                 notifySessionOnlyChange()
-                if let previous {
-                    written.append((locator, previous))
-                }
+                written.append((locator, previous))
             } catch {
                 // Retrying here also disambiguates why the transaction
                 // failed: if the writes succeed now, the original failure was
@@ -798,6 +833,10 @@ class ProfileStore {
         }
     }
 
+    /// Explicitly replaces the complete credential set for a profile.
+    ///
+    /// A nil secret is a verified deletion here. This is intentionally
+    /// different from `saveProfiles`, where nil is credential-neutral.
     func saveProfileCredentials(_ profileId: UUID, credentials: ProfileCredentials) throws {
         var profiles = try loadProfilesWithVerifiedMigration()
         guard let index = profiles.firstIndex(where: { $0.id == profileId }) else {
@@ -1465,7 +1504,71 @@ class ProfileStore {
         guard let data = defaults.data(forKey: Keys.profiles) else {
             return []
         }
-        return try JSONDecoder().decode([Profile].self, from: data)
+        var profiles = try JSONDecoder().decode([Profile].self, from: data)
+        adoptLegacyPlaintextSecrets(&profiles)
+        return profiles
+    }
+
+    /// The single point where legacy plaintext leaves the on-disk model.
+    ///
+    /// Every decode passes through here, so no caller can persist a profile
+    /// whose plaintext has not already been moved into secure storage or into
+    /// the in-memory hold. That is what makes dropping the encoded field safe:
+    /// by the time anything writes, the value exists somewhere else.
+    ///
+    /// Deliberately pure: no Keychain I/O, no throwing.
+    ///
+    /// Decode is reached from 16 call sites in every kind of context,
+    /// including read-only ones and tests that hold the shared store. Writing
+    /// to the Keychain here made a plain decode able to block on a Keychain
+    /// prompt — `MenuReliabilityTests` hung on exactly that — and gave a
+    /// read a side effect on real user data. So adoption only moves the value
+    /// into the in-memory hold and records the scrub debt; the existing
+    /// self-heal on the load path does the write, which is the one place that
+    /// already owns Keychain I/O and error handling for it.
+    private func adoptLegacyPlaintextSecrets(_ profiles: inout [Profile]) {
+        for index in profiles.indices where
+            !profiles[index].credentialMigrationRetry.isEmpty {
+            // A scrubbed identity must never rehydrate. Drop the plaintext
+            // without adopting it, exactly as the load path already does.
+            guard !profiles[index].deletionInProgress else {
+                profiles[index].credentialMigrationRetry = .init()
+                profilesAwaitingPlaintextScrub.insert(profiles[index].id)
+                continue
+            }
+            // Codex profiles own no credential locators; provider isolation
+            // keeps secure storage out of that path entirely.
+            guard profiles[index].providerConfiguration.kind == .claude else {
+                profiles[index].credentialMigrationRetry = .init()
+                profilesAwaitingPlaintextScrub.insert(profiles[index].id)
+                continue
+            }
+
+            for field in ProfileSecretField.allCases {
+                guard let value = profiles[index]
+                    .credentialMigrationRetry.value(for: field) else {
+                    continue
+                }
+                let locator = ProfileSecretLocator(
+                    profileID: profiles[index].id,
+                    field: field
+                )
+                // Held, not written. The hold is the loss-prevention
+                // guarantee: the value is usable now, the banner and quit
+                // guard already cover it, and the load path's self-heal moves
+                // it into secure storage at the first opportunity.
+                if sessionOnlySecrets[locator] == nil {
+                    sessionOnlySecrets[locator] = value
+                    notifySessionOnlyChange()
+                }
+                credentialBaselines.removeValue(forKey: locator)
+                // Usable now either way, and no longer carried by the model.
+                profiles[index].setSecretValue(value, for: field)
+                profiles[index].credentialMigrationRetry
+                    .setValue(nil, for: field)
+                profilesAwaitingPlaintextScrub.insert(profiles[index].id)
+            }
+        }
     }
 
     @discardableResult
@@ -2322,6 +2425,14 @@ class ProfileStore {
             try restoreProfiles(previousData)
             throw ProfileStoreError.profileWriteVerificationFailed
         }
+
+        // A verified write replaces the whole record, and `encode` cannot
+        // emit the legacy envelope, so nothing on disk carries plaintext any
+        // more — whichever caller got here. Clearing the debt anywhere else
+        // means the callers that persist adopted profiles directly leave it
+        // set, and the next load then forces a pointless rewrite that can
+        // fail verification and turn a clean read into a hard error.
+        profilesAwaitingPlaintextScrub.removeAll()
     }
 
     private func validateProfileSet(_ profiles: [Profile]) throws {
