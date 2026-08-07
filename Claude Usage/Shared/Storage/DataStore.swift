@@ -96,18 +96,59 @@ class DataStore: StorageProvider {
         defaults.set(enabled, forKey: Constants.UserDefaultsKeys.notificationsEnabled)
     }
 
-    /// Loads the global notification master switch.
+    /// Loads the legacy single-profile notification preference.
     ///
-    /// Absence of the key means enabled, not disabled: this flag predates
-    /// the master-switch feature, so no existing installation has ever
-    /// written it. `UserDefaults.bool(forKey:)` returns `false` for a
-    /// missing key, which would silently turn off notifications for every
-    /// upgrading user unless the missing case is handled explicitly here.
+    /// Deliberately still defaults to `false` for a missing key. This is not
+    /// the master switch: `ProfileMigrationService` reads this accessor to
+    /// seed a migrating installation's *per-profile*
+    /// `NotificationSettings.enabled`, and the original single-profile
+    /// "Enable Notifications" toggle did write this key before the
+    /// multi-profile refactor removed it. Changing this default would
+    /// silently flip that migration seed from off to on for installs that
+    /// never touched the old toggle.
+    ///
+    /// The global master switch has its own key and accessor — see
+    /// `loadNotificationsMasterSwitchEnabled()` — precisely so the two
+    /// concerns cannot drift into each other.
     func loadNotificationsEnabled() -> Bool {
-        guard defaults.object(forKey: Constants.UserDefaultsKeys.notificationsEnabled) != nil else {
+        return defaults.bool(forKey: Constants.UserDefaultsKeys.notificationsEnabled)
+    }
+
+    /// Saves the global notification master switch.
+    func saveNotificationsMasterSwitchEnabled(_ enabled: Bool) {
+        defaults.set(
+            enabled,
+            forKey: Constants.UserDefaultsKeys.notificationsMasterSwitchEnabled
+        )
+    }
+
+    /// Loads the global notification master switch, the single source of
+    /// truth for "notifications are globally enabled".
+    ///
+    /// Absence means enabled, not disabled. The key is introduced with this
+    /// feature, so no existing installation has written it, and
+    /// `UserDefaults.bool(forKey:)` reports `false` for a missing key —
+    /// taking that literally would silently mute every upgrading user.
+    ///
+    /// Both this type and `NotificationManager` resolve the switch through
+    /// `Self.masterSwitchEnabled(in:)` rather than reimplementing the
+    /// missing-key rule, so there is one definition of the default.
+    func loadNotificationsMasterSwitchEnabled() -> Bool {
+        return Self.masterSwitchEnabled(in: defaults)
+    }
+
+    /// Shared master-switch read, parameterized by `UserDefaults` so callers
+    /// that inject a test suite (rather than reaching for the singleton) get
+    /// identical semantics.
+    static func masterSwitchEnabled(in defaults: UserDefaults) -> Bool {
+        guard defaults.object(
+            forKey: Constants.UserDefaultsKeys.notificationsMasterSwitchEnabled
+        ) != nil else {
             return true
         }
-        return defaults.bool(forKey: Constants.UserDefaultsKeys.notificationsEnabled)
+        return defaults.bool(
+            forKey: Constants.UserDefaultsKeys.notificationsMasterSwitchEnabled
+        )
     }
 
     /// Saves refresh interval

@@ -38,8 +38,13 @@ enum StatusItemPositionSanitizer {
     /// is exercised directly by tests with plain dictionaries and rects.
     ///
     /// Returns the subset of `savedDefaults`'s keys (prefixed with
-    /// `keyPrefix`) whose saved x position falls outside the union of
-    /// `screenFrames`.
+    /// `keyPrefix`) whose saved x position falls on none of `screenFrames`.
+    ///
+    /// Each screen is tested separately rather than collapsing them into one
+    /// `minX...maxX` span. Displays need not be contiguous in the global
+    /// coordinate space — two monitors can sit with a gap between them — and
+    /// a span would report a position inside that gap as reachable, leaving
+    /// the item exactly as invisible as before while claiming it was fine.
     ///
     /// Returns an empty array — never treats anything as stale — when
     /// `screenFrames` is empty. We cannot distinguish "off-screen" from
@@ -51,11 +56,10 @@ enum StatusItemPositionSanitizer {
         in savedDefaults: [String: Any],
         screenFrames: [CGRect]
     ) -> [String] {
-        guard !screenFrames.isEmpty else { return [] }
-        let minX = screenFrames.map(\.minX).min()!
-        let maxX = screenFrames.map(\.maxX).max()!
-        guard minX <= maxX else { return [] }
-        let reachableRange = minX...maxX
+        let reachableRanges = screenFrames
+            .filter { $0.minX <= $0.maxX }
+            .map { $0.minX...$0.maxX }
+        guard !reachableRanges.isEmpty else { return [] }
 
         return savedDefaults.keys
             .filter { $0.hasPrefix(keyPrefix) }
@@ -65,9 +69,10 @@ enum StatusItemPositionSanitizer {
                     // leave it alone rather than guess.
                     return false
                 }
-                return !reachableRange.contains(
-                    CGFloat(number.doubleValue)
-                )
+                let position = CGFloat(number.doubleValue)
+                return !reachableRanges.contains {
+                    $0.contains(position)
+                }
             }
             .sorted()
     }

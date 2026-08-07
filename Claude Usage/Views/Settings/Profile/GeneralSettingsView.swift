@@ -18,7 +18,7 @@ struct GeneralSettingsView: View {
     // single source of truth also read by NotificationManager's live path
     // and the legacy alert paths.
     @State private var globalNotificationsEnabled =
-        DataStore.shared.loadNotificationsEnabled()
+        DataStore.shared.loadNotificationsMasterSwitchEnabled()
 
     init(
         dependencies: ProviderUIDependencies? = nil
@@ -161,7 +161,7 @@ struct GeneralSettingsView: View {
                                         get: { globalNotificationsEnabled },
                                         set: { newValue in
                                             globalNotificationsEnabled = newValue
-                                            DataStore.shared.saveNotificationsEnabled(newValue)
+                                            DataStore.shared.saveNotificationsMasterSwitchEnabled(newValue)
                                         }
                                     )
                                 )

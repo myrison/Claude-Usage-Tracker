@@ -841,7 +841,7 @@ struct MenuBarIconRenderer {
             ofSize: 9,
             weight: .medium
         )
-        let textAttributes = textAttributes(
+        let batteryTextAttributes = textAttributes(
             font: batteryLabelFont,
             fallbackSize: 9,
             color: textColor.withAlphaComponent(0.85)
@@ -865,13 +865,16 @@ struct MenuBarIconRenderer {
             text = "\(Int(metricData.percentage))%" as NSString
         }
 
-        let textSize = textAttributes.map {
+        let textSize = batteryTextAttributes.map {
             text.size(withAttributes: $0)
         } ?? .zero
         let textX = xOffset + (batteryWidth - textSize.width) / 2
         let textY: CGFloat = 2
-        if let textAttributes {
-            text.draw(at: NSPoint(x: textX, y: textY), withAttributes: textAttributes)
+        if let batteryTextAttributes {
+            text.draw(
+                at: NSPoint(x: textX, y: textY),
+                withAttributes: batteryTextAttributes
+            )
         }
 
         return image

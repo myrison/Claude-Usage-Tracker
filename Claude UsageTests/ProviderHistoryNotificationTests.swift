@@ -9,6 +9,88 @@ final class ProviderHistoryNotificationTests: HostedAppTestCase {
 
     // MARK: - Cycle identity stability
 
+    /// The master switch must not be built on top of the legacy
+    /// single-profile `notificationsEnabled` key.
+    ///
+    /// `ProfileMigrationService` reads that key to seed a migrating
+    /// installation's per-profile `NotificationSettings.enabled`, and the
+    /// original single-profile toggle did write it before the multi-profile
+    /// refactor. Flipping its missing-key default to `true` to serve the
+    /// master switch would silently change migration from off-by-default to
+    /// on-by-default for installs that never touched the old toggle. The two
+    /// concerns therefore use two keys with two different defaults.
+    func testMasterSwitchAndLegacyMigrationKeysHaveIndependentDefaults() {
+        let suiteName = "test.notification.keys.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removeSuite(named: suiteName) }
+
+        XCTAssertTrue(
+            DataStore.masterSwitchEnabled(in: defaults),
+            "An absent master-switch key must mean enabled, or every "
+                + "upgrading user is silently muted"
+        )
+        XCTAssertFalse(
+            defaults.bool(forKey: "notificationsEnabled"),
+            "The legacy migration key must keep its original "
+                + "off-by-default meaning"
+        )
+
+        defaults.set(false, forKey: "notificationsMasterSwitchEnabled")
+        XCTAssertFalse(DataStore.masterSwitchEnabled(in: defaults))
+        XCTAssertFalse(
+            defaults.bool(forKey: "notificationsEnabled"),
+            "Toggling the master switch must not touch the migration key"
+        )
+    }
+
+
+    /// The legacy CSV-export path builds its own cycle identity, and until
+    /// this PR it did so from a raw bit pattern while normalized rows used
+    /// the quantized form — one file, two incompatible formats for the same
+    /// concept. The export is exercised by other tests, but none assert the
+    /// Cycle ID column's value, so a format divergence there would be
+    /// invisible.
+    ///
+    /// Asserts the legacy path is quantized identically to the normalized
+    /// path, using a jittered reset-time pair rather than a single value:
+    /// equality alone would also hold if both sides were raw.
+    func testLegacyExportCycleIDIsQuantizedLikeNormalizedWindows() throws {
+        let jitteredPair = (807_826_200.293_999_910, 807_826_200.236_000_061)
+
+        let first = NormalizedUsageSnapshot.resetCycleID(
+            forResetTime: Date(
+                timeIntervalSinceReferenceDate: jitteredPair.0
+            )
+        )
+        let second = NormalizedUsageSnapshot.resetCycleID(
+            forResetTime: Date(
+                timeIntervalSinceReferenceDate: jitteredPair.1
+            )
+        )
+        XCTAssertEqual(
+            first,
+            second,
+            "Legacy export cycle IDs must absorb the same provider jitter "
+                + "the normalized path does"
+        )
+
+        let normalizedWindow = try UsageWindow(
+            id: UsageWindowID("session"),
+            displayName: "Session",
+            usedPercentage: 42,
+            resetsAt: Date(
+                timeIntervalSinceReferenceDate: jitteredPair.0
+            )
+        )
+        XCTAssertEqual(
+            first,
+            NormalizedUsageSnapshot.cycleID(for: normalizedWindow),
+            "A legacy row and a normalized row describing the same reset "
+                + "instant must carry the same cycle identity in one export"
+        )
+    }
+
+
     /// Cycle identity must survive the sub-second jitter providers actually
     /// report, because identity is what downstream reset detection and
     /// history de-duplication both key on.
@@ -1040,7 +1122,7 @@ final class ProviderHistoryNotificationTests: HostedAppTestCase {
         throws
     {
         let environment = try makeEnvironment()
-        environment.defaults.set(false, forKey: "notificationsEnabled")
+        environment.defaults.set(false, forKey: "notificationsMasterSwitchEnabled")
         var requests: [UNNotificationRequest] = []
         let manager = retain(NotificationManager(
             defaults: environment.defaults,
@@ -1070,7 +1152,7 @@ final class ProviderHistoryNotificationTests: HostedAppTestCase {
     /// as before: only the profile that disabled notifications stays silent.
     func testGlobalMasterSwitchOnLeavesPerProfileToggleInControl() throws {
         let environment = try makeEnvironment()
-        environment.defaults.set(true, forKey: "notificationsEnabled")
+        environment.defaults.set(true, forKey: "notificationsMasterSwitchEnabled")
         var requests: [UNNotificationRequest] = []
         let manager = retain(NotificationManager(
             defaults: environment.defaults,
@@ -1116,7 +1198,7 @@ final class ProviderHistoryNotificationTests: HostedAppTestCase {
     func testMissingMasterSwitchKeyIsTreatedAsEnabled() throws {
         let environment = try makeEnvironment()
         XCTAssertNil(
-            environment.defaults.object(forKey: "notificationsEnabled")
+            environment.defaults.object(forKey: "notificationsMasterSwitchEnabled")
         )
         var requests: [UNNotificationRequest] = []
         let manager = retain(NotificationManager(

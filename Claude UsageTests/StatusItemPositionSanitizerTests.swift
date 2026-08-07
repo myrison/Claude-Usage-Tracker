@@ -155,4 +155,35 @@ final class StatusItemPositionSanitizerTests: XCTestCase {
             "An in-bounds position must never be touched"
         )
     }
+
+    /// Displays need not be contiguous in the global coordinate space. A
+    /// position in the gap between two monitors is on neither of them, so it
+    /// is exactly as unreachable as one past the far edge — the case a
+    /// single `minX...maxX` span silently reported as fine, leaving the item
+    /// invisible while claiming it had been checked.
+    func testPositionInGapBetweenNonContiguousDisplaysIsStale() {
+        let screens = [
+            CGRect(x: 0, y: 0, width: 1800, height: 1125),
+            CGRect(x: 3000, y: 0, width: 1500, height: 1000)
+        ]
+        let saved: [String: Any] = [
+            "NSStatusItem Preferred Position onLeftDisplay": 900.0,
+            "NSStatusItem Preferred Position inTheGap": 2400.0,
+            "NSStatusItem Preferred Position onRightDisplay": 3600.0,
+            "NSStatusItem Preferred Position pastEverything": 11728.0
+        ]
+
+        let stale = StatusItemPositionSanitizer.staleKeys(
+            in: saved,
+            screenFrames: screens
+        )
+
+        XCTAssertEqual(
+            stale,
+            [
+                "NSStatusItem Preferred Position inTheGap",
+                "NSStatusItem Preferred Position pastEverything"
+            ]
+        )
+    }
 }

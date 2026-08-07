@@ -551,30 +551,18 @@ class NotificationManager: NotificationServiceProtocol {
         persistSentNotificationsLocked()
     }
 
-    /// The app-wide notification master switch, shared with
-    /// `DataStore.loadNotificationsEnabled()` via the same UserDefaults key
-    /// so there is exactly one source of truth for "notifications are
-    /// globally enabled" — never two flags that can silently disagree.
+    /// The app-wide notification master switch.
     ///
-    /// Read from `self.defaults` (rather than `DataStore.shared`) so this
-    /// stays independently testable with the injected UserDefaults suite
-    /// tests already use, matching how the rest of this class avoids the
-    /// app-wide singleton.
+    /// Delegates to `DataStore.masterSwitchEnabled(in:)` so the
+    /// missing-key-means-enabled rule has exactly one definition; a second
+    /// copy here is precisely the "two flags that silently disagree" failure
+    /// this switch exists to end.
     ///
-    /// A missing key means enabled: this key predates the master switch, so
-    /// no existing installation has ever written it, and
-    /// `UserDefaults.bool(forKey:)` defaults a missing key to `false` —
-    /// treating that literally would silently disable notifications for
-    /// every current user the moment they upgrade.
+    /// Reads `self.defaults` rather than `DataStore.shared` so this stays
+    /// testable with the injected UserDefaults suite, matching how the rest
+    /// of this class avoids the app-wide singleton.
     private func loadGlobalNotificationsEnabled() -> Bool {
-        guard defaults.object(
-            forKey: Constants.UserDefaultsKeys.notificationsEnabled
-        ) != nil else {
-            return true
-        }
-        return defaults.bool(
-            forKey: Constants.UserDefaultsKeys.notificationsEnabled
-        )
+        DataStore.masterSwitchEnabled(in: defaults)
     }
 
     /// Applies the profile's notification policy to every normalized usage
@@ -903,7 +891,7 @@ class NotificationManager: NotificationServiceProtocol {
     /// Sends a notification when approaching usage limits (legacy method)
     func sendUsageAlert(type: AlertType, percentage: Double, resetTime: Date?) {
         // Check if notifications are enabled in preferences
-        guard DataStore.shared.loadNotificationsEnabled() else {
+        guard DataStore.shared.loadNotificationsMasterSwitchEnabled() else {
             return
         }
 
@@ -1064,7 +1052,7 @@ class NotificationManager: NotificationServiceProtocol {
     /// Checks usage and sends appropriate alerts (legacy, for backwards compatibility)
     func checkAndNotify(usage: ClaudeUsage) {
         // Fallback to old behavior if called without profile
-        guard DataStore.shared.loadNotificationsEnabled() else {
+        guard DataStore.shared.loadNotificationsMasterSwitchEnabled() else {
             return
         }
 
