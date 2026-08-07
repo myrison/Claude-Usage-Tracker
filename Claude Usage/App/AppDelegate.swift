@@ -91,6 +91,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Hide dock icon (menu bar app only)
         NSApp.setActivationPolicy(.accessory)
 
+        // Clear any AppKit-persisted status item positions left stranded
+        // off-screen (e.g. by a since-removed monitor) before any status
+        // item is created below — AppKit only reads the saved position at
+        // creation time, so this must run first.
+        StatusItemPositionSanitizer.sanitize(
+            defaults: .standard,
+            screens: NSScreen.screens
+        )
+
         // Complete or retry the verified legacy credential/profile migration
         // before any normal profile hydration or first-launch decisions.
         ProfileMigrationService.shared.migrateIfNeeded()
