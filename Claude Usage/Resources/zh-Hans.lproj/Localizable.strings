@@ -122,6 +122,8 @@
 /* ==================== */
 "notifications.enable" = "启用通知";
 "notifications.enable.description" = "接近使用限制时接收警报";
+"notifications.master_switch" = "允许使用情况通知";
+"notifications.master_switch.description" = "所有配置文件的主开关。关闭后，无论下方每个配置文件的单独设置如何，都会静音所有使用情况通知。";
 "notifications.alert_thresholds" = "警报阈值";
 "notifications.threshold.warning" = "警告";
 "notifications.threshold.high" = "使用量过高";
@@ -1224,6 +1226,8 @@
 "menubar.accessibility.state.no_data" = "无用量数据";
 "menubar.accessibility.profile.active" = "%@，活跃配置文件";
 "menubar.accessibility.profile.inactive" = "%@，非活跃配置文件";
+"menubar.overflow.header" = "更多配置文件";
+"menubar.overflow.accessibility_label" = "还有%@个配置文件";
 "menu.provider.open_profile" = "打开 %@";
 "appearance.metric.saved_unavailable" = "最新的服务商响应中没有已保存的指标。";
 "appearance.metric.group.subscription" = "订阅";

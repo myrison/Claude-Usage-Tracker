@@ -15,6 +15,34 @@ final class StatusBarUIManager {
     // Using a constant instead of UUID() prevents a new random key on every call to setupMultiProfile.
     private static let multiProfileDefaultPlaceholderID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
+    /// Above this many selected profiles, individual status items collapse
+    /// into one overflow item so the menu bar doesn't fill up. At exactly
+    /// this count every profile still gets its own item.
+    static let overflowThreshold = 4
+
+    /// How many profiles keep their own status item once overflow kicks
+    /// in; the remainder collapse into the single overflow item.
+    static let maxIndividualProfileItems = 3
+
+    /// Stable identifier so menu-bar managers (Bartender, Ice, ...) can
+    /// track the overflow item the same way they track every other item.
+    static let overflowAutosaveName = "claude-usage-tracker.overflow"
+
+    /// Splits `profiles` (already filtered to those selected for display)
+    /// into the ones that get their own status item and the ones that
+    /// collapse into the single overflow item.
+    static func splitForOverflow(
+        _ profiles: [Profile]
+    ) -> (individual: [Profile], overflow: [Profile]) {
+        guard profiles.count > overflowThreshold else {
+            return (profiles, [])
+        }
+        return (
+            Array(profiles.prefix(maxIndividualProfileItems)),
+            Array(profiles.dropFirst(maxIndividualProfileItems))
+        )
+    }
+
     // Stable provider-neutral metric identity prevents dynamic windows from
     // colliding with the legacy Claude session/week buckets.
     private var statusItems: [MenuBarMetricID: NSStatusItem] = [:]
@@ -24,6 +52,14 @@ final class StatusBarUIManager {
 
     // Dictionary to hold status items keyed by profile ID (multi-profile mode)
     private var multiProfileStatusItems: [UUID: NSStatusItem] = [:]
+
+    // Once more than `overflowThreshold` profiles are selected for
+    // multi-profile display, only the first `maxIndividualProfileItems`
+    // get their own status item; the rest collapse into this single
+    // overflow item so the menu bar doesn't fill up with one item per
+    // profile.
+    private var overflowStatusItem: NSStatusItem?
+    private(set) var overflowProfileIDs: [UUID] = []
 
     // Current display mode
     private var isMultiProfileMode: Bool = false
@@ -437,6 +473,9 @@ final class StatusBarUIManager {
             ?? multiProfileStatusItems.values.first {
                 $0.button === sender
             }?.autosaveName
+            ?? (overflowStatusItem?.button === sender
+                ? overflowStatusItem?.autosaveName
+                : nil)
     }
 
     var orderedSingleButtonsForTesting: [NSStatusBarButton] {
@@ -477,6 +516,19 @@ final class StatusBarUIManager {
         }
         multiProfileStatusItems.removeAll()
 
+        // Clean up the overflow status item, if any
+        if let overflowItem = overflowStatusItem {
+            if let button = overflowItem.button {
+                lastImageData.removeValue(forKey: ObjectIdentifier(button))
+                button.image = nil
+                button.action = nil
+                button.target = nil
+            }
+            NSStatusBar.system.removeStatusItem(overflowItem)
+        }
+        overflowStatusItem = nil
+        overflowProfileIDs.removeAll()
+
         isMultiProfileMode = false
 
         LoggingService.shared.logUIEvent("Status bar cleaned up")
@@ -516,8 +568,13 @@ final class StatusBarUIManager {
             multiProfileStatusItems[Self.multiProfileDefaultPlaceholderID] = statusItem
             LoggingService.shared.logUIEvent("Multi-profile: No profiles selected, showing default logo")
         } else {
-            // Create one status item per selected profile
-            for profile in selectedProfiles {
+            // Above the overflow threshold, only the first few profiles get
+            // their own status item; the rest collapse into one overflow
+            // item (see `splitForOverflow`).
+            let plan = Self.splitForOverflow(selectedProfiles)
+
+            // Create one status item per individually-shown profile
+            for profile in plan.individual {
                 let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
                 // Stable identifier so Bartender and similar tools can reliably track this item
                 statusItem.autosaveName = "claude-usage-tracker.profile.\(profile.id.uuidString)"
@@ -545,7 +602,18 @@ final class StatusBarUIManager {
                 }
             }
 
-            LoggingService.shared.logUIEvent("Multi-profile: Created \(selectedProfiles.count) status items")
+            updateOverflowItem(
+                for: plan.overflow,
+                target: target,
+                action: action
+            )
+
+            LoggingService.shared.logUIEvent(
+                "Multi-profile: Created \(plan.individual.count) status items"
+                    + (plan.overflow.isEmpty
+                        ? ""
+                        : " + overflow item (\(plan.overflow.count))")
+            )
         }
 
         observeAppearanceChanges()
@@ -562,9 +630,10 @@ final class StatusBarUIManager {
         let selectedProfiles = profiles.filter {
             $0.isSelectedForDisplay && !$0.deletionInProgress
         }
+        let plan = Self.splitForOverflow(selectedProfiles)
         let desiredIDs: Set<UUID> = selectedProfiles.isEmpty
             ? [Self.multiProfileDefaultPlaceholderID]
-            : Set(selectedProfiles.map(\.id))
+            : Set(plan.individual.map(\.id))
         let currentIDs = Set(multiProfileStatusItems.keys)
 
         let idsToRemove = currentIDs.subtracting(desiredIDs)
@@ -601,7 +670,7 @@ final class StatusBarUIManager {
             LoggingService.shared.logUIEvent("Multi-profile: Added default logo status item")
         } else {
             // Preserve profile order for first-time additions while retaining existing item identity.
-            for profile in selectedProfiles where idsToAdd.contains(profile.id) {
+            for profile in plan.individual where idsToAdd.contains(profile.id) {
                 let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
                 statusItem.autosaveName = "claude-usage-tracker.profile.\(profile.id.uuidString)"
                 statusItem.isVisible = true
@@ -626,9 +695,136 @@ final class StatusBarUIManager {
             }
         }
 
+        updateOverflowItem(
+            for: plan.overflow,
+            target: target,
+            action: action
+        )
+
         LoggingService.shared.logUIEvent(
             "Multi-profile config updated: removed=\(idsToRemove.count), added=\(idsToAdd.count), kept=\(currentIDs.intersection(desiredIDs).count)"
         )
+    }
+
+    /// Reconciles the single overflow status item against the profiles
+    /// that should currently collapse into it. Creates the item the first
+    /// time there's overflow, removes it once there no longer is, and
+    /// otherwise reuses the existing item (preserving its on-screen
+    /// position) while refreshing its badge count and the profile list it
+    /// represents.
+    private func updateOverflowItem(
+        for overflowProfiles: [Profile],
+        target: AnyObject,
+        action: Selector
+    ) {
+        guard !overflowProfiles.isEmpty else {
+            guard let item = overflowStatusItem else {
+                overflowProfileIDs = []
+                return
+            }
+            if let button = item.button {
+                lastImageData.removeValue(forKey: ObjectIdentifier(button))
+                button.image = nil
+                button.action = nil
+                button.target = nil
+            }
+            NSStatusBar.system.removeStatusItem(item)
+            overflowStatusItem = nil
+            overflowProfileIDs = []
+            LoggingService.shared.logUIEvent(
+                "Multi-profile: Removed overflow status item"
+            )
+            return
+        }
+
+        overflowProfileIDs = overflowProfiles.map(\.id)
+
+        if overflowStatusItem == nil {
+            let item = NSStatusBar.system.statusItem(
+                withLength: NSStatusItem.variableLength
+            )
+            item.autosaveName = Self.overflowAutosaveName
+            item.isVisible = true
+            if let button = item.button {
+                Self.configureActionButton(
+                    button,
+                    target: target,
+                    action: action
+                )
+            }
+            overflowStatusItem = item
+        }
+
+        renderOverflowBadge(count: overflowProfiles.count)
+    }
+
+    /// Draws the "+N" badge for the overflow item directly, rather than
+    /// routing through `MenuBarIconRenderer`'s much larger per-metric icon
+    /// surface for one small combined-count glyph. Follows the same
+    /// nil-safe font handling used throughout this app's icon drawing:
+    /// `NSFont` factory methods are declared non-optional but can
+    /// transiently bridge back `nil`, so both the preferred and the
+    /// fallback font are captured through an explicit `NSFont?` before use
+    /// — never insert a nil font into an attributes dictionary.
+    private func renderOverflowBadge(count: Int) {
+        guard let button = overflowStatusItem?.button else { return }
+        let menuBarIsDark = button.effectiveAppearance.bestMatch(
+            from: [.darkAqua, .aqua]
+        ) == .darkAqua
+        let foreground: NSColor = menuBarIsDark ? .white : .black
+        let text = "+\(count)" as NSString
+
+        let preferredFont: NSFont? = NSFont.monospacedDigitSystemFont(
+            ofSize: 11,
+            weight: .semibold
+        )
+        let fallbackFont: NSFont? = NSFont.systemFont(ofSize: 11)
+        let image: NSImage
+        if let font = preferredFont ?? fallbackFont {
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: foreground
+            ]
+            let textSize = text.size(withAttributes: attributes)
+            image = NSImage(
+                size: NSSize(width: textSize.width + 6, height: 18)
+            )
+            image.lockFocus()
+            text.draw(
+                at: NSPoint(x: 3, y: (18 - textSize.height) / 2),
+                withAttributes: attributes
+            )
+            image.unlockFocus()
+        } else {
+            // Even the system-font fallback is unavailable; skip the
+            // glyph rather than crash rendering an unlabeled badge.
+            image = NSImage(size: NSSize(width: 18, height: 18))
+        }
+        image.isTemplate = false
+        setButtonImage(button, image: image)
+
+        let label = String(
+            format: ProviderUILocalization.text(
+                "menubar.overflow.accessibility_label",
+                fallback: "%@ more profiles"
+            ),
+            "\(count)"
+        )
+        button.setAccessibilityLabel(label)
+        button.toolTip = label
+    }
+
+    /// True when `sender` is the overflow status item's button — the "+N"
+    /// item representing every profile past `maxIndividualProfileItems`.
+    func isOverflowButton(_ sender: NSStatusBarButton?) -> Bool {
+        guard let sender else { return false }
+        return overflowStatusItem?.button === sender
+    }
+
+    /// The overflow status item's button, if it currently exists (used to
+    /// position the overflow profile list popover).
+    var overflowButton: NSStatusBarButton? {
+        overflowStatusItem?.button
     }
 
     /// Adds a thin green underline to an image to indicate the active profile.
@@ -1115,6 +1311,9 @@ final class StatusBarUIManager {
             if statusItem.button != nil {
                 return true
             }
+        }
+        if overflowStatusItem?.button != nil {
+            return true
         }
         return false
     }

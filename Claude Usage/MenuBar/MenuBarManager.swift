@@ -375,6 +375,11 @@ class MenuBarManager: NSObject, ObservableObject {
     // Popover for beautiful SwiftUI interface
     private var popover: NSPopover?
 
+    // Separate, much smaller popover for the overflow item's profile list.
+    // Kept apart from `popover` so opening it never disturbs that
+    // popover's retained hosting controller / detached-window state.
+    private var overflowPopover: NSPopover?
+
     // Event monitor for closing popover on outside click
     private var eventMonitor: Any?
 
@@ -1799,6 +1804,15 @@ class MenuBarManager: NSObject, ObservableObject {
             return
         }
 
+        // The overflow item ("+N") represents multiple profiles, not one —
+        // it needs its own list popover rather than the normal
+        // single-profile detail popover.
+        if let overflowButton = sender as? NSStatusBarButton,
+           statusBarUIManager?.isOverflowButton(overflowButton) == true {
+            toggleOverflowPopover(from: overflowButton)
+            return
+        }
+
         // Determine which button was clicked
         let clickedButton: NSStatusBarButton?
         if let button = sender as? NSStatusBarButton {
@@ -1920,6 +1934,99 @@ class MenuBarManager: NSObject, ObservableObject {
                 startMonitoringForOutsideClicks()
             }
         }
+    }
+
+    /// Builds the rows for the overflow profile list popover, in the same
+    /// order the overflow item represents them. Pulled out as a static,
+    /// non-UI function so the "which profile shows which percentage" logic
+    /// is testable without a live `MenuBarManager`/`NSStatusItem`.
+    static func overflowProfileRows(
+        profileIDs: [UUID],
+        profiles: [Profile],
+        snapshots: [UUID: PresentationSnapshot],
+        activeProfileID: UUID?,
+        now: Date = Date()
+    ) -> [OverflowProfileRow] {
+        profileIDs.compactMap { id in
+            guard let profile = profiles.first(where: { $0.id == id })
+            else {
+                return nil
+            }
+            let presentation = ProviderMenuPresentationBuilder.presentation(
+                profile: profile,
+                snapshot: snapshots[id],
+                now: now,
+                isActive: id == activeProfileID
+            )
+            return OverflowProfileRow(
+                id: id,
+                name: profile.name,
+                percentageText: presentation.metric?.percentageText ?? "—"
+            )
+        }
+    }
+
+    /// Shows (or, on a repeat click, hides) the overflow item's profile
+    /// list popover. Kept entirely separate from the main `popover` so
+    /// this never disturbs its retained hosting controller or
+    /// detached-window state.
+    private func toggleOverflowPopover(from button: NSStatusBarButton) {
+        if let overflowPopover, overflowPopover.isShown {
+            overflowPopover.performClose(nil)
+            return
+        }
+
+        // Never show two content popovers/windows at once.
+        closePopoverOrWindow()
+
+        let rows = Self.overflowProfileRows(
+            profileIDs: statusBarUIManager?.overflowProfileIDs ?? [],
+            profiles: profileManager.profiles,
+            snapshots: profileUsagePresentations,
+            activeProfileID: profileManager.activeProfile?.id
+        )
+        let view = OverflowProfileListView(rows: rows) {
+            [weak self] profileID in
+            self?.overflowPopover?.performClose(nil)
+            self?.selectOverflowProfile(profileID)
+        }
+        let hostingController = NSHostingController(rootView: view)
+        hostingController.sizingOptions = .preferredContentSize
+
+        let newPopover = NSPopover()
+        newPopover.behavior = .transient
+        newPopover.animates = false
+        newPopover.contentViewController = hostingController
+        NSApp.activate(ignoringOtherApps: true)
+        newPopover.show(
+            relativeTo: button.bounds,
+            of: button,
+            preferredEdge: .minY
+        )
+        overflowPopover = newPopover
+    }
+
+    /// Opens the normal profile detail popover for a profile picked from
+    /// the overflow list — the same destination clicking that profile's
+    /// own status item would reach, anchored to the overflow item's
+    /// button since that profile has no status item of its own.
+    private func selectOverflowProfile(_ profileID: UUID) {
+        guard let profile = profileManager.profiles.first(where: {
+            $0.id == profileID
+        }), let overflowButton = statusBarUIManager?.overflowButton else {
+            return
+        }
+        let identity = ProviderStatusItemIdentity(
+            profileID: profile.id,
+            providerID: profile.providerID,
+            providerRevision: profile.providerRevision,
+            metricID: nil
+        )
+        toggleValidatedPopover(
+            from: overflowButton,
+            target: identity,
+            profile: profile
+        )
     }
 
     nonisolated static func isContextMenuEvent(

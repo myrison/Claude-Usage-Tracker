@@ -5,6 +5,61 @@ All notable changes to Claude Usage Tracker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **"Your session has reset!" notifications no longer fire when nothing has
+  reset.** A window's usage cycle was identified by the exact floating-point
+  bit pattern of the reset timestamp the provider reported. Providers report
+  the same reset instant with a few tens of milliseconds of variation between
+  polls, so every refresh minted a brand-new cycle and was read as a fresh
+  session. On a machine with several profiles this produced a notification
+  roughly every few seconds. Cycle identity is now quantized so that jitter
+  cannot change it, and — more importantly — a reset is only reported when
+  usage has actually dropped. A timestamp moving is no longer enough.
+
+  This also covers rolling limit windows, whose reset time advances
+  continuously by design and could never have had a stable timestamp-derived
+  identity.
+
+- **Usage history no longer records a snapshot on every refresh.** The same
+  unstable cycle identity defeated the history recorder's de-duplication
+  check, which skips a snapshot only when the previous one shares its cycle.
+  Because the cycle changed every poll, that check could essentially never
+  match, and history grew at the refresh rate — roughly every 30 seconds per
+  window — instead of the intended 10-minute cadence. Existing history is
+  unaffected; only the recording rate changes.
+
+- **Turning notifications off now turns them off.** The only control was
+  per-profile, so disabling notifications while viewing one profile left
+  every other profile still alerting. A global switch existed internally but
+  was ignored by the code path that actually delivers usage notifications.
+  There is now a real master switch that suppresses notifications for every
+  profile, with the per-profile controls still available beneath it.
+  Notifications remain enabled for anyone who has never changed the setting.
+
+- **Menu bar items can no longer strand themselves off-screen.** macOS
+  remembers each menu bar item's position, and those positions persist across
+  reinstalls. An item positioned on a wide external display could be left at
+  coordinates far beyond a laptop's own screen, where it has no on-screen
+  presence — invisible, unclickable, and reported as invalid by third-party
+  menu bar managers. Saved positions that fall outside the attached displays
+  are now discarded at launch so macOS re-places those items.
+
+- **The menu bar no longer fills up as profiles are added.** Each profile
+  selected for display created its own menu bar item. Past four profiles, the
+  extras now collapse into a single overflow item showing how many are
+  hidden; clicking it lists them with their usage.
+
+- **The app no longer quits unexpectedly while drawing its menu bar icon.**
+  Rendering the Codex badge assumed the system monospaced font was always
+  available. It is typed as though it cannot fail, but the underlying system
+  call can return nothing during a transient font-services failure, which
+  terminated the app outright. Font lookups used for icon rendering now fall
+  back, and skip the affected detail rather than failing, if no font is
+  available.
+
 ## [3.2.0] - 2026-08-04
 
 ### Removed

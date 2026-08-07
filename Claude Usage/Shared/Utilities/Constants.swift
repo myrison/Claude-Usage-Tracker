@@ -9,6 +9,11 @@ enum Constants {
     enum UserDefaultsKeys {
         static let claudeUsageData = "claudeUsageData"
         static let notificationsEnabled = "notificationsEnabled"
+        /// Global notification master switch. Distinct from
+        /// `notificationsEnabled`, which is the legacy single-profile
+        /// preference still consumed by profile migration.
+        static let notificationsMasterSwitchEnabled =
+            "notificationsMasterSwitchEnabled"
         static let refreshInterval = "refreshInterval"
         static let autoStartSessionEnabled = "autoStartSessionEnabled"
 

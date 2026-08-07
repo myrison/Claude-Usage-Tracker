@@ -111,9 +111,18 @@ struct NormalizedUsageSnapshot: Codable, Identifiable, Equatable, Sendable {
         )
     }
 
-    /// Reset and start timestamps come from the provider protocol and are
-    /// stable across refreshes. The fallback remains stable for an unbounded
-    /// window instead of using a display label or fetch timestamp.
+    /// Identifies which usage cycle a window is currently in.
+    ///
+    /// This comment previously asserted that reset and start timestamps
+    /// "come from the provider protocol and are stable across refreshes".
+    /// That assumption was wrong and was the direct cause of a false
+    /// "session reset" notification on nearly every poll — see
+    /// `timestampComponent` for the measured jitter. Providers report the
+    /// same reset instant with sub-second variation, so the timestamp is
+    /// quantized before it becomes an identity.
+    ///
+    /// The fallback remains stable for an unbounded window instead of using
+    /// a display label or fetch timestamp.
     static func cycleID(for window: UsageWindow) -> String {
         if let resetsAt = window.resetsAt {
             return "reset:\(Self.timestampComponent(resetsAt))"
@@ -127,8 +136,44 @@ struct NormalizedUsageSnapshot: Codable, Identifiable, Equatable, Sendable {
         return "unbounded"
     }
 
+    /// Buckets a timestamp to the whole minute before hashing it into a
+    /// cycle identity.
+    ///
+    /// Real polling captured the *same* reset instant reported with
+    /// sub-second jitter between two consecutive fetches (e.g. 807826200.294
+    /// then 807826200.236 fifty seconds later — a 58ms wobble, not a new
+    /// cycle). Hashing the raw `Double` bit pattern turned that jitter into a
+    /// brand-new identity on every poll, which downstream reset detection
+    /// read as a fresh session — producing a false "your session has reset"
+    /// notification roughly once per poll. Flooring to the minute absorbs
+    /// realistic provider-side jitter (observed up to ~1s) while still
+    /// changing identity whenever a window's reset boundary meaningfully
+    /// moves.
+    ///
+    /// This alone does not make cycle identity fully stable for *rolling*
+    /// windows, whose `resetsAt` advances continuously by design (observed
+    /// advancing 60s per poll) — a rolling window can still cross a minute
+    /// boundary on every fetch. That case is intentionally left to the
+    /// notification policy's separate material-usage-drop gate
+    /// (`UsageNotificationPolicy`), because no identity derived solely from
+    /// `resetsAt` can be stable for a window that is designed to keep moving.
     private static func timestampComponent(_ date: Date) -> String {
-        String(date.timeIntervalSinceReferenceDate.bitPattern)
+        let bucketWidth: TimeInterval = 60
+        let seconds = date.timeIntervalSinceReferenceDate
+        let bucket = (seconds / bucketWidth).rounded(.down) * bucketWidth
+        return String(bucket.bitPattern)
+    }
+
+    /// Cycle identity for a legacy snapshot, whose only cycle signal is the
+    /// reset time that triggered it.
+    ///
+    /// Exists so the legacy CSV-export path shares this type's single
+    /// definition of cycle identity rather than rebuilding one from a raw
+    /// `Double` bit pattern. Two independent definitions meant one exported
+    /// file could carry two incompatible identity formats — quantized on
+    /// normalized rows, unquantized on legacy rows — for the same concept.
+    static func resetCycleID(forResetTime resetTime: Date) -> String {
+        "reset:\(Self.timestampComponent(resetTime))"
     }
 }
 

@@ -592,6 +592,8 @@
 /* ==================== */
 "notifications.enable" = "알림 활성화";
 "notifications.enable.description" = "사용량 한도 접근 시 알림 받기";
+"notifications.master_switch" = "사용량 알림 허용";
+"notifications.master_switch.description" = "모든 프로필의 마스터 스위치입니다. 이를 끄면 아래의 개별 프로필 설정과 관계없이 모든 사용량 알림이 음소거됩니다.";
 "notifications.alert_thresholds" = "알림 임계값";
 "notifications.threshold.warning" = "경고";
 "notifications.threshold.high" = "높은 사용량";
@@ -1204,6 +1206,8 @@
 "menubar.accessibility.state.no_data" = "사용량 데이터 없음";
 "menubar.accessibility.profile.active" = "%@, 활성 프로필";
 "menubar.accessibility.profile.inactive" = "%@, 비활성 프로필";
+"menubar.overflow.header" = "추가 프로필";
+"menubar.overflow.accessibility_label" = "%@개의 추가 프로필";
 "menu.provider.open_profile" = "%@ 열기";
 "appearance.metric.saved_unavailable" = "저장된 지표가 최신 제공업체 응답에 없습니다.";
 "appearance.metric.group.subscription" = "구독";

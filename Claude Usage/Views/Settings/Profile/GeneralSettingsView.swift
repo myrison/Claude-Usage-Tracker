@@ -13,6 +13,12 @@ import UserNotifications
 struct GeneralSettingsView: View {
     private let dependencies: ProviderUIDependencies
     @ObservedObject private var profileManager: ProfileManager
+    // Global master switch for every profile's usage notifications. Backed
+    // by DataStore (`Constants.UserDefaultsKeys.notificationsEnabled`), the
+    // single source of truth also read by NotificationManager's live path
+    // and the legacy alert paths.
+    @State private var globalNotificationsEnabled =
+        DataStore.shared.loadNotificationsMasterSwitchEnabled()
 
     init(
         dependencies: ProviderUIDependencies? = nil
@@ -144,6 +150,24 @@ struct GeneralSettingsView: View {
                             subtitle: "general.notifications_subtitle".localized
                         ) {
                             VStack(alignment: .leading, spacing: DesignTokens.Spacing.cardPadding) {
+                                // Master switch: applies to every profile,
+                                // not just the one being viewed. Must sit
+                                // above the per-profile toggle below so it
+                                // reads as the higher-priority control.
+                                SettingToggle(
+                                    title: "notifications.master_switch".localized,
+                                    description: "notifications.master_switch.description".localized,
+                                    isOn: Binding(
+                                        get: { globalNotificationsEnabled },
+                                        set: { newValue in
+                                            globalNotificationsEnabled = newValue
+                                            DataStore.shared.saveNotificationsMasterSwitchEnabled(newValue)
+                                        }
+                                    )
+                                )
+
+                                Divider()
+
                                 SettingToggle(
                                     title: "notifications.enable".localized,
                                     description: "notifications.enable.description".localized,
@@ -160,6 +184,8 @@ struct GeneralSettingsView: View {
                                         }
                                     )
                                 )
+                                .disabled(!globalNotificationsEnabled)
+                                .opacity(globalNotificationsEnabled ? 1 : 0.5)
 
                                 if profile.notificationSettings.enabled {
                                     Divider()

@@ -1754,6 +1754,58 @@ final class ProviderMenuPresentationTests: HostedAppTestCase {
         XCTAssertEqual(fingerprints.count, 5)
     }
 
+    /// Regression for a real crash: `NSFont.monospacedSystemFont` is typed
+    /// non-optional but returned `nil` in production
+    /// (`NSInvalidArgumentException` — "attempt to insert nil object from
+    /// objects[0]" — inserting it into a `.font` attributes dictionary
+    /// aborted the whole app). Injecting a resolver that always returns nil
+    /// reproduces that exact failure mode — both the preferred font AND the
+    /// system-font fallback unavailable — without depending on the real
+    /// font-matching service ever actually failing.
+    func testNilFontResolverSkipsGlyphInsteadOfCrashing() throws {
+        let nilFontRenderer = MenuBarIconRenderer { _, _ in nil }
+        let baseImage = NSImage(size: NSSize(width: 18, height: 18))
+
+        // applyProviderBadge -> drawProviderGlyph -> drawTerminalGlyph is
+        // the exact call chain from the crash report
+        // (StatusBarUIManager.updateProviderMultiProfileButtons ->
+        // applyProviderBadge -> drawTerminalGlyph).
+        let badged: NSImage = try autoreleasepool {
+            nilFontRenderer.applyProviderBadge(
+                to: baseImage,
+                providerID: .codex,
+                style: .glyphAndTint,
+                isDarkMode: false
+            )
+        }
+        XCTAssertGreaterThan(badged.size.width, 0)
+        XCTAssertGreaterThan(badged.size.height, 0)
+
+        // The Claude glyph path (drawSparkGlyph) shares no font-attributed
+        // text, but exercise it too since it is reached by the same
+        // applyProviderBadge entry point.
+        let claudeBadged: NSImage = try autoreleasepool {
+            nilFontRenderer.applyProviderBadge(
+                to: baseImage,
+                providerID: .claude,
+                style: .glyphAndTint,
+                isDarkMode: false
+            )
+        }
+        XCTAssertGreaterThan(claudeBadged.size.width, 0)
+        XCTAssertGreaterThan(claudeBadged.size.height, 0)
+
+        // The normal (non-nil) path must remain visually unchanged.
+        let normalRenderer = MenuBarIconRenderer()
+        let normalBadged = normalRenderer.applyProviderBadge(
+            to: baseImage,
+            providerID: .codex,
+            style: .glyphAndTint,
+            isDarkMode: false
+        )
+        XCTAssertEqual(normalBadged.size, badged.size)
+    }
+
     func testRingStyleSizesForAndRendersDistinctWindowLabels()
         throws
     {
