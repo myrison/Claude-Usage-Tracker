@@ -18,6 +18,65 @@ struct MenuBarIconRenderer {
         red: 0.06, green: 0.64, blue: 0.50, alpha: 1.0
     )
 
+    // MARK: - Nil-Safe Text Attributes
+    //
+    // `NSFont.systemFont`/`.monospacedSystemFont`/
+    // `.monospacedDigitSystemFont` are all declared to return a
+    // non-optional `NSFont`, but they bridge an Objective-C font-matching
+    // API that can transiently hand back `nil` (a real crash report showed
+    // exactly this: `NSInvalidArgumentException` — "attempt to insert nil
+    // object from objects[0]" — building a `[.font: ...]` attributes
+    // dictionary from one of these calls). Swift's non-optional return type
+    // does not make that impossible; it only stops the compiler from
+    // warning about it. Re-binding the result through an explicit
+    // `NSFont?` at the call site is what makes the nil observable, which is
+    // why every call below is captured as `let font: NSFont? = ...` instead
+    // of being inlined straight into a dictionary literal.
+
+    /// Resolves the font actually used for text attributes. Production
+    /// code always uses the default, which simply falls back to the plain
+    /// system font at the same size when the preferred (usually
+    /// monospaced) font construction failed. Tests substitute a resolver
+    /// that returns `nil` unconditionally to reproduce the exact production
+    /// failure mode — both the preferred call AND the system-font fallback
+    /// returning nil — without needing the font-matching service to
+    /// actually fail.
+    private let fontResolver: (NSFont?, CGFloat) -> NSFont?
+
+    init(
+        fontResolver: @escaping (NSFont?, CGFloat) -> NSFont? = {
+            preferred, fallbackSize in
+            preferred ?? NSFont.systemFont(ofSize: fallbackSize)
+        }
+    ) {
+        self.fontResolver = fontResolver
+    }
+
+    private func safeFont(
+        preferred: NSFont?,
+        fallbackSize: CGFloat
+    ) -> NSFont? {
+        fontResolver(preferred, fallbackSize)
+    }
+
+    /// Builds a text-attributes dictionary, or `nil` if even the system
+    /// font fallback is unavailable. `nil` must be treated by the caller as
+    /// "skip drawing this text" — never force a dictionary containing a
+    /// nil font, which is exactly what crashed the app before this fix.
+    private func textAttributes(
+        font: NSFont?,
+        fallbackSize: CGFloat,
+        color: NSColor
+    ) -> [NSAttributedString.Key: Any]? {
+        guard let font = safeFont(
+            preferred: font,
+            fallbackSize: fallbackSize
+        ) else {
+            return nil
+        }
+        return [.font: font, .foregroundColor: color]
+    }
+
     // MARK: - Public Methods
 
     /// Renders an arbitrary provider/window metric without assuming a fixed
@@ -172,15 +231,18 @@ struct MenuBarIconRenderer {
         paceStatus: PaceStatus?,
         showPaceMarker: Bool
     ) -> NSImage {
-        let font = NSFont.monospacedDigitSystemFont(
+        let font: NSFont? = NSFont.monospacedDigitSystemFont(
             ofSize: 11,
             weight: .semibold
         )
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: color
-        ]
-        let size = (text as NSString).size(withAttributes: attributes)
+        let attributes = textAttributes(
+            font: font,
+            fallbackSize: 11,
+            color: color
+        )
+        let size = attributes.map {
+            (text as NSString).size(withAttributes: $0)
+        } ?? .zero
         let paceWidth: CGFloat =
             showPaceMarker && paceStatus != nil ? 7 : 0
         let image = NSImage(
@@ -191,10 +253,12 @@ struct MenuBarIconRenderer {
         )
         image.lockFocus()
         defer { image.unlockFocus() }
-        (text as NSString).draw(
-            at: NSPoint(x: 2, y: (18 - size.height) / 2),
-            withAttributes: attributes
-        )
+        if let attributes {
+            (text as NSString).draw(
+                at: NSPoint(x: 2, y: (18 - size.height) / 2),
+                withAttributes: attributes
+            )
+        }
         if showPaceMarker, let paceStatus {
             paceStatus.color.setFill()
             NSBezierPath(
@@ -226,15 +290,19 @@ struct MenuBarIconRenderer {
         let labelText = [providerLabel, valueText + stateMark]
             .filter { !$0.isEmpty }
             .joined(separator: " ")
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(
-                ofSize: stackedLabel ? 8 : 7,
-                weight: .semibold
-            ),
-            .foregroundColor: foreground
-        ]
+        let barFont: NSFont? = NSFont.monospacedDigitSystemFont(
+            ofSize: stackedLabel ? 8 : 7,
+            weight: .semibold
+        )
+        let attributes = textAttributes(
+            font: barFont,
+            fallbackSize: stackedLabel ? 8 : 7,
+            color: foreground
+        )
         let text = labelText as NSString
-        let textSize = text.size(withAttributes: attributes)
+        let textSize = attributes.map {
+            text.size(withAttributes: $0)
+        } ?? .zero
         let labelWidth = ceil(textSize.width)
         let totalWidth = stackedLabel
             ? max(barWidth, labelWidth + 2)
@@ -300,7 +368,9 @@ struct MenuBarIconRenderer {
                 x: 0,
                 y: (18 - textSize.height) / 2
             )
-        text.draw(at: point, withAttributes: attributes)
+        if let attributes {
+            text.draw(at: point, withAttributes: attributes)
+        }
         return image
     }
 
@@ -316,14 +386,18 @@ struct MenuBarIconRenderer {
         isDarkMode: Bool
     ) -> NSImage {
         let text = (providerLabel + stateMark) as NSString
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(
-                ofSize: 7,
-                weight: .bold
-            ),
-            .foregroundColor: foreground
-        ]
-        let textSize = text.size(withAttributes: attributes)
+        let ringFont: NSFont? = NSFont.monospacedSystemFont(
+            ofSize: 7,
+            weight: .bold
+        )
+        let attributes = textAttributes(
+            font: ringFont,
+            fallbackSize: 7,
+            color: foreground
+        )
+        let textSize = attributes.map {
+            text.size(withAttributes: $0)
+        } ?? .zero
         let width: CGFloat = providerLabel.isEmpty
             ? 18
             : max(35, ceil(textSize.width) + 19)
@@ -378,10 +452,12 @@ struct MenuBarIconRenderer {
                 isDarkMode: isDarkMode
             )
         }
-        text.draw(
-            at: NSPoint(x: 17, y: 4),
-            withAttributes: attributes
-        )
+        if let attributes {
+            text.draw(
+                at: NSPoint(x: 17, y: 4),
+                withAttributes: attributes
+            )
+        }
         return image
     }
 
@@ -394,14 +470,18 @@ struct MenuBarIconRenderer {
         showPaceMarker: Bool
     ) -> NSImage {
         let text = (providerLabel + stateMark) as NSString
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(
-                ofSize: 8,
-                weight: .bold
-            ),
-            .foregroundColor: foreground
-        ]
-        let textSize = text.size(withAttributes: attributes)
+        let compactFont: NSFont? = NSFont.monospacedSystemFont(
+            ofSize: 8,
+            weight: .bold
+        )
+        let attributes = textAttributes(
+            font: compactFont,
+            fallbackSize: 8,
+            color: foreground
+        )
+        let textSize = attributes.map {
+            text.size(withAttributes: $0)
+        } ?? .zero
         let paceWidth: CGFloat =
             showPaceMarker && paceStatus != nil ? 6 : 0
         let image = NSImage(
@@ -416,10 +496,12 @@ struct MenuBarIconRenderer {
         NSBezierPath(
             ovalIn: NSRect(x: 1, y: 6, width: 6, height: 6)
         ).fill()
-        text.draw(
-            at: NSPoint(x: 8, y: (18 - textSize.height) / 2),
-            withAttributes: attributes
-        )
+        if let attributes {
+            text.draw(
+                at: NSPoint(x: 8, y: (18 - textSize.height) / 2),
+                withAttributes: attributes
+            )
+        }
         if showPaceMarker, let paceStatus {
             paceStatus.color.setFill()
             NSBezierPath(
@@ -755,10 +837,15 @@ struct MenuBarIconRenderer {
         }
 
         // Label BELOW the battery (replaces percentage text)
-        let textAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 9, weight: .medium),
-            .foregroundColor: textColor.withAlphaComponent(0.85)
-        ]
+        let batteryLabelFont: NSFont? = NSFont.systemFont(
+            ofSize: 9,
+            weight: .medium
+        )
+        let textAttributes = textAttributes(
+            font: batteryLabelFont,
+            fallbackSize: 9,
+            color: textColor.withAlphaComponent(0.85)
+        )
 
         // Show metric label if enabled, otherwise show percentage
         let text: NSString
@@ -778,10 +865,14 @@ struct MenuBarIconRenderer {
             text = "\(Int(metricData.percentage))%" as NSString
         }
 
-        let textSize = text.size(withAttributes: textAttributes)
+        let textSize = textAttributes.map {
+            text.size(withAttributes: $0)
+        } ?? .zero
         let textX = xOffset + (batteryWidth - textSize.width) / 2
         let textY: CGFloat = 2
-        text.draw(at: NSPoint(x: textX, y: textY), withAttributes: textAttributes)
+        if let textAttributes {
+            text.draw(at: NSPoint(x: textX, y: textY), withAttributes: textAttributes)
+        }
 
         return image
     }
@@ -821,16 +912,23 @@ struct MenuBarIconRenderer {
 
         // Draw label before bar (just "S" or "W")
         if showIconName {
-            let labelAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
-                .foregroundColor: textColor.withAlphaComponent(0.9)
-            ]
-            let label = (metricType == .session ? "S" : "W") as NSString
-            let labelSize = label.size(withAttributes: labelAttributes)
-            label.draw(
-                at: NSPoint(x: xOffset, y: (height - labelSize.height) / 2),
-                withAttributes: labelAttributes
+            let progressLabelFont: NSFont? = NSFont.systemFont(
+                ofSize: 10,
+                weight: .semibold
             )
+            let labelAttributes = textAttributes(
+                font: progressLabelFont,
+                fallbackSize: 10,
+                color: textColor.withAlphaComponent(0.9)
+            )
+            let label = (metricType == .session ? "S" : "W") as NSString
+            if let labelAttributes {
+                let labelSize = label.size(withAttributes: labelAttributes)
+                label.draw(
+                    at: NSPoint(x: xOffset, y: (height - labelSize.height) / 2),
+                    withAttributes: labelAttributes
+                )
+            }
             xOffset += labelWidth + spacing
         }
 
@@ -870,19 +968,22 @@ struct MenuBarIconRenderer {
             // Draw session reset time inside the fill area if enabled and this is a session metric
             if showNextSessionTime && metricType == .session, let resetTime = metricData.sessionResetTime {
                 let timeString = resetTime.timeRemainingHoursString() as NSString
-                let timeFont = NSFont.systemFont(ofSize: 5.5, weight: .medium)
-                let timeAttributes: [NSAttributedString.Key: Any] = [
-                    .font: timeFont,
-                    .foregroundColor: NSColor.white
-                ]
+                let timeFont: NSFont? = NSFont.systemFont(ofSize: 5.5, weight: .medium)
+                let timeAttributes = textAttributes(
+                    font: timeFont,
+                    fallbackSize: 5.5,
+                    color: NSColor.white
+                )
 
-                let timeSize = timeString.size(withAttributes: timeAttributes)
-                // Only draw if there's enough space in the fill area
-                if fillWidth > timeSize.width + 2 {
-                    // Right-align the text in the fill area
-                    let timeX = xOffset + fillWidth - timeSize.width - 4
-                    let timeY = barY + (barHeight - timeSize.height) / 2
-                    timeString.draw(at: NSPoint(x: timeX, y: timeY), withAttributes: timeAttributes)
+                if let timeAttributes {
+                    let timeSize = timeString.size(withAttributes: timeAttributes)
+                    // Only draw if there's enough space in the fill area
+                    if fillWidth > timeSize.width + 2 {
+                        // Right-align the text in the fill area
+                        let timeX = xOffset + fillWidth - timeSize.width - 4
+                        let timeY = barY + (barHeight - timeSize.height) / 2
+                        timeString.draw(at: NSPoint(x: timeX, y: timeY), withAttributes: timeAttributes)
+                    }
                 }
             }
         }
@@ -900,7 +1001,7 @@ struct MenuBarIconRenderer {
         paceStatus: PaceStatus? = nil,
         showPaceMarker: Bool = false
     ) -> NSImage {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)  // Larger font
+        let percentageFont: NSFont? = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)  // Larger font
         let fillColor: NSColor = getColorForMode(colorMode, statusLevel: metricData.statusLevel, singleColorHex: singleColorHex, isDarkMode: isDarkMode)
 
         var fullText = ""
@@ -911,12 +1012,15 @@ struct MenuBarIconRenderer {
             fullText = metricData.displayText
         }
 
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: fillColor
-        ]
+        let attributes = textAttributes(
+            font: percentageFont,
+            fallbackSize: 12,
+            color: fillColor
+        )
 
-        let textSize = fullText.size(withAttributes: attributes)
+        let textSize = attributes.map {
+            fullText.size(withAttributes: $0)
+        } ?? .zero
         let hasPaceDot = showPaceMarker && paceStatus != nil
         let paceDotExtra: CGFloat = hasPaceDot ? 8 : 0  // dot(4) + gaps(2+2)
         let image = NSImage(size: NSSize(width: textSize.width + 2 + paceDotExtra, height: 18))
@@ -925,7 +1029,9 @@ struct MenuBarIconRenderer {
         defer { image.unlockFocus() }
 
         let textY = (18 - textSize.height) / 2
-        fullText.draw(at: NSPoint(x: 2, y: textY), withAttributes: attributes)
+        if let attributes {
+            fullText.draw(at: NSPoint(x: 2, y: textY), withAttributes: attributes)
+        }
 
         // Pace dot after text
         if showPaceMarker, let pace = paceStatus {
@@ -1025,15 +1131,19 @@ struct MenuBarIconRenderer {
 
         // Draw S/W in the CENTER of the circle
         if showIconName {
-            let labelAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 9, weight: .bold),
-                .foregroundColor: textColor
-            ]
+            let ringCenterFont: NSFont? = NSFont.systemFont(ofSize: 9, weight: .bold)
+            let labelAttributes = textAttributes(
+                font: ringCenterFont,
+                fallbackSize: 9,
+                color: textColor
+            )
             let label = (metricType == .session ? "S" : "W") as NSString
-            let labelSize = label.size(withAttributes: labelAttributes)
-            let labelX = center.x - labelSize.width / 2
-            let labelY = center.y - labelSize.height / 2
-            label.draw(at: NSPoint(x: labelX, y: labelY), withAttributes: labelAttributes)
+            if let labelAttributes {
+                let labelSize = label.size(withAttributes: labelAttributes)
+                let labelX = center.x - labelSize.width / 2
+                let labelY = center.y - labelSize.height / 2
+                label.draw(at: NSPoint(x: labelX, y: labelY), withAttributes: labelAttributes)
+            }
         }
 
         return image
@@ -1071,16 +1181,20 @@ struct MenuBarIconRenderer {
 
         // Draw prefix if enabled
         if showIconName {
-            let prefixAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 9, weight: .medium),
-                .foregroundColor: textColor.withAlphaComponent(0.85)
-            ]
-            let prefixText = metricType.prefixText as NSString
-            let prefixSize = prefixText.size(withAttributes: prefixAttributes)
-            prefixText.draw(
-                at: NSPoint(x: xOffset, y: (height - prefixSize.height) / 2),
-                withAttributes: prefixAttributes
+            let compactPrefixFont: NSFont? = NSFont.systemFont(ofSize: 9, weight: .medium)
+            let prefixAttributes = textAttributes(
+                font: compactPrefixFont,
+                fallbackSize: 9,
+                color: textColor.withAlphaComponent(0.85)
             )
+            let prefixText = metricType.prefixText as NSString
+            if let prefixAttributes {
+                let prefixSize = prefixText.size(withAttributes: prefixAttributes)
+                prefixText.draw(
+                    at: NSPoint(x: xOffset, y: (height - prefixSize.height) / 2),
+                    withAttributes: prefixAttributes
+                )
+            }
             xOffset += prefixWidth + spacing
         }
 
@@ -1113,7 +1227,7 @@ struct MenuBarIconRenderer {
         singleColorHex: String,
         showIconName: Bool
     ) -> NSImage {
-        let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        let apiTextFont: NSFont? = NSFont.systemFont(ofSize: 11, weight: .medium)
 
         // Use isDarkMode to determine correct foreground color for menu bar
         let textColor: NSColor = menuBarForegroundColor(isDarkMode: isDarkMode)
@@ -1126,19 +1240,24 @@ struct MenuBarIconRenderer {
             fullText = metricData.displayText
         }
 
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: textColor
-        ]
+        let attributes = textAttributes(
+            font: apiTextFont,
+            fallbackSize: 11,
+            color: textColor
+        )
 
-        let textSize = fullText.size(withAttributes: attributes)
+        let textSize = attributes.map {
+            fullText.size(withAttributes: $0)
+        } ?? .zero
         let image = NSImage(size: NSSize(width: textSize.width + 4, height: 18))
 
         image.lockFocus()
         defer { image.unlockFocus() }
 
         let textY = (18 - textSize.height) / 2
-        fullText.draw(at: NSPoint(x: 2, y: textY), withAttributes: attributes)
+        if let attributes {
+            fullText.draw(at: NSPoint(x: 2, y: textY), withAttributes: attributes)
+        }
 
         return image
     }
@@ -1278,15 +1397,19 @@ struct MenuBarIconRenderer {
 
         // Profile initial in center
         let initial = String(profileInitial.prefix(1)).uppercased()
-        let labelAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 8, weight: .bold),
-            .foregroundColor: textColor
-        ]
+        let concentricInitialFont: NSFont? = NSFont.systemFont(ofSize: 8, weight: .bold)
+        let labelAttributes = textAttributes(
+            font: concentricInitialFont,
+            fallbackSize: 8,
+            color: textColor
+        )
         let labelString = initial as NSString
-        let labelSize = labelString.size(withAttributes: labelAttributes)
-        let labelX = center.x - labelSize.width / 2
-        let labelY = center.y - labelSize.height / 2
-        labelString.draw(at: NSPoint(x: labelX, y: labelY), withAttributes: labelAttributes)
+        if let labelAttributes {
+            let labelSize = labelString.size(withAttributes: labelAttributes)
+            let labelX = center.x - labelSize.width / 2
+            let labelY = center.y - labelSize.height / 2
+            labelString.draw(at: NSPoint(x: labelX, y: labelY), withAttributes: labelAttributes)
+        }
 
         return image
     }
@@ -1421,15 +1544,19 @@ struct MenuBarIconRenderer {
 
         // Profile label below the circle (first 3 characters)
         let label = String(profileName.prefix(3))
-        let labelAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 8, weight: .medium),
-            .foregroundColor: textColor.withAlphaComponent(0.85)
-        ]
+        let concentricLabelFont: NSFont? = NSFont.systemFont(ofSize: 8, weight: .medium)
+        let labelAttributes = textAttributes(
+            font: concentricLabelFont,
+            fallbackSize: 8,
+            color: textColor.withAlphaComponent(0.85)
+        )
         let labelString = label as NSString
-        let labelSize = labelString.size(withAttributes: labelAttributes)
-        let labelX = (totalWidth - labelSize.width) / 2
-        let labelY: CGFloat = 0
-        labelString.draw(at: NSPoint(x: labelX, y: labelY), withAttributes: labelAttributes)
+        if let labelAttributes {
+            let labelSize = labelString.size(withAttributes: labelAttributes)
+            let labelX = (totalWidth - labelSize.width) / 2
+            let labelY: CGFloat = 0
+            labelString.draw(at: NSPoint(x: labelX, y: labelY), withAttributes: labelAttributes)
+        }
 
         return image
     }
@@ -1519,14 +1646,18 @@ struct MenuBarIconRenderer {
         // Profile label (if shown)
         if let name = profileName {
             let label = String(name.prefix(3))
-            let labelAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 8, weight: .medium),
-                .foregroundColor: foregroundColor.withAlphaComponent(0.85)
-            ]
+            let progressBarLabelFont: NSFont? = NSFont.systemFont(ofSize: 8, weight: .medium)
+            let labelAttributes = textAttributes(
+                font: progressBarLabelFont,
+                fallbackSize: 8,
+                color: foregroundColor.withAlphaComponent(0.85)
+            )
             let labelString = label as NSString
-            let labelSize = labelString.size(withAttributes: labelAttributes)
-            let labelX = (totalWidth - labelSize.width) / 2
-            labelString.draw(at: NSPoint(x: labelX, y: 0), withAttributes: labelAttributes)
+            if let labelAttributes {
+                let labelSize = labelString.size(withAttributes: labelAttributes)
+                let labelX = (totalWidth - labelSize.width) / 2
+                labelString.draw(at: NSPoint(x: labelX, y: 0), withAttributes: labelAttributes)
+            }
         }
 
         return image
@@ -1586,14 +1717,18 @@ struct MenuBarIconRenderer {
 
         // Profile initial (if shown)
         if let initial = profileInitial {
-            let labelAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 8, weight: .bold),
-                .foregroundColor: foregroundColor.withAlphaComponent(0.85)
-            ]
+            let compactDotFont: NSFont? = NSFont.systemFont(ofSize: 8, weight: .bold)
+            let labelAttributes = textAttributes(
+                font: compactDotFont,
+                fallbackSize: 8,
+                color: foregroundColor.withAlphaComponent(0.85)
+            )
             let labelString = initial.uppercased() as NSString
-            let labelSize = labelString.size(withAttributes: labelAttributes)
-            let labelX = (totalWidth - labelSize.width) / 2
-            labelString.draw(at: NSPoint(x: labelX, y: 0), withAttributes: labelAttributes)
+            if let labelAttributes {
+                let labelSize = labelString.size(withAttributes: labelAttributes)
+                let labelX = (totalWidth - labelSize.width) / 2
+                labelString.draw(at: NSPoint(x: labelX, y: 0), withAttributes: labelAttributes)
+            }
         }
 
         return image
@@ -1660,34 +1795,39 @@ struct MenuBarIconRenderer {
         weekPaceStatus: PaceStatus? = nil,
         showPaceMarker: Bool = false
     ) -> NSImage {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold)
+        let compactFont: NSFont? = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold)
+        let font = safeFont(preferred: compactFont, fallbackSize: 9)
         let foregroundColor = menuBarForegroundColor(isDarkMode: isDarkMode)
         let separatorColor = foregroundColor.withAlphaComponent(0.4)
 
         let sessionColor: NSColor = getColor(for: sessionStatus, monochromeMode: monochromeMode, useSystemColor: useSystemColor, isDarkMode: isDarkMode)
         let weekColor: NSColor = getColor(for: weekStatus, monochromeMode: monochromeMode, useSystemColor: useSystemColor, isDarkMode: isDarkMode)
 
-        // Build the attributed string
+        // Build the attributed string. If even the system font fallback is
+        // unavailable, leave this empty rather than insert a nil font into
+        // an attributes dictionary — the image still renders (minus the
+        // percentage text) instead of crashing the app.
         let attributed = NSMutableAttributedString()
-
-        // Session number
-        let sessionText = sessionPercentage.map { "\(Int($0))" } ?? "—"
-        attributed.append(NSAttributedString(string: sessionText, attributes: [
-            .font: font,
-            .foregroundColor: sessionColor
-        ]))
-
-        // Separator and week number (if shown)
-        if let weekPct = weekPercentage {
-            attributed.append(NSAttributedString(string: " · ", attributes: [
+        if let font {
+            // Session number
+            let sessionText = sessionPercentage.map { "\(Int($0))" } ?? "—"
+            attributed.append(NSAttributedString(string: sessionText, attributes: [
                 .font: font,
-                .foregroundColor: separatorColor
+                .foregroundColor: sessionColor
             ]))
-            let weekText = "\(Int(weekPct))"
-            attributed.append(NSAttributedString(string: weekText, attributes: [
-                .font: font,
-                .foregroundColor: weekColor
-            ]))
+
+            // Separator and week number (if shown)
+            if let weekPct = weekPercentage {
+                attributed.append(NSAttributedString(string: " · ", attributes: [
+                    .font: font,
+                    .foregroundColor: separatorColor
+                ]))
+                let weekText = "\(Int(weekPct))"
+                attributed.append(NSAttributedString(string: weekText, attributes: [
+                    .font: font,
+                    .foregroundColor: weekColor
+                ]))
+            }
         }
 
         let textSize = attributed.size()
@@ -1721,14 +1861,18 @@ struct MenuBarIconRenderer {
         // Profile label below (if shown)
         if let name = profileName {
             let label = String(name.prefix(3))
-            let labelAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 8, weight: .medium),
-                .foregroundColor: foregroundColor.withAlphaComponent(0.85)
-            ]
+            let percentageLabelFont: NSFont? = NSFont.systemFont(ofSize: 8, weight: .medium)
+            let labelAttributes = textAttributes(
+                font: percentageLabelFont,
+                fallbackSize: 8,
+                color: foregroundColor.withAlphaComponent(0.85)
+            )
             let labelString = label as NSString
-            let labelSize = labelString.size(withAttributes: labelAttributes)
-            let labelX = (totalWidth - labelSize.width) / 2
-            labelString.draw(at: NSPoint(x: labelX, y: 0), withAttributes: labelAttributes)
+            if let labelAttributes {
+                let labelSize = labelString.size(withAttributes: labelAttributes)
+                let labelX = (totalWidth - labelSize.width) / 2
+                labelString.draw(at: NSPoint(x: labelX, y: 0), withAttributes: labelAttributes)
+            }
         }
 
         return image
@@ -1869,12 +2013,23 @@ struct MenuBarIconRenderer {
     }
 
     /// A terminal-prompt mark (">_") for Codex items.
+    ///
+    /// The original crash: `NSFont.monospacedSystemFont` is declared
+    /// non-optional but returned `nil` here in production
+    /// (`NSInvalidArgumentException` — "attempt to insert nil object from
+    /// objects[0]" — inserting it into this attributes dictionary aborted
+    /// the whole app). Routed through `Self.textAttributes`, which detects
+    /// the nil via an explicit `Optional` rebind and skips drawing instead.
     private func drawTerminalGlyph(in rect: NSRect, color: NSColor) {
         let text = ">_" as NSString
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 8, weight: .bold),
-            .foregroundColor: color
-        ]
+        let terminalFont: NSFont? = NSFont.monospacedSystemFont(ofSize: 8, weight: .bold)
+        guard let attributes = textAttributes(
+            font: terminalFont,
+            fallbackSize: 8,
+            color: color
+        ) else {
+            return
+        }
         let textSize = text.size(withAttributes: attributes)
         let point = NSPoint(
             x: rect.midX - textSize.width / 2,
