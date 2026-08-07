@@ -117,12 +117,19 @@ enum UsageNotificationPolicy {
             )
     }
 
+    /// - Parameter globallyEnabled: The app-wide master switch
+    ///   (`DataStore.loadNotificationsEnabled()`). Defaults to `true` so
+    ///   existing pure-policy callers/tests that only care about
+    ///   per-profile behavior are unaffected; `NotificationManager` always
+    ///   passes the real value on the live path.
     static func isEligible(
         report: UsageReport,
         settings: NotificationSettings,
-        now: Date
+        now: Date,
+        globallyEnabled: Bool = true
     ) -> Bool {
-        settings.enabled
+        globallyEnabled
+            && settings.enabled
             && !report.isStale(at: now)
             && report.health.status != .unavailable
             && report.health.status != .unauthenticated
@@ -153,6 +160,41 @@ enum UsageNotificationPolicy {
                 )
             }
         }
+    }
+
+    /// A window is considered to have genuinely reset only if its usage
+    /// dropped materially, not merely because its cycle identity changed.
+    ///
+    /// Cycle identity is derived from a provider's `resetsAt`/`startedAt`
+    /// timestamp (see `NormalizedUsageSnapshot.cycleID`), which is prone to
+    /// sub-second jitter between polls and, for rolling windows, advances
+    /// continuously by design. Either case manufactures a "new cycle" with
+    /// no actual reset having occurred. Gating on the observed percentage
+    /// falling to near zero, or dropping by a large amount, is what actually
+    /// distinguishes "the provider reset this window" from "the identity
+    /// wobbled" — a real reset drains a window; a jittering identity does
+    /// not change how much of it is used.
+    static let resetNearZeroPercentageThreshold: Double = 5
+    static let resetMinimumUsageDropPercentagePoints: Double = 20
+
+    private static func isMaterialUsageDrop(
+        from previousPercentage: Double,
+        to percentage: Double
+    ) -> Bool {
+        guard previousPercentage > 0 else { return false }
+        if percentage <= resetNearZeroPercentageThreshold {
+            // Near-zero only counts as a reset if usage actually fell INTO
+            // it FROM above the threshold. A window already sitting at or
+            // under the threshold (e.g. steady at 5%) would otherwise
+            // satisfy `percentage <= threshold` on every cycle-identity
+            // change — including harmless sub-second jitter or rolling-
+            // window advances — with no usage having dropped at all,
+            // flooding "session reset" notifications for a window that
+            // never reset.
+            return previousPercentage > resetNearZeroPercentageThreshold
+        }
+        return previousPercentage - percentage
+            >= resetMinimumUsageDropPercentagePoints
     }
 
     static func baselineStates(
@@ -188,12 +230,14 @@ enum UsageNotificationPolicy {
         settings: NotificationSettings,
         now: Date,
         previousStates: [UsageNotificationWindowKey:
-            UsageNotificationWindowState]
+            UsageNotificationWindowState],
+        globallyEnabled: Bool = true
     ) -> UsageNotificationEvaluation {
         guard isEligible(
             report: report,
             settings: settings,
-            now: now
+            now: now,
+            globallyEnabled: globallyEnabled
         ) else {
             return UsageNotificationEvaluation(
                 events: [],
@@ -226,11 +270,15 @@ enum UsageNotificationPolicy {
                 state.percentage = percentage
                 state.lastSeenAt = now
             } else {
+                let previousPercentage = previous?.percentage ?? 0
                 state = UsageNotificationWindowState(
                     cycleID: cycleID,
                     percentage: percentage,
                     pendingResetCycleID:
-                        (previous?.percentage ?? 0) > 0
+                        isMaterialUsageDrop(
+                            from: previousPercentage,
+                            to: percentage
+                        )
                         ? cycleID
                         : nil,
                     lastSeenAt: now
@@ -503,6 +551,32 @@ class NotificationManager: NotificationServiceProtocol {
         persistSentNotificationsLocked()
     }
 
+    /// The app-wide notification master switch, shared with
+    /// `DataStore.loadNotificationsEnabled()` via the same UserDefaults key
+    /// so there is exactly one source of truth for "notifications are
+    /// globally enabled" — never two flags that can silently disagree.
+    ///
+    /// Read from `self.defaults` (rather than `DataStore.shared`) so this
+    /// stays independently testable with the injected UserDefaults suite
+    /// tests already use, matching how the rest of this class avoids the
+    /// app-wide singleton.
+    ///
+    /// A missing key means enabled: this key predates the master switch, so
+    /// no existing installation has ever written it, and
+    /// `UserDefaults.bool(forKey:)` defaults a missing key to `false` —
+    /// treating that literally would silently disable notifications for
+    /// every current user the moment they upgrade.
+    private func loadGlobalNotificationsEnabled() -> Bool {
+        guard defaults.object(
+            forKey: Constants.UserDefaultsKeys.notificationsEnabled
+        ) != nil else {
+            return true
+        }
+        return defaults.bool(
+            forKey: Constants.UserDefaultsKeys.notificationsEnabled
+        )
+    }
+
     /// Applies the profile's notification policy to every normalized usage
     /// window. Callers must pass the accepted report for the exact profile.
     func checkAndNotify(
@@ -513,10 +587,12 @@ class NotificationManager: NotificationServiceProtocol {
         settings: NotificationSettings,
         now: Date = Date()
     ) {
+        let globallyEnabled = loadGlobalNotificationsEnabled()
         guard UsageNotificationPolicy.isEligible(
             report: report,
             settings: settings,
-            now: now
+            now: now,
+            globallyEnabled: globallyEnabled
         ) else {
             return
         }
@@ -548,7 +624,8 @@ class NotificationManager: NotificationServiceProtocol {
                 profileID: profileID,
                 settings: settings,
                 now: now,
-                previousStates: priorStates
+                previousStates: priorStates,
+                globallyEnabled: globallyEnabled
             )
             normalizedWindowStates = evaluation.states
             let activeKeys = activeWindowKeys(

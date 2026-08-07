@@ -122,6 +122,8 @@
 /* ==================== */
 "notifications.enable" = "通知を有効にする";
 "notifications.enable.description" = "使用制限に近づいたときにアラートを受信";
+"notifications.master_switch" = "使用状況通知を許可";
+"notifications.master_switch.description" = "すべてのプロファイルのマスタースイッチです。オフにすると、以下の各プロファイルの個別設定に関わらず、すべての使用状況通知がミュートされます。";
 "notifications.alert_thresholds" = "アラート閾値";
 "notifications.threshold.warning" = "警告";
 "notifications.threshold.high" = "使用量が多い";
@@ -1228,6 +1230,8 @@
 "menubar.accessibility.state.no_data" = "使用状況データなし";
 "menubar.accessibility.profile.active" = "%@、アクティブなプロファイル";
 "menubar.accessibility.profile.inactive" = "%@、非アクティブなプロファイル";
+"menubar.overflow.header" = "その他のプロファイル";
+"menubar.overflow.accessibility_label" = "他に%@個のプロファイル";
 "menu.provider.open_profile" = "%@を開く";
 "appearance.metric.saved_unavailable" = "保存されたメトリクスは最新のプロバイダー応答に含まれていません。";
 "appearance.metric.group.subscription" = "サブスクリプション";

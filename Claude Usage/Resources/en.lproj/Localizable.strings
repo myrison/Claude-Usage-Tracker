@@ -128,6 +128,8 @@
 /* ==================== */
 "notifications.enable" = "Enable notifications";
 "notifications.enable.description" = "Receive alerts when approaching usage limits";
+"notifications.master_switch" = "Allow Usage Notifications";
+"notifications.master_switch.description" = "Master switch for every profile. Turn this off to silence all usage notifications regardless of each profile's individual setting below.";
 "notifications.alert_thresholds" = "Alert Thresholds";
 "notifications.threshold.warning" = "Warning";
 "notifications.threshold.high" = "High Usage";
@@ -1242,6 +1244,8 @@
 "menubar.accessibility.state.no_data" = "no usage data";
 "menubar.accessibility.profile.active" = "%@, active profile";
 "menubar.accessibility.profile.inactive" = "%@, inactive profile";
+"menubar.overflow.header" = "More Profiles";
+"menubar.overflow.accessibility_label" = "%@ more profiles";
 "menu.provider.open_profile" = "Open %@";
 "appearance.metric.saved_unavailable" = "Saved metric is not in the latest provider response.";
 "appearance.metric.group.subscription" = "Subscription";

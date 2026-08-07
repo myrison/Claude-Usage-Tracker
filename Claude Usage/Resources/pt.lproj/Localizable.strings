@@ -120,6 +120,8 @@
 /* ==================== */
 "notifications.enable" = "Habilitar notificações";
 "notifications.enable.description" = "Receber alertas ao se aproximar dos limites de uso";
+"notifications.master_switch" = "Permitir notificações de uso";
+"notifications.master_switch.description" = "Interruptor principal para todos os perfis. Desative para silenciar todas as notificações de uso, independentemente da configuração individual de cada perfil abaixo.";
 "notifications.alert_thresholds" = "Limites de Alerta";
 "notifications.threshold.warning" = "Aviso";
 "notifications.threshold.high" = "Uso Alto";
@@ -1228,6 +1230,8 @@
 "menubar.accessibility.state.no_data" = "Sem dados de uso";
 "menubar.accessibility.profile.active" = "%@, perfil ativo";
 "menubar.accessibility.profile.inactive" = "%@, perfil inativo";
+"menubar.overflow.header" = "Mais Perfis";
+"menubar.overflow.accessibility_label" = "%@ mais perfis";
 "menu.provider.open_profile" = "Abrir %@";
 "appearance.metric.saved_unavailable" = "A métrica salva não está na resposta mais recente do provedor.";
 "appearance.metric.group.subscription" = "Assinatura";

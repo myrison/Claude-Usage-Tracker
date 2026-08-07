@@ -96,8 +96,17 @@ class DataStore: StorageProvider {
         defaults.set(enabled, forKey: Constants.UserDefaultsKeys.notificationsEnabled)
     }
 
-    /// Loads notification preferences
+    /// Loads the global notification master switch.
+    ///
+    /// Absence of the key means enabled, not disabled: this flag predates
+    /// the master-switch feature, so no existing installation has ever
+    /// written it. `UserDefaults.bool(forKey:)` returns `false` for a
+    /// missing key, which would silently turn off notifications for every
+    /// upgrading user unless the missing case is handled explicitly here.
     func loadNotificationsEnabled() -> Bool {
+        guard defaults.object(forKey: Constants.UserDefaultsKeys.notificationsEnabled) != nil else {
+            return true
+        }
         return defaults.bool(forKey: Constants.UserDefaultsKeys.notificationsEnabled)
     }
 

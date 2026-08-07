@@ -6,6 +6,66 @@ import XCTest
 
 @MainActor
 final class ProviderHistoryNotificationTests: HostedAppTestCase {
+
+    // MARK: - Cycle identity stability
+
+    /// Cycle identity must survive the sub-second jitter providers actually
+    /// report, because identity is what downstream reset detection and
+    /// history de-duplication both key on.
+    ///
+    /// The timestamps below are real values captured from a live machine,
+    /// sampled 50 seconds apart. Each pair is the SAME reset instant reported
+    /// with float noise. Hashing the raw `Double` bit pattern made every pair
+    /// a distinct cycle, which manufactured a "session reset" on essentially
+    /// every poll and simultaneously defeated the history recorder's
+    /// same-cycle de-duplication.
+    ///
+    /// This asserts the quantization directly. The notification-level tests
+    /// cannot: the material-usage-drop gate suppresses those false resets on
+    /// its own, so they pass with or without quantization and therefore prove
+    /// nothing about it.
+    func testCycleIDAbsorbsRealObservedResetTimestampJitter() throws {
+        let observedPairs: [(String, Double, Double)] = [
+            ("claude session 138AC9E2", 807_826_200.293_999_910, 807_826_200.236_000_061),
+            ("claude session 21B5073B", 807_823_200.532_000_065, 807_823_200.503_000_021),
+            ("claude session C2F26850", 807_816_000.743_999_958, 807_816_000.786_000_013)
+        ]
+
+        for (label, first, second) in observedPairs {
+            let a = try Self.cycleIDForWindow(resetsAt: first)
+            let b = try Self.cycleIDForWindow(resetsAt: second)
+            XCTAssertEqual(
+                a,
+                b,
+                "\(label): \(abs(first - second) * 1000)ms of jitter changed the cycle identity"
+            )
+        }
+    }
+
+    /// The flip side: quantization must not blur genuinely different cycles
+    /// together, or a real reset would go unnoticed.
+    func testCycleIDStillDistinguishesGenuinelyDifferentCycles() throws {
+        let base = 807_826_200.0
+        let sameBucket = try Self.cycleIDForWindow(resetsAt: base)
+        let nextBucket = try Self.cycleIDForWindow(resetsAt: base + 120)
+        XCTAssertNotEqual(
+            sameBucket,
+            nextBucket,
+            "Reset boundaries two minutes apart must be distinct cycles"
+        )
+    }
+
+    private static func cycleIDForWindow(
+        resetsAt: Double
+    ) throws -> String {
+        let window = try UsageWindow(
+            id: UsageWindowID("session"),
+            displayName: "Session",
+            usedPercentage: 42,
+            resetsAt: Date(timeIntervalSinceReferenceDate: resetsAt)
+        )
+        return NormalizedUsageSnapshot.cycleID(for: window)
+    }
     func testLegacyHistoryDecodesWithoutNormalizedFieldAndRoundTrips() throws {
         let date = Date(timeIntervalSinceReferenceDate: 1_000)
         let legacy = UsageHistoryData(
@@ -219,6 +279,12 @@ final class ProviderHistoryNotificationTests: HostedAppTestCase {
             maxNormalizedSnapshots: 3
         ))
 
+        // Each offset's resetsAt must land in a distinct whole-minute cycle
+        // bucket (see NormalizedUsageSnapshot.cycleID quantization) so every
+        // one of the 4 observations is recorded as a genuinely new cycle
+        // rather than deduplicated as "the same cycle observed again within
+        // sessionRecordingInterval" — this test is exercising retention
+        // eviction, not cycle-identity dedup.
         for offset in 0..<4 {
             let fetchedAt = firstDate.addingTimeInterval(
                 Double(offset)
@@ -232,7 +298,7 @@ final class ProviderHistoryNotificationTests: HostedAppTestCase {
                             "group",
                             "window",
                             Double(offset),
-                            12_000 + Double(offset)
+                            12_000 + Double(offset) * 90
                         )
                     ]
                 ),
@@ -623,12 +689,17 @@ final class ProviderHistoryNotificationTests: HostedAppTestCase {
         // owns in-flight suppression and marks it delivered on success.
         XCTAssertEqual(duplicate.events.map(\.threshold), [75])
 
+        // The window's cycle identity changes (resetsAt moves from 30_000 to
+        // 40_000) but usage went UP (76% -> 96%), not down. A cycle-identity
+        // change alone must never be read as a reset — only a material usage
+        // drop may. So this must fire the threshold crossing only, with no
+        // `.reset` event, even though the cycle changed.
         let newCycle = try report(
             providerID: .codex,
             fetchedAt: now.addingTimeInterval(3),
             windows: [("group", "primary", 96, 40_000)]
         )
-        let reset = UsageNotificationPolicy.evaluate(
+        let noReset = UsageNotificationPolicy.evaluate(
             report: newCycle,
             profileID: profileID,
             settings: settings,
@@ -636,16 +707,438 @@ final class ProviderHistoryNotificationTests: HostedAppTestCase {
             previousStates: crossing.states
         )
         XCTAssertEqual(
-            reset.events.map(\.identity.kind),
-            [.reset, .threshold]
+            noReset.events.map(\.identity.kind),
+            [.threshold]
         )
-        XCTAssertEqual(reset.events.last?.threshold, 95)
+        XCTAssertEqual(noReset.events.last?.threshold, 95)
+        XCTAssertEqual(
+            Set(noReset.events.map {
+                $0.identity.window.profileID
+            }),
+            [profileID]
+        )
+
+        // A subsequent cycle change that DOES coincide with a material usage
+        // drop (96% -> 2%) is a genuine reset and must fire one.
+        let genuineReset = try report(
+            providerID: .codex,
+            fetchedAt: now.addingTimeInterval(4),
+            windows: [("group", "primary", 2, 50_000)]
+        )
+        let reset = UsageNotificationPolicy.evaluate(
+            report: genuineReset,
+            profileID: profileID,
+            settings: settings,
+            now: now.addingTimeInterval(4),
+            previousStates: noReset.states
+        )
+        XCTAssertEqual(
+            reset.events.map(\.identity.kind),
+            [.reset]
+        )
         XCTAssertEqual(
             Set(reset.events.map {
                 $0.identity.window.profileID
             }),
             [profileID]
         )
+    }
+
+    /// Regression for a real bug: sub-second/second-level jitter in a
+    /// provider's `resetsAt` between polls produced a brand-new cycle
+    /// identity on every poll (the identity hashed the raw IEEE-754 bit
+    /// pattern of the timestamp), which downstream reset detection read as a
+    /// session reset — the reported symptom was ~14 false "your session has
+    /// reset" notifications per minute. These are the exact jittered
+    /// timestamp pairs captured from the failing session; the percentage is
+    /// unchanged in every pair, so nothing should ever fire.
+    func testResetsAtJitterAloneWithUnchangedUsageNeverResets() throws {
+        let profileID = UUID()
+        let now = Date(timeIntervalSinceReferenceDate: 60_000)
+        let jitteredResetsAtPairs: [(TimeInterval, TimeInterval)] = [
+            (807_826_200.293_999_910, 807_826_200.236_000_061), // 58ms
+            (807_823_200.532_000_065, 807_823_200.503_000_021), // 29ms
+            (807_816_000.743_999_958, 807_816_000.786_000_013), // 42ms
+            (807_855_145.000_000_000, 807_855_144.000_000_000)  // 1s
+        ]
+        for (firstResetsAt, secondResetsAt) in jitteredResetsAtPairs {
+            let percentage = 42.0
+            let initial = try report(
+                providerID: .codex,
+                fetchedAt: now,
+                windows: [("group", "session", percentage, firstResetsAt)]
+            )
+            let baseline = UsageNotificationPolicy.evaluate(
+                report: initial,
+                profileID: profileID,
+                settings: NotificationSettings(),
+                now: now,
+                previousStates: [:]
+            )
+            XCTAssertTrue(baseline.events.isEmpty)
+
+            let jittered = try report(
+                providerID: .codex,
+                fetchedAt: now.addingTimeInterval(50),
+                windows: [("group", "session", percentage, secondResetsAt)]
+            )
+            let result = UsageNotificationPolicy.evaluate(
+                report: jittered,
+                profileID: profileID,
+                settings: NotificationSettings(),
+                now: now.addingTimeInterval(50),
+                previousStates: baseline.states
+            )
+            XCTAssertTrue(
+                result.events.isEmpty,
+                "resetsAt jitter of \(secondResetsAt - firstResetsAt)s "
+                    + "with unchanged usage must never fire an event"
+            )
+        }
+    }
+
+    /// Regression: rolling windows advance `resetsAt` continuously by design
+    /// (observed advancing 60s on every single poll for a real rolling
+    /// window). No identity derived from `resetsAt` alone can ever be stable
+    /// for them, so the material-usage-drop gate — not identity stability —
+    /// is what must protect rolling windows: even though the cycle identity
+    /// changes on every poll, an unchanged percentage must never read as a
+    /// reset, across many consecutive polls.
+    func testRollingWindowAdvancingResetsAtNeverResetsWithoutUsageDrop()
+        throws
+    {
+        let profileID = UUID()
+        let now = Date(timeIntervalSinceReferenceDate: 61_000)
+        var states:
+            [UsageNotificationWindowKey: UsageNotificationWindowState] = [:]
+        var resetsAtReference: TimeInterval = 808_416_258
+        let percentage = 30.0
+        for poll in 0..<20 {
+            let pollTime = now.addingTimeInterval(TimeInterval(poll) * 30)
+            let current = try report(
+                providerID: .codex,
+                fetchedAt: pollTime,
+                windows: [
+                    ("group", "primary", percentage, resetsAtReference)
+                ]
+            )
+            let result = UsageNotificationPolicy.evaluate(
+                report: current,
+                profileID: profileID,
+                settings: NotificationSettings(),
+                now: pollTime,
+                previousStates: states
+            )
+            XCTAssertTrue(
+                result.events.isEmpty,
+                "Poll \(poll) must not fire any event for an unchanged "
+                    + "rolling-window percentage"
+            )
+            states = result.states
+            resetsAtReference += 60
+        }
+    }
+
+    /// Regression: a window sitting steadily AT the near-zero reset
+    /// threshold (exactly `resetNearZeroPercentageThreshold`) must never be
+    /// reported as a reset just because its cycle identity changes. The
+    /// near-zero branch of the material-usage-drop gate previously fired
+    /// whenever `percentage <= threshold`, regardless of what the previous
+    /// percentage was — so a window parked at 5% forever (a real,
+    /// observed shape: two live windows on the user's machine sit at
+    /// exactly 5%) would satisfy `5 <= 5` on every cycle-identity change
+    /// and flood "session reset" notifications with no usage having
+    /// dropped at all. Usage must actually fall INTO near-zero FROM above
+    /// the threshold for a reset to be reported.
+    func testSteadyNearZeroUsageAcrossManyCycleChangesNeverResets() throws {
+        let profileID = UUID()
+        let now = Date(timeIntervalSinceReferenceDate: 63_000)
+        var states:
+            [UsageNotificationWindowKey: UsageNotificationWindowState] = [:]
+        var resetsAtReference: TimeInterval = 900_000_000
+        let percentage = 5.0
+        for poll in 0..<20 {
+            let pollTime = now.addingTimeInterval(TimeInterval(poll) * 60)
+            let current = try report(
+                providerID: .codex,
+                fetchedAt: pollTime,
+                windows: [
+                    ("group", "primary", percentage, resetsAtReference)
+                ]
+            )
+            let result = UsageNotificationPolicy.evaluate(
+                report: current,
+                profileID: profileID,
+                settings: NotificationSettings(),
+                now: pollTime,
+                previousStates: states
+            )
+            XCTAssertTrue(
+                result.events.isEmpty,
+                "Poll \(poll) must not fire any event for usage steady at "
+                    + "the near-zero threshold"
+            )
+            states = result.states
+            // Force a new cycle identity every poll, the same way a
+            // rolling window's resetsAt advances continuously by design.
+            resetsAtReference += 60
+        }
+    }
+
+    /// A genuine reset (usage dropping to near zero) must still fire exactly
+    /// one notification through the full `NotificationManager` path, and
+    /// must not re-fire on a repeat observation of the same post-reset
+    /// report.
+    func testGenuineResetFiresExactlyOneNotification() throws {
+        let environment = try makeEnvironment()
+        var requests: [UNNotificationRequest] = []
+        let manager = retain(NotificationManager(
+            defaults: environment.defaults,
+            notificationRequestAdder: { request, completion in
+                requests.append(request)
+                completion(nil)
+            }
+        ))
+        let profileID = UUID()
+        let now = Date(timeIntervalSinceReferenceDate: 62_000)
+        let settings = NotificationSettings(
+            threshold75Enabled: false,
+            threshold90Enabled: false,
+            threshold95Enabled: false
+        )
+        let before = try report(
+            providerID: .codex,
+            fetchedAt: now,
+            windows: [("group", "session", 85, 82_000)]
+        )
+        manager.checkAndNotify(
+            report: before,
+            profileID: profileID,
+            profileName: "Codex",
+            settings: settings,
+            now: now
+        )
+        XCTAssertTrue(requests.isEmpty)
+
+        let after = try report(
+            providerID: .codex,
+            fetchedAt: now.addingTimeInterval(1),
+            windows: [("group", "session", 0, 92_000)]
+        )
+        manager.checkAndNotify(
+            report: after,
+            profileID: profileID,
+            profileName: "Codex",
+            settings: settings,
+            now: now.addingTimeInterval(1)
+        )
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests[0].content.body, "Usage window reset.")
+
+        // Re-observing the same post-reset report must not duplicate it.
+        manager.checkAndNotify(
+            report: after,
+            profileID: profileID,
+            profileName: "Codex",
+            settings: settings,
+            now: now.addingTimeInterval(2)
+        )
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    /// A genuine reset that happened entirely while the app was closed must
+    /// still be detected on the very first observation after relaunch, by
+    /// seeding a baseline from the last-known `previousReport` rather than
+    /// requiring an in-ledger prior observation.
+    func testGenuineResetFiresAcrossAppRestartUsingPreviousReport() throws {
+        let environment = try makeEnvironment()
+        var requests: [UNNotificationRequest] = []
+        let manager = retain(NotificationManager(
+            defaults: environment.defaults,
+            notificationRequestAdder: { request, completion in
+                requests.append(request)
+                completion(nil)
+            }
+        ))
+        let profileID = UUID()
+        let now = Date(timeIntervalSinceReferenceDate: 63_000)
+        let settings = NotificationSettings(
+            threshold75Enabled: false,
+            threshold90Enabled: false,
+            threshold95Enabled: false
+        )
+        let beforeClose = try report(
+            providerID: .codex,
+            fetchedAt: now,
+            windows: [("group", "session", 85, 83_000)]
+        )
+        let afterRelaunch = try report(
+            providerID: .codex,
+            fetchedAt: now.addingTimeInterval(600),
+            windows: [("group", "session", 0, 93_000)]
+        )
+        manager.checkAndNotify(
+            report: afterRelaunch,
+            previousReport: beforeClose,
+            profileID: profileID,
+            profileName: "Codex",
+            settings: settings,
+            now: now.addingTimeInterval(600)
+        )
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests[0].content.body, "Usage window reset.")
+    }
+
+    /// The `previousReport` baseline path must obey the same material-drop
+    /// gate as the normal path: a cycle change across the app-restart
+    /// boundary with usage that went up, not down, must not be read as a
+    /// reset.
+    func testPreviousReportPathDoesNotResetWithoutUsageDrop() throws {
+        let environment = try makeEnvironment()
+        var requests: [UNNotificationRequest] = []
+        let manager = retain(NotificationManager(
+            defaults: environment.defaults,
+            notificationRequestAdder: { request, completion in
+                requests.append(request)
+                completion(nil)
+            }
+        ))
+        let profileID = UUID()
+        let now = Date(timeIntervalSinceReferenceDate: 64_000)
+        let settings = NotificationSettings(
+            threshold75Enabled: false,
+            threshold90Enabled: false,
+            threshold95Enabled: false
+        )
+        let beforeClose = try report(
+            providerID: .codex,
+            fetchedAt: now,
+            windows: [("group", "session", 85, 84_000)]
+        )
+        let afterRelaunch = try report(
+            providerID: .codex,
+            fetchedAt: now.addingTimeInterval(600),
+            windows: [("group", "session", 90, 94_000)]
+        )
+        manager.checkAndNotify(
+            report: afterRelaunch,
+            previousReport: beforeClose,
+            profileID: profileID,
+            profileName: "Codex",
+            settings: settings,
+            now: now.addingTimeInterval(600)
+        )
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    /// Regression: disabling notifications in the app left the user still
+    /// receiving them, because the live normalized path only ever consulted
+    /// the per-profile `NotificationSettings.enabled` flag and never the
+    /// global master switch. With the master switch off, no profile —
+    /// enabled or not — may deliver a notification.
+    func testGlobalMasterSwitchOffSuppressesAllProfilesRegardlessOfPerProfileSetting()
+        throws
+    {
+        let environment = try makeEnvironment()
+        environment.defaults.set(false, forKey: "notificationsEnabled")
+        var requests: [UNNotificationRequest] = []
+        let manager = retain(NotificationManager(
+            defaults: environment.defaults,
+            notificationRequestAdder: { request, completion in
+                requests.append(request)
+                completion(nil)
+            }
+        ))
+        let now = Date(timeIntervalSinceReferenceDate: 65_000)
+        for profileID in [UUID(), UUID()] {
+            manager.checkAndNotify(
+                report: try report(
+                    providerID: .codex,
+                    fetchedAt: now,
+                    windows: [("group", "primary", 96, 85_000)]
+                ),
+                profileID: profileID,
+                profileName: "Codex",
+                settings: NotificationSettings(enabled: true),
+                now: now
+            )
+        }
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    /// With the master switch on, per-profile toggles keep working exactly
+    /// as before: only the profile that disabled notifications stays silent.
+    func testGlobalMasterSwitchOnLeavesPerProfileToggleInControl() throws {
+        let environment = try makeEnvironment()
+        environment.defaults.set(true, forKey: "notificationsEnabled")
+        var requests: [UNNotificationRequest] = []
+        let manager = retain(NotificationManager(
+            defaults: environment.defaults,
+            notificationRequestAdder: { request, completion in
+                requests.append(request)
+                completion(nil)
+            }
+        ))
+        let now = Date(timeIntervalSinceReferenceDate: 66_000)
+        let enabledProfile = UUID()
+        let disabledProfile = UUID()
+        manager.checkAndNotify(
+            report: try report(
+                providerID: .codex,
+                fetchedAt: now,
+                windows: [("group", "primary", 96, 86_000)]
+            ),
+            profileID: disabledProfile,
+            profileName: "Codex disabled",
+            settings: NotificationSettings(enabled: false),
+            now: now
+        )
+        XCTAssertTrue(requests.isEmpty)
+
+        manager.checkAndNotify(
+            report: try report(
+                providerID: .codex,
+                fetchedAt: now,
+                windows: [("group", "primary", 96, 87_000)]
+            ),
+            profileID: enabledProfile,
+            profileName: "Codex enabled",
+            settings: NotificationSettings(enabled: true),
+            now: now
+        )
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    /// The master-switch key never existed before this feature, so on
+    /// upgrade it is absent for every current user. Absence must be treated
+    /// as enabled, or notifications silently break for the entire install
+    /// base — not just for users who explicitly opted out.
+    func testMissingMasterSwitchKeyIsTreatedAsEnabled() throws {
+        let environment = try makeEnvironment()
+        XCTAssertNil(
+            environment.defaults.object(forKey: "notificationsEnabled")
+        )
+        var requests: [UNNotificationRequest] = []
+        let manager = retain(NotificationManager(
+            defaults: environment.defaults,
+            notificationRequestAdder: { request, completion in
+                requests.append(request)
+                completion(nil)
+            }
+        ))
+        let now = Date(timeIntervalSinceReferenceDate: 67_000)
+        manager.checkAndNotify(
+            report: try report(
+                providerID: .codex,
+                fetchedAt: now,
+                windows: [("group", "primary", 96, 88_000)]
+            ),
+            profileID: UUID(),
+            profileName: "Codex",
+            settings: NotificationSettings(enabled: true),
+            now: now
+        )
+        XCTAssertEqual(requests.count, 1)
     }
 
     func testFirstHighObservationMatchesClaudePolicyForEveryProvider()

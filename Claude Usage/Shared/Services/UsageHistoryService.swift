@@ -737,10 +737,9 @@ class UsageHistoryService: ProfileHistoryDeleting {
                         String($0)
                     }
                     ?? ""
-                let cycleBits = snapshot.triggeringResetTime
-                    .timeIntervalSinceReferenceDate
-                    .bitPattern
-                let cycleID = "reset:" + String(cycleBits)
+                let cycleID = NormalizedUsageSnapshot.resetCycleID(
+                    forResetTime: snapshot.triggeringResetTime
+                )
                 let sessionTokens = snapshot.sessionTokensUsed.map {
                     String($0)
                 } ?? ""
