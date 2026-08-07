@@ -171,6 +171,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             // Only retry if we have screens now but status bar failed
             if !NSScreen.screens.isEmpty && self.menuBarManager?.hasValidStatusBar() == false {
                 LoggingService.shared.log("AppDelegate: Delayed retry of status bar setup (headless support)")
+                // Sanitize again before this second setup(). The launch-time
+                // call above is a guaranteed no-op on a headless start:
+                // the sanitizer deliberately treats "no screens attached"
+                // as "nothing is stale" rather than wiping every saved
+                // position. This retry fires precisely when screens have
+                // since appeared, so it is the first moment stale positions
+                // can actually be judged — and AppKit only reads a saved
+                // position when the status item is created, which is what
+                // setup() is about to do.
+                StatusItemPositionSanitizer.sanitize(
+                    defaults: .standard,
+                    screens: NSScreen.screens
+                )
                 self.menuBarManager?.setup()
             }
         }
