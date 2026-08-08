@@ -70,6 +70,180 @@ final class MenuReliabilityTests: HostedAppTestCase {
         XCTAssertEqual(fire.trigger, .timer)
     }
 
+    /// Pure decision logic backing the display-sleep/Low-Power-Mode
+    /// adaptations. Exercised directly here so the behavior is asserted
+    /// without depending on a real display sleep or a live power-state
+    /// toggle — `MenuBarManager`'s observers just feed this function.
+    func testAutoRefreshTimingWithholdsTimerWhileDisplayIsAsleep() {
+        XCTAssertNil(
+            RefreshTimingPolicy.autoRefreshTiming(
+                baseInterval: 30,
+                isDisplayAsleep: true,
+                isLowPowerModeEnabled: false
+            )
+        )
+        // Low Power Mode being on at the same time changes nothing — a
+        // sleeping display always wins, there is nothing to redraw either way.
+        XCTAssertNil(
+            RefreshTimingPolicy.autoRefreshTiming(
+                baseInterval: 30,
+                isDisplayAsleep: true,
+                isLowPowerModeEnabled: true
+            )
+        )
+    }
+
+    func testAutoRefreshTimingUsesBaseIntervalWhenAwakeAndNotThrottled() {
+        guard let timing = RefreshTimingPolicy.autoRefreshTiming(
+            baseInterval: 30,
+            isDisplayAsleep: false,
+            isLowPowerModeEnabled: false
+        ) else {
+            return XCTFail("Expected a timing policy while awake")
+        }
+        XCTAssertEqual(timing.interval, 30)
+        XCTAssertEqual(timing.tolerance, 3, accuracy: 0.000_001)
+    }
+
+    func testAutoRefreshTimingDoublesIntervalInLowPowerMode() {
+        guard let timing = RefreshTimingPolicy.autoRefreshTiming(
+            baseInterval: 30,
+            isDisplayAsleep: false,
+            isLowPowerModeEnabled: true
+        ) else {
+            return XCTFail("Expected a timing policy while awake")
+        }
+        XCTAssertEqual(
+            timing.interval,
+            30 * RefreshTimingPolicy.lowPowerModeIntervalMultiplier
+        )
+        XCTAssertEqual(timing.interval, 60)
+        // Tolerance is still the same fraction of the (now longer) interval.
+        XCTAssertEqual(timing.tolerance, 6, accuracy: 0.000_001)
+
+        // Restoring Low Power Mode to off with the same base interval
+        // restores the original cadence immediately — no lingering state.
+        let restored = RefreshTimingPolicy.autoRefreshTiming(
+            baseInterval: 30,
+            isDisplayAsleep: false,
+            isLowPowerModeEnabled: false
+        )
+        XCTAssertEqual(restored?.interval, 30)
+    }
+
+    func testAutoRefreshTimingScalesWithDifferentProfileIntervals() {
+        // A profile configured with a longer per-profile interval still
+        // gets doubled under Low Power Mode, same as the default 30s case.
+        let timing = RefreshTimingPolicy.autoRefreshTiming(
+            baseInterval: 120,
+            isDisplayAsleep: false,
+            isLowPowerModeEnabled: true
+        )
+        XCTAssertEqual(timing?.interval, 240)
+    }
+
+    /// Reproduces the double-fetch regression a system wake used to cause:
+    /// `didWakeNotification` schedules a fetch `wakeDelay` (3s) out, but
+    /// `screensDidWakeNotification` — delivered for the same system wake —
+    /// fetches immediately and stamps `lastAutoRefreshTime` in the
+    /// meantime. By the time the deferred fetch actually runs, re-checking
+    /// against the now-updated `lastAutoRefreshTime` must suppress it.
+    func testDeferredWakeRefreshSuppressedWhenAlreadyRefreshedInDebounceWindow() {
+        let wakeDetectedAt = Date(timeIntervalSinceReferenceDate: 100_000)
+
+        // At the moment the wake was first observed, nothing had refreshed
+        // in a long time, so the deferred fetch would have been scheduled.
+        XCTAssertTrue(
+            RefreshTimingPolicy.shouldRefreshAfterWake(
+                elapsedSinceLastAutomaticRefresh: 3_600
+            )
+        )
+
+        // Before the deferred block runs, a concurrent path (the
+        // display-wake handler, which fetches with no delay) already
+        // refreshed and stamped `lastAutoRefreshTime`.
+        let concurrentRefreshAt = wakeDetectedAt.addingTimeInterval(0.5)
+
+        // The deferred block fires `wakeDelay` after the original wake —
+        // re-checking against the updated `lastAutoRefreshTime` must now
+        // suppress it, since barely any time has passed since that refresh.
+        let deferredFiresAt = wakeDetectedAt.addingTimeInterval(
+            RefreshTimingPolicy.wakeDelay
+        )
+        XCTAssertFalse(
+            RefreshTimingPolicy.shouldFireDeferredWakeRefresh(
+                lastAutoRefreshTime: concurrentRefreshAt,
+                at: deferredFiresAt,
+                isDisplayAsleep: false
+            )
+        )
+    }
+
+    func testDeferredWakeRefreshProceedsWhenNothingElseRefreshedMeanwhile() {
+        let wakeDetectedAt = Date(timeIntervalSinceReferenceDate: 100_000)
+        // No concurrent refresh happened — `lastAutoRefreshTime` is still
+        // the stale value from long before the wake.
+        let staleLastRefresh = wakeDetectedAt.addingTimeInterval(-3_600)
+        let deferredFiresAt = wakeDetectedAt.addingTimeInterval(
+            RefreshTimingPolicy.wakeDelay
+        )
+        XCTAssertTrue(
+            RefreshTimingPolicy.shouldFireDeferredWakeRefresh(
+                lastAutoRefreshTime: staleLastRefresh,
+                at: deferredFiresAt,
+                isDisplayAsleep: false
+            )
+        )
+    }
+
+    /// The deferred wake fetch is the one path that could otherwise refresh
+    /// while the display is asleep: the display can go back to sleep during
+    /// the three-second `wakeDelay` (a brief wake, or the lid closing
+    /// again), and the periodic timer's protection via `autoRefreshTiming`
+    /// does not apply to a block that was already scheduled. Everything
+    /// else about this case is identical to the "proceeds" test above, so
+    /// the display state is the only thing deciding the outcome.
+    func testDeferredWakeRefreshSuppressedWhenDisplayWentBackToSleep() {
+        let wakeDetectedAt = Date(timeIntervalSinceReferenceDate: 100_000)
+        let staleLastRefresh = wakeDetectedAt.addingTimeInterval(-3_600)
+        let deferredFiresAt = wakeDetectedAt.addingTimeInterval(
+            RefreshTimingPolicy.wakeDelay
+        )
+
+        XCTAssertFalse(
+            RefreshTimingPolicy.shouldFireDeferredWakeRefresh(
+                lastAutoRefreshTime: staleLastRefresh,
+                at: deferredFiresAt,
+                isDisplayAsleep: true
+            ),
+            "A display that slept again during wakeDelay must suppress the"
+                + " deferred fetch, even though the debounce would allow it"
+        )
+    }
+
+    /// The guarantee that actually matters for the missed-`screensDidWake`
+    /// recovery path: after a system wake, auto-refresh is schedulable — not
+    /// just that the recovered flag happens to equal `false`. Checks both
+    /// halves together (the flag `isDisplayAsleepAfterSystemWake()` reports,
+    /// and that feeding it into `autoRefreshTiming` yields a real timer),
+    /// under both Low Power Mode states, so this fails if either half of the
+    /// recovery breaks even though the flag alone would still read `false`.
+    func testSystemWakeAlwaysLeadsToARunningAutoRefreshTimer() {
+        let recoveredState = RefreshTimingPolicy.isDisplayAsleepAfterSystemWake()
+        XCTAssertFalse(recoveredState)
+
+        for isLowPowerModeEnabled in [true, false] {
+            XCTAssertNotNil(
+                RefreshTimingPolicy.autoRefreshTiming(
+                    baseInterval: 30,
+                    isDisplayAsleep: recoveredState,
+                    isLowPowerModeEnabled: isLowPowerModeEnabled
+                ),
+                "Expected a scheduled timer after system-wake recovery (Low Power Mode: \(isLowPowerModeEnabled))"
+            )
+        }
+    }
+
     func testAutomaticRefreshTriggersRemainTypedAndNonInteractive() {
         let triggers: [(UsageRefreshTrigger, String)] = [
             (.startup, "startup"),
