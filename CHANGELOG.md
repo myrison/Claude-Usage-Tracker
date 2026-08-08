@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.4] - 2026-08-08
+
+### Fixed
+
+- **Your menu bar arrangement now survives quitting the app.** If you use a
+  menu bar manager such as Thaw, Ice, or Bartender, every restart used to file
+  Claude Usage's items back into the manager's default section, so a layout you
+  had arranged by hand had to be arranged again after each launch and after
+  every update. Managers track items by their saved position, and macOS
+  discards that position when an app explicitly removes its menu bar items —
+  which this app did on every quit. It no longer does so while quitting, and
+  items moving in and out of the overflow group are now hidden and shown rather
+  than destroyed and rebuilt, so their identity and position stay put.
+
+### Changed
+
+- **Automatic refresh now pauses while the display is asleep.** There is no
+  menu bar to update when the screen is off, so usage is no longer fetched
+  during that time. It resumes the moment the display wakes, with an immediate
+  catch-up fetch, so what you see is current rather than a snapshot from before
+  the screen went dark.
+
+- **Low Power Mode now eases off the refresh rate.** While macOS Low Power Mode
+  is on, usage refreshes half as often, returning to the normal rate as soon as
+  you turn it off. No profile is skipped — every profile still updates, just
+  less frequently.
+
 ## [3.3.3] - 2026-08-08
 
 ### Fixed
