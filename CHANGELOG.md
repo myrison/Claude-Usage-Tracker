@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.2] - 2026-08-08
+
+### Fixed
+
+- **Menu bar items no longer multiply their work after a remote reconnect.**
+  On the headless / Remote Desktop path the app retries its menu bar setup, and
+  each retry registered a fresh pair of screen-change observers without
+  removing the previous ones. The duplicates survived for the life of the
+  process, so after several reconnects a single display or app change ran the
+  same handler many times over. Registration is now idempotent. Anyone who
+  never disconnects and reconnects a display was unaffected.
+
+Everything else in this release is internal: removal of a threshold constant
+that the space-aware overflow work made dead, corrected documentation of the
+Accessibility measurement's real time bound, and a warning in the source that
+the live measurement paths are not reachable by the test suite.
+
 ## [3.3.1] - 2026-08-07
 
 ### Fixed
