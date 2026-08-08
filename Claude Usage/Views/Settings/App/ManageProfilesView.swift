@@ -18,6 +18,12 @@ struct ManageProfilesView: View {
         ProfileProviderKind = .claude
     @State private var newCodexHomePath = ""
     @State private var errorMessage: String?
+    // `DataStore` isn't an `ObservableObject`; this view owns the
+    // displayed value locally and writes through on every change, the
+    // same pattern `SettingToggle`'s bindings above use for other
+    // `DataStore`-backed settings elsewhere in the app.
+    @State private var overflowMode: MenuBarOverflowMode =
+        DataStore.shared.loadMenuBarOverflowMode()
 
     init(
         dependencies: ProviderUIDependencies? = nil
@@ -283,6 +289,98 @@ struct ManageProfilesView: View {
                                 )
                             )
 
+                            Divider()
+                                .padding(.vertical, DesignTokens.Spacing.small)
+
+                            // Overflow Behavior
+                            VStack(
+                                alignment: .leading,
+                                spacing: DesignTokens.Spacing.small
+                            ) {
+                                Text("multiprofile.overflow.title".localized)
+                                    .font(DesignTokens.Typography.caption)
+                                    .foregroundColor(.secondary)
+
+                                VStack(
+                                    alignment: .leading,
+                                    spacing: DesignTokens.Spacing.extraSmall
+                                ) {
+                                    overflowModeRow(
+                                        title:
+                                            "multiprofile.overflow.automatic"
+                                                .localized,
+                                        isSelected: overflowModeKind
+                                            == .automatic,
+                                        onSelect: {
+                                            setOverflowMode(.automatic)
+                                        }
+                                    )
+                                    AccessibilityGrantHint()
+                                        .padding(.leading, 22)
+                                    overflowModeRow(
+                                        title:
+                                            "multiprofile.overflow.never"
+                                                .localized,
+                                        isSelected: overflowModeKind
+                                            == .never,
+                                        onSelect: {
+                                            setOverflowMode(.never)
+                                        }
+                                    )
+                                    HStack(
+                                        spacing: DesignTokens.Spacing
+                                            .extraSmall
+                                    ) {
+                                        overflowModeRow(
+                                            title:
+                                                "multiprofile.overflow.after_count"
+                                                    .localized,
+                                            isSelected: overflowModeKind
+                                                == .afterCount,
+                                            onSelect: {
+                                                setOverflowMode(
+                                                    .afterCount(
+                                                        overflowAfterCountThreshold
+                                                    )
+                                                )
+                                            }
+                                        )
+                                        Picker(
+                                            "",
+                                            selection: Binding(
+                                                get: {
+                                                    overflowAfterCountThreshold
+                                                },
+                                                set: { newValue in
+                                                    setOverflowMode(
+                                                        .afterCount(newValue)
+                                                    )
+                                                }
+                                            )
+                                        ) {
+                                            ForEach(
+                                                Self.overflowAfterCountOptions,
+                                                id: \.self
+                                            ) { count in
+                                                Text("\(count)").tag(count)
+                                            }
+                                        }
+                                        .labelsHidden()
+                                        .pickerStyle(.menu)
+                                        .frame(width: 56)
+                                        .disabled(
+                                            overflowModeKind != .afterCount
+                                        )
+                                        Text(
+                                            "multiprofile.overflow.after_count_suffix"
+                                                .localized
+                                        )
+                                        .font(DesignTokens.Typography.body)
+                                        .foregroundColor(.primary)
+                                    }
+                                }
+                            }
+
                             // Info message
                             HStack(alignment: .top, spacing: 8) {
                                 Image(systemName: "info.circle.fill")
@@ -395,6 +493,112 @@ struct ManageProfilesView: View {
         newProfileName = ""
         newProfileProvider = .claude
         newCodexHomePath = ""
+    }
+
+    // MARK: - Overflow Mode
+
+    private static let overflowAfterCountOptions = [3, 4, 5, 6, 8, 10]
+
+    private var overflowModeKind: MenuBarOverflowMode.StorageKind {
+        overflowMode.storageKind
+    }
+
+    private var overflowAfterCountThreshold: Int {
+        if case .afterCount(let count) = overflowMode {
+            return count
+        }
+        return MenuBarOverflowMode.defaultAfterCountThreshold
+    }
+
+    private func setOverflowMode(_ mode: MenuBarOverflowMode) {
+        overflowMode = mode
+        DataStore.shared.saveMenuBarOverflowMode(mode)
+        // Reuses the existing multi-profile recompute path — the overflow
+        // mode is exactly the kind of visual/layout change that path
+        // already exists to propagate to the live menu bar.
+        MenuBarNotificationDelivery.enqueue(.multiProfileConfigChanged)
+    }
+
+    private func overflowModeRow(
+        title: String,
+        isSelected: Bool,
+        onSelect: @escaping () -> Void
+    ) -> some View {
+        Button(action: onSelect) {
+            HStack(spacing: DesignTokens.Spacing.extraSmall) {
+                Image(
+                    systemName: isSelected
+                        ? "largecircle.fill.circle"
+                        : "circle"
+                )
+                .foregroundColor(isSelected ? .accentColor : .secondary)
+                Text(title)
+                    .font(DesignTokens.Typography.body)
+                    .foregroundColor(.primary)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Inline hint shown under the "Automatic" overflow option: automatic mode
+/// needs the Accessibility grant to measure the frontmost app's menu bar
+/// boundary (see `MenuBarSpaceProbe.frontmostAppMenuMaxX()`), and shows
+/// nothing once it's granted. The grant is requested ONLY from this
+/// explicit button — never silently at launch.
+private struct AccessibilityGrantHint: View {
+    @State private var isTrusted = MenuBarAccessibilityAccess.isTrusted()
+
+    var body: some View {
+        Group {
+            if !isTrusted {
+                HStack(
+                    alignment: .top,
+                    spacing: DesignTokens.Spacing.small
+                ) {
+                    Image(systemName: "hand.raised.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                    VStack(
+                        alignment: .leading,
+                        spacing: DesignTokens.Spacing.extraSmall
+                    ) {
+                        Text(
+                            "multiprofile.overflow.accessibility_hint"
+                                .localized
+                        )
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(.secondary)
+                        Button(
+                            "multiprofile.overflow.accessibility_grant_button"
+                                .localized
+                        ) {
+                            MenuBarAccessibilityAccess.requestAccess()
+                            if let url = URL(
+                                string:
+                                    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+                            ) {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .font(DesignTokens.Typography.caption)
+                    }
+                }
+            }
+        }
+        .onAppear {
+            isTrusted = MenuBarAccessibilityAccess.isTrusted()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSApplication.didBecomeActiveNotification
+            )
+        ) { _ in
+            // The user grants access from System Settings, a different
+            // app, so this is the moment we can observe the change —
+            // there is no direct notification for an AX trust flip.
+            isTrusted = MenuBarAccessibilityAccess.isTrusted()
+        }
     }
 }
 
