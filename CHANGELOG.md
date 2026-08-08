@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.3] - 2026-08-08
+
+### Fixed
+
+- **Automatic menu bar mode no longer collapses profiles when a menu bar
+  manager is running.** If Ice, Thaw, Bartender, Hidden Bar, Dozer, or Vanilla
+  is running, it is already solving overflow by reserving an expandable region
+  of the menu bar. Automatic mode measured that bar as full — correctly — and
+  collapsed on top of it, consuming the space the manager had set aside and
+  hiding profiles behind an extra click the manager exists to remove. Automatic
+  now stands down and lets the manager do its job, and Settings names the
+  manager it detected so the change does not read as the app being broken. An
+  unrecognised manager is simply not detected and behaves exactly as before.
+
+- **Menu bar managers can move menu bar items again.** While a manager was
+  running, automatic mode kept performing Accessibility measurements on every
+  replan whose results it was about to discard. That contended with the manager
+  driving the same status item windows, so its move events missed their
+  response deadline and its rearrange interface could lock up entirely. Those
+  measurements are now skipped as soon as a manager is detected.
+
+- **The automatic overflow split is computed from what each item is about to
+  look like**, rather than from its previous rendered width or a fixed 40pt
+  guess for an item that has not been drawn yet. Real widths span roughly
+  14–53pt depending on icon style, weekly display, percentage digits, and the
+  pace marker, so the estimate could be wrong by −65% to +32%. Because
+  collapsing is immediate while re-expanding requires a full item width of
+  slack, an overstated width caused a collapse that then needed real free space
+  to undo.
+
+- **"Launch at login" no longer appears twice in App Settings.** It was drawn
+  once as a section header and once as the toggle beneath it, both from the
+  same pair of strings.
+
 ## [3.3.2] - 2026-08-08
 
 ### Fixed
