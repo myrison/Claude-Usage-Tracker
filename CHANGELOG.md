@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-08-07
+
+### Added
+
+- **Profiles now collapse into the "+N" overflow item only when the menu bar
+  is genuinely full.** The previous rule collapsed anything past four
+  profiles regardless of how much room was actually available, so a wide
+  display with ample space still hid profiles behind "+3". The app now
+  measures the real menu bar — where the frontmost app's own menus end, and
+  where the status area begins on the display that owns the menu bar — and
+  collapses only what will not fit. Because the frontmost app's menus change
+  as you switch apps, the layout is re-evaluated live and settles rather than
+  flickering at the boundary.
+
+  This automatic behavior needs macOS Accessibility permission to read menu
+  bar geometry, and nothing else. The app never asks for it at launch; grant
+  it from a button in Settings if you want automatic sizing. Without the
+  grant, every selected profile simply gets its own menu bar item.
+
+  Two manual modes are available if you would rather decide yourself: never
+  collapse, or collapse after a profile count you choose.
+
 ### Fixed
 
 - **Notarized releases can now actually use the modern Keychain.** The app

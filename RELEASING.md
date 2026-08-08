@@ -232,8 +232,9 @@ gh secret list --repo "$REPO"
 
 ### 1. Prepare a release PR
 
-1. Update `MARKETING_VERSION` in both app configurations.
-2. Increment `CURRENT_PROJECT_VERSION` in both app configurations.
+1. Update `MARKETING_VERSION` in all four app configurations (Debug, Release,
+   UITesting, UAT).
+2. Increment `CURRENT_PROJECT_VERSION` in the same four configurations.
 3. Add a matching `## [X.Y.Z] - YYYY-MM-DD` entry to `CHANGELOG.md`.
 4. Run the full PR validation suite.
 5. Merge through the normal reviewed PR process.
