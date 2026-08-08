@@ -132,11 +132,17 @@ struct MenuBarSpaceProbe: MenuBarSpaceProbing {
     /// `axTotalBudgetSeconds`, which bounds the loop itself.
     private static let axMessagingTimeoutSeconds: Float = 0.25
 
-    /// Wall-clock ceiling on reading the whole menu bar, enforced across
+    /// Wall-clock budget for reading the whole menu bar, enforced across
     /// the child loop. Without it the per-message timeout above multiplies
     /// by the number of menu titles — and this runs synchronously on the
     /// main thread from a debounced recompute that fires on every
     /// application switch, so an unbounded loop is a visible hang.
+    ///
+    /// This gates whether another child is STARTED, so the worst-case wall
+    /// clock is this budget plus one final two-message read — about 1s at
+    /// current values, not 0.5s. Reserving that final read instead is not
+    /// available here: the reserve would equal the entire budget, so the
+    /// first check would fail and no menu bar would ever be measured.
     ///
     /// Exceeding the budget yields a partial measurement rather than a
     /// wrong one: the caller treats a `nil` result as "unmeasurable" and
@@ -211,6 +217,11 @@ struct MenuBarSpaceProbe: MenuBarSpaceProbing {
     /// `screenFrame`. See the type-level doc comment for why this must be
     /// restricted to one screen, and why that screen must be the same one
     /// `frontmostAppMenuMaxX` was measured on.
+    ///
+    /// Untested for the same reason as `frontmostAppMenuMaxX()` — see the
+    /// warning there. This needs a live window server, so only the pure
+    /// `isWithinScreen(x:screenFrame:)` it delegates to is actually
+    /// covered; the window enumeration and filtering around it are not.
     static func statusRegionMinX(in screenFrame: CGRect) -> CGFloat? {
         guard let windows = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly],
@@ -251,6 +262,22 @@ struct MenuBarSpaceProbe: MenuBarSpaceProbing {
 
     /// Right edge of the frontmost application's menu bar menus (File,
     /// Edit, View, ...), read from its Accessibility tree.
+    ///
+    /// NOTHING BELOW THIS LINE IS COVERED BY TESTS. Everything from here
+    /// down needs a live `AXUIElement` from a real running application, so
+    /// no unit test reaches it and a green suite says nothing about it.
+    /// This is not theoretical: a change to the budget guard here once made
+    /// this function return `nil` unconditionally — every menu bar reported
+    /// as unmeasurable, automatic mode silently dead — and the full suite
+    /// still passed, because the only thing it exercises is the pure
+    /// helpers. Reviewing a diff here and seeing CI green is not evidence
+    /// that it works.
+    ///
+    /// So changes here must be verified by running the app and watching
+    /// real menu bars, and the decision logic must keep being hoisted into
+    /// pure functions (`menuMaxX(fromChildFrames:)`,
+    /// `isWithinScreen(x:screenFrame:)`) where tests can actually reach it.
+    /// Anything left inline here is, by construction, unverified.
     static func frontmostAppMenuMaxX() -> CGFloat? {
         guard let frontApp = NSWorkspace.shared.frontmostApplication else {
             return nil
@@ -283,6 +310,21 @@ struct MenuBarSpaceProbe: MenuBarSpaceProbing {
         // to "unmeasurable", never to a multi-second main-thread stall.
         let deadline = DispatchTime.now().uptimeNanoseconds
             + UInt64(axTotalBudgetSeconds * 1_000_000_000)
+
+        // The budget gates whether another child is STARTED, so a read
+        // already begun still runs to its own per-message timeouts: the
+        // true ceiling is `axTotalBudgetSeconds` plus one final
+        // `frame(of:)`, i.e. two `axMessagingTimeoutSeconds` round-trips
+        // (~1s at current values), not `axTotalBudgetSeconds` alone.
+        //
+        // That overshoot is deliberate rather than an oversight. Reserving
+        // the final read's cost up front instead — refusing to start a
+        // child unless two full round-trips still fit — cannot work while
+        // the reserve is as large as the budget itself: the very first
+        // check would fail and this function would never read a single
+        // child, silently reporting every menu bar as unmeasurable. The
+        // bound that matters is that it terminates well short of the
+        // multi-second stall above, which it does.
         var frames: [CGRect?] = []
         for child in children {
             guard DispatchTime.now().uptimeNanoseconds < deadline else {
