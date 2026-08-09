@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   you turn it off. No profile is skipped — every profile still updates, just
   less frequently.
 
+- **Each profile's own refresh interval is now honoured.** The refresh interval
+  set per profile in Settings previously had no effect unless that profile
+  happened to be the active one — every displayed profile was refreshed at the
+  active profile's rate, so a profile set to two minutes was in practice
+  refreshing every thirty seconds. Each profile now refreshes on the schedule
+  you set for it. Manual refreshes, opening the popover, switching profiles, and
+  waking from sleep are unaffected and still refresh immediately.
+
 ## [3.3.3] - 2026-08-08
 
 ### Fixed
