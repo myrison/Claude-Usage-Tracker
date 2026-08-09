@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.5] - 2026-08-09
+
+### Fixed
+
+- **Usage history no longer fills up with records that can never be read.**
+  Claude anchors its session window to your first message, so its reset time
+  shifts throughout the day without any reset having happened. The app treated
+  each shift as a reset and stored a snapshot dated slightly in the future —
+  hundreds a day, none of which could ever appear in the app, because the
+  history views correctly ignore records dated ahead of themselves. On
+  long-running installs these had grown to be the overwhelming majority of
+  stored history. Such a snapshot is now rejected before it is written.
+
+  Records already stored are left untouched by this release: they are still
+  there, still hidden, and still taking up space. Clearing them out safely is a
+  separate change, so this release stops the growth rather than reversing it.
+
+- **The history file is no longer rewritten when nothing has changed.** Each
+  update rewrote the entire file plus its backup copy regardless of whether the
+  contents differed, which on a large history meant a burst of disk activity to
+  store nothing at all.
+
 ## [3.3.4] - 2026-08-08
 
 ### Fixed
