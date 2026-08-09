@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.6] - 2026-08-09
+
+### Changed
+
+- **Usage history is cleared of records that could never be read, after they
+  are archived.** The previous release stopped new ones being written; this one
+  removes those already stored. On long-running profiles they had grown to
+  roughly 97% of all stored history, leaving history files of 22MB where a few
+  hundred kilobytes were meaningful.
+
+  **This removes stored records, so it is worth being precise about what
+  happens.** Every removed record is first copied to an archive file kept
+  beside the history file — nothing is discarded outright. What is removed is
+  only records dated ahead of themselves, which no chart, view, or export
+  filter could ever return; everything the app displays today is preserved
+  exactly, unchanged and in the same order. If the archive cannot be written
+  for any reason, nothing is removed and the attempt is simply retried later.
+
+  The cleanup runs once per profile, on the first usage refresh after
+  updating rather than at launch, so the app starts as quickly as it always
+  has. That single refresh takes about a second longer than usual. A profile
+  that is never refreshed is never cleaned up.
+
+- **Billing-cycle history now has a retention limit.** It previously had none
+  and grew without bound. The limit is high enough that monthly resets would
+  take decades to approach it.
+
 ## [3.3.5] - 2026-08-09
 
 ### Fixed
