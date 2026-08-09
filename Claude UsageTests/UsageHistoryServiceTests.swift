@@ -180,6 +180,189 @@ final class UsageHistoryServiceTests: XCTestCase {
         XCTAssertEqual(service.loadHistory(for: profileID), currentHistory)
     }
 
+    func testRecordSessionResetRejectsSnapshotWithFutureTriggeringResetTime() async throws {
+        try await MainActor.run {
+            try testRecordSessionResetRejectsSnapshotWithFutureTriggeringResetTimeOnMainActor()
+        }
+    }
+
+    /// Reproduces the false-positive reset mechanism directly: Claude's
+    /// session window can advance without an actual reset, so
+    /// `checkAndRecordSessionReset` sometimes calls `recordSessionReset` with
+    /// a `resetTime` that has not happened yet. Before admission, that
+    /// snapshot was written and then hidden forever by the display filter.
+    ///
+    /// `UsageSnapshot.fromSessionReset` stamps `timestamp` from the real
+    /// wall clock (not the service's injectable `now`), so `resetTime` is
+    /// anchored to `Date.distantFuture` here rather than an offset from an
+    /// injected clock, to stay correct regardless of when the test runs.
+    @MainActor
+    private func testRecordSessionResetRejectsSnapshotWithFutureTriggeringResetTimeOnMainActor() throws {
+        let environment = try makeEnvironment()
+        let profileID = UUID()
+        let service = UsageHistoryService(
+            defaults: environment.defaults,
+            fileStore: ProfileUsageFileStore(baseURL: environment.rootURL)
+        )
+        let usage = makeClaudeUsage(sessionPercentage: 55, sessionResetTime: Date())
+
+        service.recordSessionReset(
+            for: profileID,
+            previousUsage: usage,
+            resetTime: .distantFuture
+        )
+
+        let history = service.loadHistory(for: profileID)
+        XCTAssertTrue(history.snapshots.isEmpty)
+        XCTAssertTrue(history.sessionSnapshots.isEmpty)
+    }
+
+    func testRecordWeeklyResetRejectsSnapshotWithFutureTriggeringResetTime() async throws {
+        try await MainActor.run {
+            try testRecordWeeklyResetRejectsSnapshotWithFutureTriggeringResetTimeOnMainActor()
+        }
+    }
+
+    /// The weekly path builds its snapshot through a different factory
+    /// (`fromWeeklyReset`) with a different `resetType`, so admission has to
+    /// be verified here too rather than assumed from the session path.
+    @MainActor
+    private func testRecordWeeklyResetRejectsSnapshotWithFutureTriggeringResetTimeOnMainActor() throws {
+        let environment = try makeEnvironment()
+        let profileID = UUID()
+        let service = UsageHistoryService(
+            defaults: environment.defaults,
+            fileStore: ProfileUsageFileStore(baseURL: environment.rootURL)
+        )
+        // Weekly usage must be non-zero, or `recordWeeklyReset` returns
+        // early on its "no usage to record" guard and the test would pass
+        // without admission ever being consulted.
+        let usage = makeClaudeUsage(
+            sessionPercentage: 10,
+            sessionResetTime: Date(),
+            weeklyPercentage: 61
+        )
+
+        service.recordWeeklyReset(
+            for: profileID,
+            previousUsage: usage,
+            resetTime: .distantFuture
+        )
+
+        let history = service.loadHistory(for: profileID)
+        XCTAssertTrue(history.snapshots.isEmpty)
+        XCTAssertTrue(history.weeklySnapshots.isEmpty)
+    }
+
+    func testPeriodicRecordingIsAdmittedBecauseItsResetTimeIsNeverAhead() async throws {
+        try await MainActor.run {
+            try testPeriodicRecordingIsAdmittedBecauseItsResetTimeIsNeverAheadOnMainActor()
+        }
+    }
+
+    /// The two periodic paths differ from the reset paths in a way that
+    /// matters for admission: they stamp `triggeringResetTime` from the
+    /// injected `now()`, the same clock as `timestamp`, so they are always
+    /// admissible and must not be caught by the new rejection. This guards
+    /// against an over-eager admission rule silently dropping the periodic
+    /// snapshots that make up most of the genuinely useful history.
+    @MainActor
+    private func testPeriodicRecordingIsAdmittedBecauseItsResetTimeIsNeverAheadOnMainActor() throws {
+        let environment = try makeEnvironment()
+        let profileID = UUID()
+        let now = Date(timeIntervalSince1970: 20_000)
+        let service = UsageHistoryService(
+            defaults: environment.defaults,
+            fileStore: ProfileUsageFileStore(baseURL: environment.rootURL, now: { now }),
+            now: { now }
+        )
+
+        service.recordSessionPeriodic(
+            for: profileID,
+            usage: makeClaudeUsage(sessionPercentage: 33, sessionResetTime: now)
+        )
+
+        let history = service.loadHistory(for: profileID)
+        XCTAssertEqual(history.snapshots.count, 1)
+        XCTAssertEqual(history.sessionSnapshots.count, 1)
+        XCTAssertEqual(history.sessionSnapshots.first?.sessionPercentage, 33)
+    }
+
+    func testNoOpTransformSkipsFileWrite() async throws {
+        try await MainActor.run {
+            try testNoOpTransformSkipsFileWriteOnMainActor()
+        }
+    }
+
+    /// `recordSessionReset` with a rejected (future-dated) snapshot is a
+    /// no-op transform on the stored history. Confirms `ProfileUsageFileStore
+    /// .update` skips the save in that case by asserting the file on disk is
+    /// byte-for-byte unchanged, rather than merely asserting the resulting
+    /// value is equal.
+    @MainActor
+    private func testNoOpTransformSkipsFileWriteOnMainActor() throws {
+        let environment = try makeEnvironment()
+        let profileID = UUID()
+        let now = Date(timeIntervalSince1970: 10_000)
+        let store = ProfileUsageFileStore(baseURL: environment.rootURL, now: { now })
+        let service = UsageHistoryService(
+            defaults: environment.defaults,
+            fileStore: store,
+            now: { now }
+        )
+        let usage = makeClaudeUsage(sessionPercentage: 30, sessionResetTime: now)
+        service.recordSessionReset(
+            for: profileID,
+            previousUsage: usage,
+            resetTime: Date(timeIntervalSince1970: 0)
+        )
+
+        let fileURL = try store.fileURL(for: profileID, kind: .history)
+        let before = try Data(contentsOf: fileURL)
+
+        // Rejected by admission: mutates nothing, so the transform is a
+        // true no-op on the stored payload.
+        service.recordSessionReset(
+            for: profileID,
+            previousUsage: usage,
+            resetTime: .distantFuture
+        )
+
+        let after = try Data(contentsOf: fileURL)
+        XCTAssertEqual(before, after)
+    }
+
+    @MainActor
+    private func makeClaudeUsage(
+        sessionPercentage: Double,
+        sessionResetTime: Date,
+        weeklyPercentage: Double = 0
+    ) -> ClaudeUsage {
+        ClaudeUsage(
+            sessionTokensUsed: 1,
+            sessionLimit: 100,
+            sessionPercentage: sessionPercentage,
+            sessionResetTime: sessionResetTime,
+            weeklyTokensUsed: weeklyPercentage > 0 ? 1 : 0,
+            weeklyLimit: 100,
+            weeklyPercentage: weeklyPercentage,
+            weeklyResetTime: sessionResetTime,
+            opusWeeklyTokensUsed: 0,
+            opusWeeklyPercentage: 0,
+            sonnetWeeklyTokensUsed: 0,
+            sonnetWeeklyPercentage: 0,
+            sonnetWeeklyResetTime: nil,
+            fableWeeklyTokensUsed: 0,
+            fableWeeklyPercentage: 0,
+            fableWeeklyResetTime: nil,
+            costUsed: nil,
+            costLimit: nil,
+            costCurrency: nil,
+            lastUpdated: sessionResetTime,
+            userTimezone: .current
+        )
+    }
+
     @MainActor
     private func makeEnvironment() throws -> (
         defaults: UserDefaults,
