@@ -116,7 +116,7 @@ final class MenuReliabilityTests: HostedAppTestCase {
         )
     }
 
-    func testCommonSixAccountPopoverLayoutDoesNotRequireScrolling() {
+    func testCommonSixAccountPopoverLayoutDoesNotRequireScrolling() throws {
         var profiles = [
             Profile(name: "j@"),
             Profile(name: "revvy"),
@@ -129,7 +129,7 @@ final class MenuReliabilityTests: HostedAppTestCase {
             profiles[index].isSelectedForDisplay = true
         }
 
-        let viewedProfile = profiles[4]
+        let viewedProfile = profiles[0]
         let profileManager = retain(makeIsolatedProfileManager())
         profileManager.profiles = profiles
         profileManager.activeProfile = profiles[0]
@@ -170,6 +170,18 @@ final class MenuReliabilityTests: HostedAppTestCase {
         var usage = ClaudeUsage.empty
         usage.sessionPercentage = 92
         usage.weeklyPercentage = 82
+        usage.sessionResetTime = Date().addingTimeInterval(3 * 60 * 60)
+        usage.weeklyResetTime = Date().addingTimeInterval(24 * 60 * 60)
+        let report = try ClaudeUsageProviderAdapter.makeReport(
+            from: usage,
+            context: ClaudeUsageProviderContext(
+                health: ProviderHealth(
+                    status: .healthy,
+                    checkedAt: Date()
+                ),
+                fetchedAt: Date()
+            )
+        )
         XCTAssertTrue(
             runtime.presentationStore.publish(
                 makePresentationSnapshot(
@@ -177,14 +189,13 @@ final class MenuReliabilityTests: HostedAppTestCase {
                     profileName: viewedProfile.name,
                     providerID: .claude,
                     presentationEpoch: context.epoch,
+                    report: report,
                     claudeUsage: usage,
                     lastSuccessfulAt: Date()
                 ),
                 expected: context
             )
         )
-        manager.setViewedProfile(viewedProfile.id)
-
         let content = PopoverContentView(
             manager: manager,
             profileManager: profileManager,
@@ -201,21 +212,81 @@ final class MenuReliabilityTests: HostedAppTestCase {
             defer: false
         ))
         window.contentViewController = controller
-        controller.view.frame = NSRect(origin: .zero, size: size)
+        window.setContentSize(size)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
         controller.view.layoutSubtreeIfNeeded()
 
         let scrollViews = controller.view.descendants(of: NSScrollView.self)
         XCTAssertEqual(scrollViews.count, 2)
-        for scrollView in scrollViews {
-            guard let documentView = scrollView.documentView else {
-                return XCTFail("Expected every popover scroll view to own content")
-            }
-            XCTAssertLessThanOrEqual(
-                documentView.fittingSize.height,
-                scrollView.contentSize.height + 1,
-                "Common popover content should fit without vertical scrolling"
-            )
+        let orderedScrollViews = scrollViews.sorted {
+            $0.frame.height > $1.frame.height
         }
+        guard let usageScrollView = orderedScrollViews.first,
+              let accountsScrollView = orderedScrollViews.last,
+              let usageDocumentView = usageScrollView.documentView else {
+            return XCTFail("Expected usage and accounts scroll views")
+        }
+
+        let usageRange = max(
+            0,
+            usageDocumentView.frame.height
+                - usageScrollView.documentVisibleRect.height
+        )
+        XCTAssertLessThanOrEqual(
+            usageRange,
+            1,
+            "Common usage should have no live vertical scroll range; root=\(controller.view.bounds), usage=\(usageScrollView.frame), visible=\(usageScrollView.documentVisibleRect), document=\(usageDocumentView.frame)"
+        )
+        XCTAssertGreaterThan(
+            usageScrollView.documentVisibleRect.height,
+            460,
+            "The desktop popover should give surplus height to usage instead of retaining the obsolete cap"
+        )
+
+        let accountsFrame = controller.view.convert(
+            accountsScrollView.bounds,
+            from: accountsScrollView
+        )
+        let distanceToBottom = controller.view.isFlipped
+            ? controller.view.bounds.maxY - accountsFrame.maxY
+            : accountsFrame.minY - controller.view.bounds.minY
+        XCTAssertLessThanOrEqual(
+            distanceToBottom,
+            20,
+            "Accounts footer should remain at the bottom of the laid-out popover; root=\(controller.view.bounds), accounts=\(accountsFrame), usage=\(usageScrollView.frame), range=\(usageRange)"
+        )
+
+        let compactSize = Constants.WindowSizes.popoverSize(
+            forVisibleScreenHeight: 680
+        )
+        window.setContentSize(compactSize)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        controller.view.layoutSubtreeIfNeeded()
+        XCTAssertEqual(controller.view.bounds.height, compactSize.height)
+        XCTAssertLessThanOrEqual(
+            max(
+                0,
+                usageDocumentView.frame.height
+                    - usageScrollView.documentVisibleRect.height
+            ),
+            1,
+            "The common layout should also fit at the laptop height cap"
+        )
+
+        window.setContentSize(NSSize(width: PopoverDesign.width, height: 320))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        controller.view.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(
+            usageDocumentView.frame.height
+                - usageScrollView.documentVisibleRect.height,
+            1,
+            "Genuinely compact popovers must retain vertical usage scrolling"
+        )
+        XCTAssertGreaterThan(
+            accountsScrollView.documentVisibleRect.height,
+            1,
+            "Compact layout must not starve the Accounts footer"
+        )
     }
 
     func testRefreshTimingPolicyPreservesTimerReachabilityAndWakeRules() {

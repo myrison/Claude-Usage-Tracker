@@ -308,6 +308,7 @@ struct PopoverContentView: View {
         }
         .padding(.bottom, 10)
         .frame(width: PopoverDesign.width)
+        .frame(maxHeight: .infinity, alignment: .top)
         .background(
             ZStack {
                 VisualEffectBackground()
@@ -391,7 +392,8 @@ struct PopoverContentView: View {
                 )
             }
         }
-        .frame(maxHeight: 460)
+        .frame(maxHeight: .infinity)
+        .layoutPriority(1)
 
         PopoverDivider()
             .padding(.top, 2)
@@ -559,6 +561,7 @@ struct PopoverContentView: View {
                         }
                     }
                 }
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxHeight: 150)
             }
             .padding(.horizontal, PopoverDesign.outerInset)
