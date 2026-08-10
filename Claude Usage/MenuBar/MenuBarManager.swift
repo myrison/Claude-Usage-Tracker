@@ -1955,6 +1955,22 @@ class MenuBarManager: NSObject, ObservableObject {
         return hostingController
     }
 
+    /// Uses the clicked status item's display rather than `NSScreen.main`,
+    /// because menu bar items can be presented on any attached screen. The
+    /// preferred 720pt height handles the common subscription layout without
+    /// scrolling, while the visible-frame cap keeps the popover reachable on
+    /// compact or scaled laptop displays.
+    func sizePopover(
+        _ popover: NSPopover,
+        relativeTo button: NSStatusBarButton
+    ) {
+        let size = Constants.WindowSizes.popoverSize(
+            forVisibleScreenHeight: button.window?.screen?.visibleFrame.height
+        )
+        popover.contentSize = size
+        popover.contentViewController?.preferredContentSize = size
+    }
+
     private func popoverActionTarget() -> ProviderStatusItemIdentity? {
         if let currentPopoverTarget {
             return currentPopoverTarget
@@ -2118,6 +2134,7 @@ class MenuBarManager: NSObject, ObservableObject {
                     // clickedProfileId change — the "shows the old account
                     // first, then flips" flash.
                     popover.contentViewController = createContentViewController()
+                    sizePopover(popover, relativeTo: button)
                     NSApp.activate(ignoringOtherApps: true)
                     popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
                     currentPopoverButton = button
@@ -2139,6 +2156,7 @@ class MenuBarManager: NSObject, ObservableObject {
                 stopMonitoringForOutsideClicks()
                 // Update content view controller for current profile data
                 popover.contentViewController = createContentViewController()
+                sizePopover(popover, relativeTo: button)
                 NSApp.activate(ignoringOtherApps: true)
                 popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
                 currentPopoverButton = button

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import UsageCore
 import XCTest
 @testable import Claude_Usage
@@ -26,6 +27,266 @@ final class MenuReliabilityTests: HostedAppTestCase {
             defer { lock.unlock() }
             return values
         }
+    }
+
+    func testPopoverUsesPreferredHeightOnTypicalLaptopOrLargerScreen() {
+        let size = Constants.WindowSizes.popoverSize(
+            forVisibleScreenHeight: 900
+        )
+
+        XCTAssertEqual(size.width, 320)
+        XCTAssertEqual(size.height, 720)
+    }
+
+    func testPopoverHeightLeavesClearanceOnCompactScreen() {
+        let size = Constants.WindowSizes.popoverSize(
+            forVisibleScreenHeight: 680
+        )
+
+        XCTAssertEqual(size.width, 320)
+        XCTAssertEqual(size.height, 664)
+    }
+
+    func testPopoverHeightHasSafeFloorForDegenerateScreenMeasurement() {
+        let size = Constants.WindowSizes.popoverSize(
+            forVisibleScreenHeight: 200
+        )
+
+        XCTAssertEqual(size.height, 320)
+    }
+
+    func testPopoverSizingUsesAnchorScreenAndSynchronizesController() {
+        let profileManager = retain(makeIsolatedProfileManager())
+        let apiService = retain(ClaudeAPIService(
+            profileManager: profileManager,
+            systemCredentialsReader: { nil }
+        ))
+        let statusService = retain(ClaudeStatusService())
+        let runtime = retain(UsageRefreshRuntime.live(
+            profileManager: profileManager,
+            apiService: apiService,
+            statusService: statusService,
+            featureAvailability: .testing()
+        ))
+        let manager = retain(MenuBarManager(
+            apiService: apiService,
+            statusService: statusService,
+            profileManager: profileManager,
+            refreshRuntime: runtime,
+            providerUIDependencies: ProviderUIDependencies(
+                profileManager: profileManager,
+                codexProviderFactory: CodexProviderFactory(
+                    availability: .testing()
+                )
+            )
+        ))
+        let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(
+            x: 0,
+            y: 0,
+            width: 1_024,
+            height: 768
+        )
+        let anchorWindow = retain(NSWindow(
+            contentRect: NSRect(
+                origin: screenFrame.origin,
+                size: NSSize(width: 100, height: 100)
+            ),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        ))
+        let button = NSStatusBarButton(frame: NSRect(
+            origin: .zero,
+            size: NSSize(width: 24, height: 24)
+        ))
+        anchorWindow.contentView?.addSubview(button)
+        let popover = NSPopover()
+        popover.contentViewController = NSViewController()
+
+        manager.sizePopover(popover, relativeTo: button)
+
+        let expected = Constants.WindowSizes.popoverSize(
+            forVisibleScreenHeight: button.window?.screen?.visibleFrame.height
+        )
+        XCTAssertNotNil(button.window?.screen)
+        XCTAssertEqual(popover.contentSize, expected)
+        XCTAssertEqual(
+            popover.contentViewController?.preferredContentSize,
+            expected
+        )
+    }
+
+    func testCommonSixAccountPopoverLayoutDoesNotRequireScrolling() throws {
+        var profiles = [
+            Profile(name: "j@"),
+            Profile(name: "revvy"),
+            Profile(name: "JC@"),
+            Profile(name: "ENT"),
+            Profile(name: "r2"),
+            Profile(name: "r3")
+        ]
+        for index in profiles.indices {
+            profiles[index].isSelectedForDisplay = true
+        }
+
+        let viewedProfile = profiles[0]
+        let profileManager = retain(makeIsolatedProfileManager())
+        profileManager.profiles = profiles
+        profileManager.activeProfile = profiles[0]
+        profileManager.displayMode = .multi
+        let apiService = retain(ClaudeAPIService(
+            profileManager: profileManager,
+            systemCredentialsReader: { nil }
+        ))
+        let statusService = retain(ClaudeStatusService())
+        let runtime = retain(UsageRefreshRuntime.live(
+            profileManager: profileManager,
+            apiService: apiService,
+            statusService: statusService,
+            featureAvailability: .testing()
+        ))
+        let providerUIDependencies = retain(
+            ProviderUIDependencies(
+                profileManager: profileManager,
+                codexProviderFactory: CodexProviderFactory(
+                    availability: .testing()
+                )
+            )
+        )
+        let manager = retain(MenuBarManager(
+            apiService: apiService,
+            statusService: statusService,
+            profileManager: profileManager,
+            refreshRuntime: runtime,
+            providerUIDependencies: providerUIDependencies
+        ))
+        let context = UsagePresentationContext(
+            epoch: 1,
+            focusedProfileID: viewedProfile.id,
+            visibleProfileIDs: Set(profiles.map(\.id)),
+            mode: .multi
+        )
+        runtime.presentationStore.activate(context)
+        var usage = ClaudeUsage.empty
+        usage.sessionPercentage = 92
+        usage.weeklyPercentage = 82
+        usage.sessionResetTime = Date().addingTimeInterval(3 * 60 * 60)
+        usage.weeklyResetTime = Date().addingTimeInterval(24 * 60 * 60)
+        let report = try ClaudeUsageProviderAdapter.makeReport(
+            from: usage,
+            context: ClaudeUsageProviderContext(
+                health: ProviderHealth(
+                    status: .healthy,
+                    checkedAt: Date()
+                ),
+                fetchedAt: Date()
+            )
+        )
+        XCTAssertTrue(
+            runtime.presentationStore.publish(
+                makePresentationSnapshot(
+                    profileID: viewedProfile.id,
+                    profileName: viewedProfile.name,
+                    providerID: .claude,
+                    presentationEpoch: context.epoch,
+                    report: report,
+                    claudeUsage: usage,
+                    lastSuccessfulAt: Date()
+                ),
+                expected: context
+            )
+        )
+        let content = PopoverContentView(
+            manager: manager,
+            profileManager: profileManager,
+            onRefresh: {},
+            onManageProfiles: {},
+            onPreferences: {}
+        )
+        let controller = retain(NSHostingController(rootView: content))
+        let size = Constants.WindowSizes.popoverSize
+        let window = retain(NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        ))
+        window.contentViewController = controller
+        window.setContentSize(size)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        controller.view.layoutSubtreeIfNeeded()
+
+        let scrollViews = controller.view.descendants(of: NSScrollView.self)
+        XCTAssertEqual(scrollViews.count, 2)
+        let orderedScrollViews = scrollViews.sorted {
+            $0.frame.height > $1.frame.height
+        }
+        guard let usageScrollView = orderedScrollViews.first,
+              let accountsScrollView = orderedScrollViews.last,
+              let usageDocumentView = usageScrollView.documentView else {
+            return XCTFail("Expected usage and accounts scroll views")
+        }
+
+        let usageRange = max(
+            0,
+            usageDocumentView.frame.height
+                - usageScrollView.documentVisibleRect.height
+        )
+        XCTAssertLessThanOrEqual(
+            usageRange,
+            1,
+            "Common usage should have no live vertical scroll range; root=\(controller.view.bounds), usage=\(usageScrollView.frame), visible=\(usageScrollView.documentVisibleRect), document=\(usageDocumentView.frame)"
+        )
+        XCTAssertGreaterThan(
+            usageScrollView.documentVisibleRect.height,
+            460,
+            "The desktop popover should give surplus height to usage instead of retaining the obsolete cap"
+        )
+
+        let accountsFrame = controller.view.convert(
+            accountsScrollView.bounds,
+            from: accountsScrollView
+        )
+        let distanceToBottom = controller.view.isFlipped
+            ? controller.view.bounds.maxY - accountsFrame.maxY
+            : accountsFrame.minY - controller.view.bounds.minY
+        XCTAssertLessThanOrEqual(
+            distanceToBottom,
+            20,
+            "Accounts footer should remain at the bottom of the laid-out popover; root=\(controller.view.bounds), accounts=\(accountsFrame), usage=\(usageScrollView.frame), range=\(usageRange)"
+        )
+
+        let compactSize = Constants.WindowSizes.popoverSize(
+            forVisibleScreenHeight: 680
+        )
+        window.setContentSize(compactSize)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        controller.view.layoutSubtreeIfNeeded()
+        XCTAssertEqual(controller.view.bounds.height, compactSize.height)
+        XCTAssertLessThanOrEqual(
+            max(
+                0,
+                usageDocumentView.frame.height
+                    - usageScrollView.documentVisibleRect.height
+            ),
+            1,
+            "The common layout should also fit at the laptop height cap"
+        )
+
+        window.setContentSize(NSSize(width: PopoverDesign.width, height: 320))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        controller.view.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(
+            usageDocumentView.frame.height
+                - usageScrollView.documentVisibleRect.height,
+            1,
+            "Genuinely compact popovers must retain vertical usage scrolling"
+        )
+        XCTAssertGreaterThan(
+            accountsScrollView.documentVisibleRect.height,
+            1,
+            "Compact layout must not starve the Accounts footer"
+        )
     }
 
     func testRefreshTimingPolicyPreservesTimerReachabilityAndWakeRules() {
@@ -2436,5 +2697,14 @@ private enum LocalizedDeletionError: LocalizedError {
 
     var errorDescription: String? {
         "Safe deletion failure"
+    }
+}
+
+private extension NSView {
+    func descendants<T: NSView>(of type: T.Type) -> [T] {
+        subviews.flatMap { view -> [T] in
+            let current = (view as? T).map { [$0] } ?? []
+            return current + view.descendants(of: type)
+        }
     }
 }
