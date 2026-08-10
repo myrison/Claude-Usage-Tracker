@@ -171,7 +171,29 @@ enum Constants {
     // Window Sizes
     enum WindowSizes {
         static let settingsWindow = NSSize(width: 720, height: 750)
-        static let popoverSize = NSSize(width: 320, height: 600)
+
+        /// The normal popover is tall enough to show the common two-limit
+        /// subscription view without forcing its usage section to scroll.
+        /// The actual height is capped to the screen that owns the clicked
+        /// status item immediately before presentation.
+        static let popoverSize = NSSize(width: 320, height: 720)
+        static let popoverScreenClearance: CGFloat = 16
+        static let minimumPopoverHeight: CGFloat = 320
+
+        static func popoverSize(
+            forVisibleScreenHeight visibleScreenHeight: CGFloat?
+        ) -> NSSize {
+            guard let visibleScreenHeight else { return popoverSize }
+
+            let availableHeight = max(
+                minimumPopoverHeight,
+                visibleScreenHeight - popoverScreenClearance
+            )
+            return NSSize(
+                width: popoverSize.width,
+                height: min(popoverSize.height, availableHeight)
+            )
+        }
     }
 
     // GitHub Repository Info

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import UsageCore
 import XCTest
 @testable import Claude_Usage
@@ -25,6 +26,134 @@ final class MenuReliabilityTests: HostedAppTestCase {
             lock.lock()
             defer { lock.unlock() }
             return values
+        }
+    }
+
+    func testPopoverUsesPreferredHeightOnTypicalLaptopOrLargerScreen() {
+        let size = Constants.WindowSizes.popoverSize(
+            forVisibleScreenHeight: 900
+        )
+
+        XCTAssertEqual(size.width, 320)
+        XCTAssertEqual(size.height, 720)
+    }
+
+    func testPopoverHeightLeavesClearanceOnCompactScreen() {
+        let size = Constants.WindowSizes.popoverSize(
+            forVisibleScreenHeight: 680
+        )
+
+        XCTAssertEqual(size.width, 320)
+        XCTAssertEqual(size.height, 664)
+    }
+
+    func testPopoverHeightHasSafeFloorForDegenerateScreenMeasurement() {
+        let size = Constants.WindowSizes.popoverSize(
+            forVisibleScreenHeight: 200
+        )
+
+        XCTAssertEqual(size.height, 320)
+    }
+
+    func testCommonSixAccountPopoverLayoutDoesNotRequireScrolling() {
+        var profiles = [
+            Profile(name: "j@"),
+            Profile(name: "revvy"),
+            Profile(name: "JC@"),
+            Profile(name: "ENT"),
+            Profile(name: "r2"),
+            Profile(name: "r3")
+        ]
+        for index in profiles.indices {
+            profiles[index].isSelectedForDisplay = true
+        }
+
+        let viewedProfile = profiles[4]
+        let profileManager = retain(makeIsolatedProfileManager())
+        profileManager.profiles = profiles
+        profileManager.activeProfile = profiles[0]
+        profileManager.displayMode = .multi
+        let apiService = retain(ClaudeAPIService(
+            profileManager: profileManager,
+            systemCredentialsReader: { nil }
+        ))
+        let statusService = retain(ClaudeStatusService())
+        let runtime = retain(UsageRefreshRuntime.live(
+            profileManager: profileManager,
+            apiService: apiService,
+            statusService: statusService,
+            featureAvailability: .testing()
+        ))
+        let providerUIDependencies = retain(
+            ProviderUIDependencies(
+                profileManager: profileManager,
+                codexProviderFactory: CodexProviderFactory(
+                    availability: .testing()
+                )
+            )
+        )
+        let manager = retain(MenuBarManager(
+            apiService: apiService,
+            statusService: statusService,
+            profileManager: profileManager,
+            refreshRuntime: runtime,
+            providerUIDependencies: providerUIDependencies
+        ))
+        let context = UsagePresentationContext(
+            epoch: 1,
+            focusedProfileID: viewedProfile.id,
+            visibleProfileIDs: Set(profiles.map(\.id)),
+            mode: .multi
+        )
+        runtime.presentationStore.activate(context)
+        var usage = ClaudeUsage.empty
+        usage.sessionPercentage = 92
+        usage.weeklyPercentage = 82
+        XCTAssertTrue(
+            runtime.presentationStore.publish(
+                makePresentationSnapshot(
+                    profileID: viewedProfile.id,
+                    profileName: viewedProfile.name,
+                    providerID: .claude,
+                    presentationEpoch: context.epoch,
+                    claudeUsage: usage,
+                    lastSuccessfulAt: Date()
+                ),
+                expected: context
+            )
+        )
+        manager.setViewedProfile(viewedProfile.id)
+
+        let content = PopoverContentView(
+            manager: manager,
+            profileManager: profileManager,
+            onRefresh: {},
+            onManageProfiles: {},
+            onPreferences: {}
+        )
+        let controller = retain(NSHostingController(rootView: content))
+        let size = Constants.WindowSizes.popoverSize
+        let window = retain(NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        ))
+        window.contentViewController = controller
+        controller.view.frame = NSRect(origin: .zero, size: size)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let scrollViews = controller.view.descendants(of: NSScrollView.self)
+        XCTAssertEqual(scrollViews.count, 2)
+        for scrollView in scrollViews {
+            guard let documentView = scrollView.documentView else {
+                return XCTFail("Expected every popover scroll view to own content")
+            }
+            XCTAssertLessThanOrEqual(
+                documentView.fittingSize.height,
+                scrollView.contentSize.height + 1,
+                "Common popover content should fit without vertical scrolling"
+            )
         }
     }
 
@@ -2436,5 +2565,14 @@ private enum LocalizedDeletionError: LocalizedError {
 
     var errorDescription: String? {
         "Safe deletion failure"
+    }
+}
+
+private extension NSView {
+    func descendants<T: NSView>(of type: T.Type) -> [T] {
+        subviews.flatMap { view -> [T] in
+            let current = (view as? T).map { [$0] } ?? []
+            return current + view.descendants(of: type)
+        }
     }
 }
