@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.8] - 2026-08-10
+
+### Fixed
+
+- **Common menu-bar popovers no longer scroll unnecessarily.** The popover now
+  uses the available height on the display containing the clicked menu-bar
+  item, and the subscription section expands into that space instead of
+  retaining its old fixed height. Session and weekly limits plus the Accounts
+  footer remain visible together in common layouts, while genuinely compact
+  screens still scroll normally.
+
 ## [3.3.7] - 2026-08-09
 
 ### Fixed
