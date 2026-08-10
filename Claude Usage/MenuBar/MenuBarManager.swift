@@ -1960,7 +1960,7 @@ class MenuBarManager: NSObject, ObservableObject {
     /// preferred 720pt height handles the common subscription layout without
     /// scrolling, while the visible-frame cap keeps the popover reachable on
     /// compact or scaled laptop displays.
-    private func sizePopover(
+    func sizePopover(
         _ popover: NSPopover,
         relativeTo button: NSStatusBarButton
     ) {

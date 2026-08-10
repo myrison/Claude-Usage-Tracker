@@ -55,6 +55,67 @@ final class MenuReliabilityTests: HostedAppTestCase {
         XCTAssertEqual(size.height, 320)
     }
 
+    func testPopoverSizingUsesAnchorScreenAndSynchronizesController() {
+        let profileManager = retain(makeIsolatedProfileManager())
+        let apiService = retain(ClaudeAPIService(
+            profileManager: profileManager,
+            systemCredentialsReader: { nil }
+        ))
+        let statusService = retain(ClaudeStatusService())
+        let runtime = retain(UsageRefreshRuntime.live(
+            profileManager: profileManager,
+            apiService: apiService,
+            statusService: statusService,
+            featureAvailability: .testing()
+        ))
+        let manager = retain(MenuBarManager(
+            apiService: apiService,
+            statusService: statusService,
+            profileManager: profileManager,
+            refreshRuntime: runtime,
+            providerUIDependencies: ProviderUIDependencies(
+                profileManager: profileManager,
+                codexProviderFactory: CodexProviderFactory(
+                    availability: .testing()
+                )
+            )
+        ))
+        let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(
+            x: 0,
+            y: 0,
+            width: 1_024,
+            height: 768
+        )
+        let anchorWindow = retain(NSWindow(
+            contentRect: NSRect(
+                origin: screenFrame.origin,
+                size: NSSize(width: 100, height: 100)
+            ),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        ))
+        let button = NSStatusBarButton(frame: NSRect(
+            origin: .zero,
+            size: NSSize(width: 24, height: 24)
+        ))
+        anchorWindow.contentView?.addSubview(button)
+        let popover = NSPopover()
+        popover.contentViewController = NSViewController()
+
+        manager.sizePopover(popover, relativeTo: button)
+
+        let expected = Constants.WindowSizes.popoverSize(
+            forVisibleScreenHeight: button.window?.screen?.visibleFrame.height
+        )
+        XCTAssertNotNil(button.window?.screen)
+        XCTAssertEqual(popover.contentSize, expected)
+        XCTAssertEqual(
+            popover.contentViewController?.preferredContentSize,
+            expected
+        )
+    }
+
     func testCommonSixAccountPopoverLayoutDoesNotRequireScrolling() {
         var profiles = [
             Profile(name: "j@"),
