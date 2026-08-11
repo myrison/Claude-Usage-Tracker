@@ -509,6 +509,22 @@ struct CodexSetupWizardView: View {
                 dependencies: dependencies
             )
         )
+        _homePath = State(
+            initialValue: Self.prefillHomePath(dependencies: dependencies)
+        )
+    }
+
+    /// There's no existing linked home to defer to here (this is initial
+    /// setup for a brand-new profile), unlike the equivalent prefill in
+    /// `ProviderAccountSettingsView`. See
+    /// `CodexDefaultHomeResolver.prefillCandidate` for the prefill rule
+    /// itself.
+    private static func prefillHomePath(
+        dependencies: ProviderUIDependencies
+    ) -> String {
+        CodexDefaultHomeResolver.prefillCandidate(
+            profiles: dependencies.profileManager.profiles
+        )
     }
 
     var body: some View {

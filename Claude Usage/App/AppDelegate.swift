@@ -109,8 +109,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // use it. Additive only; see the service's own documentation.
         ProfileKeychainDomainMigrationService.shared.migrateIfNeeded()
 
+        // Self-heal a CODEX_HOME pointer left behind by a since-deleted
+        // directory (e.g. an external drive that's now unmounted) before any
+        // new terminal pane can inherit it and fail with "CODEX_HOME points
+        // to ... but that path does not exist." The singleton is already
+        // inert under hosted unit tests, but this call site itself never
+        // runs for them either — see the early return above.
+        CodexSwitchService.shared.discardStaleHomeIfMissing()
+
         // Load profiles into ProfileManager (synchronously)
         providerUICompositionRoot.profileManager.loadProfiles()
+
+        // Restore the live CODEX_HOME pointer for the active Codex profile,
+        // now that profiles (and their persisted `linkedHome`) are loaded.
+        // The self-heal above is deliberately aggressive about discarding a
+        // pointer whose directory doesn't exist yet (e.g. an external
+        // volume that hasn't mounted), so put it back here once it's known
+        // to be available again — see `ProfileManager.reapplyActiveCodexHome()`
+        // for why this can't simply be left to `activateProfile(_:)`.
+        providerUICompositionRoot.profileManager.reapplyActiveCodexHome()
 
         // Initialize update manager to enable automatic update checks
         _ = UpdateManager.shared
