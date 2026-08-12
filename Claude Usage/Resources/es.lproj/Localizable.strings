@@ -134,7 +134,12 @@
 "about.report_issue" = "Reportar Problema";
 "about.send_feedback" = "Enviar Comentarios";
 "about.mit_license" = "Licencia MIT • Código Abierto";
-"about.copyright" = "© 2025 Hamed Elfayome";
+"about.copyright" = "© 2025-2026 Claude Usage Tracker Contributors";
+"about.view_licenses" = "Ver Licencias";
+"about.licenses_title" = "Licencias";
+"about.licenses_app_section" = "Claude Usage Tracker";
+"about.licenses_sparkle_section" = "Sparkle (Framework de Actualización Automática)";
+"about.licenses_unavailable" = "Texto de la licencia no disponible.";
 
 /* ==================== */
 /* MARK: - Notification Messages */

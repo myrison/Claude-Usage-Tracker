@@ -16,6 +16,7 @@ struct AboutView: View {
     @State private var contributorsError: String?
     @State private var showResetConfirmation = false
     @State private var showFeedbackForm = false
+    @State private var showLicenses = false
 
     private var appVersion: String {
         if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
@@ -158,6 +159,10 @@ struct AboutView: View {
                             showFeedbackForm = true
                         }
 
+                        LinkButton(title: "about.view_licenses".localized, icon: "doc.text") {
+                            showLicenses = true
+                        }
+
                         Divider()
 
                         LinkButton(title: "about.run_setup_wizard".localized, icon: "wand.and.stars") {
@@ -185,7 +190,17 @@ struct AboutView: View {
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(.secondary)
 
-                    Text("© \(String(Calendar.current.component(.year, from: Date()))) Hamed Elfayome")
+                    // Deliberately static: a copyright notice states the
+                    // year(s) of authorship, not "today", so this must not
+                    // be computed from the system clock. The holder
+                    // ("Claude Usage Tracker Contributors") and the year
+                    // range mirror the root LICENSE file as independent
+                    // literals — there is no automated link between them
+                    // (see scripts/validate_distribution.sh for the guard
+                    // that keeps the vendored LICENSE copy in sync; it does
+                    // not cover this string), so update all three by hand
+                    // together if the copyright holder or year ever changes.
+                    Text("about.copyright".localized)
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(.secondary)
                 }
@@ -217,6 +232,9 @@ struct AboutView: View {
                     showFeedbackForm = false
                 }
             )
+        }
+        .sheet(isPresented: $showLicenses) {
+            LicensesView()
         }
     }
 
