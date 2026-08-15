@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.2] - 2026-08-15
+
 ### Fixed
 
 - **In-app updates from 3.x now work.** Updating from a pre-rename install
