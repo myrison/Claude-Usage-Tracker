@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.1] - 2026-08-15
+
+### Fixed
+
+- The Homebrew cask no longer prints a deprecation warning on `brew info` and
+  `brew install`. Homebrew deprecated the string-comparison form of
+  `depends_on macos:`; the cask now uses the bare symbol (`depends_on macos:
+  :sonoma`), which carries the same macOS 14 minimum because `>=` is the
+  default comparator.
+
 ## [4.0.0] - 2026-08-15
 
 ### Changed

@@ -256,7 +256,10 @@ trap 'rm -f "$rendered_cask"' EXIT
     "$rendered_cask" >/dev/null
 contains_fixed "$release_repository_url/releases/download/v#{version}/RevvyTach.dmg" "$rendered_cask" \
     || fail 'rendered cask URL is not the version-pinned Revenium release asset'
-contains 'depends_on macos: ">= :sonoma"' "$rendered_cask" \
+contains_fixed 'depends_on macos: :sonoma' "$rendered_cask" \
     || fail 'rendered cask does not preserve the macOS 14 minimum'
+if contains_fixed 'depends_on macos: "' "$rendered_cask"; then
+    fail 'rendered cask uses the deprecated string-comparison form of depends_on macos:; use the bare symbol (>= is the default comparator)'
+fi
 
 echo 'Distribution configuration validated.'
