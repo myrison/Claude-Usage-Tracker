@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.3] - 2026-08-15
+
+### Fixed
+
+- **The app now finishes its own rename.** Machines that updated in place from
+  a 3.x install kept living at `/Applications/Claude Usage.app` — correct app,
+  correct icon, stale name, because Sparkle installs an update to wherever the
+  app was already running from. On the next launch RevvyTach offers, once, to
+  move itself to `/Applications/RevvyTach.app`; decline it and it will not ask
+  again. Your settings, profiles, and credentials come across untouched — they
+  are tied to the app's identity, not its location. macOS may ask you to grant
+  Accessibility permission again afterward, because it sees the app at a new
+  path.
+
 ## [4.0.2] - 2026-08-15
 
 ### Fixed
