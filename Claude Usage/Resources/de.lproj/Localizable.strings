@@ -614,6 +614,13 @@
 "wizard.organization_id" = "ID: %@";
 "wizard.select_organization" = "Organisation Auswählen";
 "wizard.choose_organization" = "Wählen Sie die zu verfolgende Organisation";
+"wizard.org_kind.team" = "Team";
+"wizard.org_kind.enterprise" = "Enterprise";
+"wizard.org_kind.personal_max" = "Persönlich · Max";
+"wizard.org_kind.personal_pro" = "Persönlich · Pro";
+"wizard.org_kind.api_only" = "Nur API · kein Claude-Abonnement";
+"wizard.org_kind.unknown" = "Unbekannt";
+"wizard.no_claude_organizations" = "Dieses Konto hat keine Organisationen mit einem Claude-Abonnement, die verfolgt werden können.";
 "wizard.review_config" = "Konfiguration Überprüfen";
 "wizard.confirm_settings" = "Bestätigen Sie Ihre Einstellungen vor dem Speichern";
 "wizard.key_will_update" = "Sitzungsschlüssel wird aktualisiert";

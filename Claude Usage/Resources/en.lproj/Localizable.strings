@@ -619,6 +619,13 @@
 "wizard.organization_id" = "ID: %@";
 "wizard.select_organization" = "Select Organization";
 "wizard.choose_organization" = "Choose which organization to track";
+"wizard.org_kind.team" = "Team";
+"wizard.org_kind.enterprise" = "Enterprise";
+"wizard.org_kind.personal_max" = "Personal · Max";
+"wizard.org_kind.personal_pro" = "Personal · Pro";
+"wizard.org_kind.api_only" = "API only · no Claude subscription";
+"wizard.org_kind.unknown" = "Unknown";
+"wizard.no_claude_organizations" = "This account has no organizations with a Claude subscription to track.";
 "wizard.review_config" = "Review Configuration";
 "wizard.confirm_settings" = "Confirm your settings before saving";
 "wizard.key_will_update" = "Session key will be updated";

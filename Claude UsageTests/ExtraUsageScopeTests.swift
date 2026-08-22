@@ -286,6 +286,205 @@ final class ExtraUsageScopeTests: XCTestCase {
         )
     }
 
+    // MARK: - Organization picker
+    //
+    // The five organizations below are the exact payload the maintainer's
+    // claude.ai session key returns (2026-08-22). Three of them are named
+    // "Revenium"; picking the wrong one leaves the popover permanently
+    // reading "Usage is currently unavailable".
+
+    /// Server order, verbatim.
+    private var liveOrganizations: [ClaudeAPIService.AccountInfo] {
+        [
+            .init(
+                uuid: "c8f80080-51bc-46fb-b04f-69eabd48e1ec",
+                name: "Revenium",
+                capabilities: ["api"]
+            ),
+            .init(
+                uuid: "a3bd5eb8-7a36-4125-b309-e1cbc95fde5e",
+                name: "Revenium",
+                capabilities: ["api"]
+            ),
+            .init(
+                uuid: "ef142542-c027-47d7-9b93-80f8415554a9",
+                name: "jason.cumberland@revenium.io's Organization",
+                capabilities: ["chat", "claude_max"]
+            ),
+            .init(
+                uuid: "665a6475-2eb6-4da8-8379-d5529d283568",
+                name: "Revenium",
+                capabilities: ["chat", "raven"],
+                ravenType: "team"
+            ),
+            .init(
+                uuid: "9d473653-df6e-4313-9a9c-2128ab10ad0a",
+                name: "Revenium-Enterprise",
+                capabilities: [
+                    "raven_enterprise", "raven", "chat",
+                    "analytics_api", "compliance_logging"
+                ],
+                ravenType: "enterprise"
+            )
+        ]
+    }
+
+    /// The name alone cannot tell three "Revenium" rows apart, so the kind
+    /// label is what the picker is relying on.
+    func testDescriptorNamesTheKindOfEveryLiveOrganization() {
+        XCTAssertEqual(
+            liveOrganizations.map(ClaudeOrganizationClassifier.descriptor),
+            [
+                "API only · no Claude subscription",
+                "API only · no Claude subscription",
+                "Personal · Max",
+                "Team",
+                "Enterprise"
+            ]
+        )
+    }
+
+    /// An Enterprise organization also carries "raven"; checking Team first
+    /// would label it "Team".
+    func testDescriptorPrefersEnterpriseOverTeamWhenBothSignalsArePresent() {
+        XCTAssertEqual(
+            ClaudeOrganizationClassifier.descriptor(
+                .init(
+                    uuid: "org-ent",
+                    name: "Acme",
+                    capabilities: ["raven_enterprise", "raven", "chat"],
+                    ravenType: "enterprise"
+                )
+            ),
+            "Enterprise"
+        )
+    }
+
+    /// A chat organization with no recognized plan capability is still
+    /// selectable, so it gets a neutral label rather than the API-only one.
+    func testDescriptorFallsBackToUnknownForAnUnrecognizedChatOrganization() {
+        XCTAssertEqual(
+            ClaudeOrganizationClassifier.descriptor(
+                .init(uuid: "org-x", name: "Acme", capabilities: ["chat"])
+            ),
+            "Unknown"
+        )
+    }
+
+    func testDescriptorLabelsAProOrganization() {
+        XCTAssertEqual(
+            ClaudeOrganizationClassifier.descriptor(
+                .init(
+                    uuid: "org-pro",
+                    name: "someone@example.com's Organization",
+                    capabilities: ["chat", "claude_pro"]
+                )
+            ),
+            "Personal · Pro"
+        )
+    }
+
+    /// Usable organizations first, server order kept inside each group, and
+    /// nothing dropped: an unusable row stays visible so the account holder
+    /// can see why it cannot be chosen.
+    func testPickerOrderPutsChatOrganizationsFirstAndKeepsServerOrder() {
+        XCTAssertEqual(
+            ClaudeOrganizationClassifier.pickerOrder(liveOrganizations)
+                .map(\.uuid),
+            [
+                "ef142542-c027-47d7-9b93-80f8415554a9",
+                "665a6475-2eb6-4da8-8379-d5529d283568",
+                "9d473653-df6e-4313-9a9c-2128ab10ad0a",
+                "c8f80080-51bc-46fb-b04f-69eabd48e1ec",
+                "a3bd5eb8-7a36-4125-b309-e1cbc95fde5e"
+            ]
+        )
+    }
+
+    /// The defect: the first row was a console organization, and it was the
+    /// one that got picked.
+    func testDefaultSelectionIsTheFirstChatOrganizationNotTheFirstRow() {
+        XCTAssertEqual(
+            ClaudeOrganizationClassifier.defaultSelection(liveOrganizations),
+            "ef142542-c027-47d7-9b93-80f8415554a9"
+        )
+    }
+
+    func testDefaultSelectionIsNilWhenNoOrganizationCanCarryUsage() {
+        let consoleOnly = Array(liveOrganizations.prefix(2))
+
+        XCTAssertNil(ClaudeOrganizationClassifier.defaultSelection(consoleOnly))
+        XCTAssertFalse(
+            ClaudeOrganizationClassifier.hasSelectableOrganization(consoleOnly)
+        )
+    }
+
+    /// The save guard must hold even if the UI failed to disable the row.
+    func testSaveIsRefusedForAConsoleOrganization() {
+        XCTAssertFalse(
+            ClaudeOrganizationClassifier.permitsSelection(
+                of: "c8f80080-51bc-46fb-b04f-69eabd48e1ec",
+                from: liveOrganizations
+            )
+        )
+        XCTAssertTrue(
+            ClaudeOrganizationClassifier.permitsSelection(
+                of: "665a6475-2eb6-4da8-8379-d5529d283568",
+                from: liveOrganizations
+            )
+        )
+    }
+
+    /// No selection, and an id from outside the offered list, are both
+    /// refused: the list under test is the only legitimate source of the id.
+    func testSaveIsRefusedWithoutAMatchingOfferedOrganization() {
+        XCTAssertFalse(
+            ClaudeOrganizationClassifier.permitsSelection(
+                of: nil,
+                from: liveOrganizations
+            )
+        )
+        XCTAssertFalse(
+            ClaudeOrganizationClassifier.permitsSelection(
+                of: "not-an-offered-organization",
+                from: liveOrganizations
+            )
+        )
+    }
+
+    /// The kind labels are the whole disambiguation, so pin the English text
+    /// rather than only the key lookup.
+    func testEnglishCatalogCarriesEveryOrganizationKindLabel() throws {
+        let path = try XCTUnwrap(
+            Bundle.main.path(forResource: "en", ofType: "lproj")
+        )
+        let english = try XCTUnwrap(Bundle(path: path))
+
+        let expected = [
+            "wizard.org_kind.team": "Team",
+            "wizard.org_kind.enterprise": "Enterprise",
+            "wizard.org_kind.personal_max": "Personal · Max",
+            "wizard.org_kind.personal_pro": "Personal · Pro",
+            "wizard.org_kind.api_only": "API only · no Claude subscription",
+            "wizard.org_kind.unknown": "Unknown"
+        ]
+        for (key, value) in expected {
+            XCTAssertEqual(
+                english.localizedString(forKey: key, value: nil, table: nil),
+                value,
+                "catalog value for \(key)"
+            )
+        }
+        XCTAssertFalse(
+            english.localizedString(
+                forKey: "wizard.no_claude_organizations",
+                value: nil,
+                table: nil
+            ) == "wizard.no_claude_organizations",
+            "the no-subscription explanation must be translated, not a raw key"
+        )
+    }
+
     // MARK: - Labels
 
     /// Charlie's reported figure, and the one reproduced on our own team.

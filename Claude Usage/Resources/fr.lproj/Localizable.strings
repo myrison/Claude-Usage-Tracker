@@ -594,6 +594,13 @@
 "wizard.organization_id" = "ID : %@";
 "wizard.select_organization" = "Sélectionner l'Organisation";
 "wizard.choose_organization" = "Choisissez l'organisation à suivre";
+"wizard.org_kind.team" = "Team";
+"wizard.org_kind.enterprise" = "Enterprise";
+"wizard.org_kind.personal_max" = "Personnel · Max";
+"wizard.org_kind.personal_pro" = "Personnel · Pro";
+"wizard.org_kind.api_only" = "API uniquement · aucun abonnement Claude";
+"wizard.org_kind.unknown" = "Inconnu";
+"wizard.no_claude_organizations" = "Ce compte n'a aucune organisation avec un abonnement Claude à suivre.";
 "wizard.review_config" = "Vérifier la Configuration";
 "wizard.confirm_settings" = "Confirmez vos paramètres avant d'enregistrer";
 "wizard.key_will_update" = "La clé de session sera mise à jour";

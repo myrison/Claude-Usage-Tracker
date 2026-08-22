@@ -614,6 +614,13 @@
 "wizard.organization_id" = "ID：%@";
 "wizard.select_organization" = "組織を選択";
 "wizard.choose_organization" = "追跡する組織を選択";
+"wizard.org_kind.team" = "Team";
+"wizard.org_kind.enterprise" = "Enterprise";
+"wizard.org_kind.personal_max" = "個人 · Max";
+"wizard.org_kind.personal_pro" = "個人 · Pro";
+"wizard.org_kind.api_only" = "APIのみ · Claudeサブスクリプションなし";
+"wizard.org_kind.unknown" = "不明";
+"wizard.no_claude_organizations" = "このアカウントには、追跡できるClaudeサブスクリプションを持つ組織がありません。";
 "wizard.review_config" = "設定を確認";
 "wizard.confirm_settings" = "保存する前に設定を確認してください";
 "wizard.key_will_update" = "セッションキーが更新されます";

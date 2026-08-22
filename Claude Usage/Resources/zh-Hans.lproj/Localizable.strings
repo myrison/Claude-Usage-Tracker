@@ -606,6 +606,13 @@
 "wizard.organization_id" = "ID：%@";
 "wizard.select_organization" = "选择组织";
 "wizard.choose_organization" = "选择要跟踪的组织";
+"wizard.org_kind.team" = "Team";
+"wizard.org_kind.enterprise" = "Enterprise";
+"wizard.org_kind.personal_max" = "个人 · Max";
+"wizard.org_kind.personal_pro" = "个人 · Pro";
+"wizard.org_kind.api_only" = "仅 API · 无 Claude 订阅";
+"wizard.org_kind.unknown" = "未知";
+"wizard.no_claude_organizations" = "此账户没有可跟踪的 Claude 订阅组织。";
 "wizard.review_config" = "审查配置";
 "wizard.confirm_settings" = "保存前确认您的设置";
 "wizard.key_will_update" = "会话密钥将被更新";

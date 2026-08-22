@@ -597,6 +597,13 @@
 "wizard.organization_id" = "ID: %@";
 "wizard.select_organization" = "Seleccionar Organización";
 "wizard.choose_organization" = "Elige qué organización rastrear";
+"wizard.org_kind.team" = "Team";
+"wizard.org_kind.enterprise" = "Enterprise";
+"wizard.org_kind.personal_max" = "Personal · Max";
+"wizard.org_kind.personal_pro" = "Personal · Pro";
+"wizard.org_kind.api_only" = "Solo API · sin suscripción a Claude";
+"wizard.org_kind.unknown" = "Desconocido";
+"wizard.no_claude_organizations" = "Esta cuenta no tiene organizaciones con una suscripción a Claude para monitorizar.";
 "wizard.review_config" = "Revisar Configuración";
 "wizard.confirm_settings" = "Confirma tu configuración antes de guardar";
 "wizard.key_will_update" = "La clave de sesión será actualizada";
