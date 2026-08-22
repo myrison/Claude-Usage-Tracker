@@ -57,6 +57,13 @@ class ClaudeAPIService: APIServiceProtocol {
     private let sessionKeyValidator: SessionKeyValidator
     private let profileManager: ProfileManager
     private let systemCredentialsReader: () throws -> String?
+
+    /// Persists a renewed CLI credential. Injectable for the same reason
+    /// `systemCredentialsReader` is: it is the one step of the renewal path
+    /// that reaches the real credential store, so without a seam here a test
+    /// that exercises renewal writes to the developer's own Keychain and
+    /// triggers a macOS authorization prompt.
+    private let renewedCredentialWriter: (String, UUID) throws -> Void
     let baseURL = Constants.APIEndpoints.claudeBase
     let consoleBaseURL = Constants.APIEndpoints.consoleBase
 
@@ -66,7 +73,8 @@ class ClaudeAPIService: APIServiceProtocol {
         sessionKeyPath: URL? = nil,
         sessionKeyValidator: SessionKeyValidator = SessionKeyValidator(),
         profileManager: ProfileManager? = nil,
-        systemCredentialsReader: (() throws -> String?)? = nil
+        systemCredentialsReader: (() throws -> String?)? = nil,
+        renewedCredentialWriter: ((String, UUID) throws -> Void)? = nil
     ) {
         // Default path: ~/.claude-session-key
         self.sessionKeyPath = sessionKeyPath ?? Constants.ClaudePaths.homeDirectory
@@ -76,6 +84,12 @@ class ClaudeAPIService: APIServiceProtocol {
         self.systemCredentialsReader =
             systemCredentialsReader
             ?? { try ClaudeCodeSyncService.shared.readSystemCredentials() }
+        self.renewedCredentialWriter =
+            renewedCredentialWriter
+            ?? {
+                try ClaudeCodeSyncService.shared
+                    .saveRefreshedCredentials($0, for: $1)
+            }
     }
 
     // MARK: - Session Key Management
@@ -575,10 +589,20 @@ class ClaudeAPIService: APIServiceProtocol {
     /// popover can tell someone to sign in rather than to re-sync.
     private var expiredCLILogins: Set<Int> = []
 
-    /// Credentials renewed during this app run, keyed by profile. The durable
-    /// store holds the same value; this keeps the run from re-reading the
-    /// expired copy still held in memory by the profile list.
-    private var renewedCLICredentials: [UUID: String] = [:]
+    /// Credentials renewed during this app run, keyed by profile, each paired
+    /// with the fingerprint of the stored credential it was renewed *from*.
+    /// The durable store holds the same value; this keeps the run from
+    /// re-reading the expired copy still held in memory by the profile list.
+    ///
+    /// The base fingerprint is what makes a re-link visible. Renewing a token
+    /// does not change which account a profile is linked to, but re-linking
+    /// does — and without this, the renewed copy of the OLD account's login
+    /// went on being preferred over the replacement for the rest of the run.
+    /// The replacement's fingerprint then never reached
+    /// `cliOrganizationID(for:credential:)`, so the invalidation there could
+    /// not fire and the profile kept the previous account's identity until
+    /// the app restarted.
+    private var renewedCLICredentials: [UUID: (base: Int, credentialsJSON: String)] = [:]
 
     /// The CLI credential each profile's organization was last resolved
     /// from. An absent entry means the lookup has not run yet this app run.
@@ -631,8 +655,21 @@ class ClaudeAPIService: APIServiceProtocol {
             return .notApplicable
         }
 
-        let stored = renewedCLICredentials[profile.id]
-            ?? profile.cliCredentialsJSON
+        // A renewal is only good for the credential it was derived from. If
+        // the profile has since been re-linked to a different Claude Code
+        // account, its stored credential no longer matches and the renewed
+        // copy is discarded rather than allowed to shadow the replacement.
+        let stored: String?
+        if let renewal = renewedCLICredentials[profile.id] {
+            if renewal.base == profile.cliCredentialsJSON?.hashValue {
+                stored = renewal.credentialsJSON
+            } else {
+                renewedCLICredentials[profile.id] = nil
+                stored = profile.cliCredentialsJSON
+            }
+        } else {
+            stored = profile.cliCredentialsJSON
+        }
         guard let stored else {
             LoggingService.shared.logDebug(
                 "Profile '\(profile.name)' has no stored Claude Code "
@@ -732,7 +769,7 @@ class ClaudeAPIService: APIServiceProtocol {
         expiredCLILogins.remove(fingerprint)
 
         do {
-            try sync.saveRefreshedCredentials(refreshed, for: profile.id)
+            try renewedCredentialWriter(refreshed, profile.id)
         } catch {
             // The stored credential is untouched. The renewed token still
             // works for this run, so use it rather than discarding a
@@ -743,7 +780,14 @@ class ClaudeAPIService: APIServiceProtocol {
                 + "unchanged."
             )
         }
-        renewedCLICredentials[profile.id] = refreshed
+        // Keyed on the profile's own stored credential, not `credentialsJSON`
+        // — that argument may already be a renewal from earlier in this run,
+        // and chaining fingerprints would lose the link back to the account
+        // the profile is actually bound to.
+        renewedCLICredentials[profile.id] = (
+            base: profile.cliCredentialsJSON?.hashValue ?? credentialsJSON.hashValue,
+            credentialsJSON: refreshed
+        )
         // A rotated token is not a different account, so the organization
         // already resolved for this profile still stands.
         if cliOrganizationCredentialHashes[profile.id] == fingerprint {

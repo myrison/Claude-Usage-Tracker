@@ -691,6 +691,142 @@ final class ExtraUsageScopeTests: XCTestCase {
         XCTAssertEqual(usage.personalCostUsed, 321)
     }
 
+    /// A renewed token must not outlive the account it belongs to.
+    ///
+    /// Renewing a token and re-linking a profile look alike from inside the
+    /// service — both end with a different access token in play — but they
+    /// mean opposite things. Renewal keeps the same account; re-linking
+    /// replaces it. The run-scoped renewal cache used to win unconditionally,
+    /// so a profile that renewed and was then pointed at a different Claude
+    /// Code account went on presenting the previous account's token until the
+    /// app restarted, and the replacement's fingerprint never reached the
+    /// organization guard that would have caught the mismatch.
+    @MainActor
+    func testARenewedTokenIsDiscardedWhenTheProfileIsRelinked() async throws {
+        let organizationID = "org-renew-then-relink"
+        let store = makeIsolatedProfileStore()
+
+        var profile = Profile(
+            name: "Renewed then re-linked",
+            organizationId: organizationID,
+            organizationIsPersonal: false,
+            cliCredentialsJSON: Self.expiredCLICredentialsJSON(
+                accessToken: "old-account"
+            ),
+            hasCliAccount: true
+        )
+        try seedProfilesForTesting([profile], in: store)
+
+        let manager = ProfileManager(profileStore: store)
+        manager.profiles = [profile]
+        // The renewal path persists the new token. Left to its default that
+        // write reaches the real credential store and makes macOS prompt the
+        // developer running the suite, so it is captured here instead — the
+        // point under test is which credential the NEXT request presents,
+        // not that persistence happened.
+        nonisolated(unsafe) var persisted: [String] = []
+        let service = ClaudeAPIService(
+            profileManager: manager,
+            systemCredentialsReader: { nil },
+            renewedCredentialWriter: { json, _ in persisted.append(json) }
+        )
+
+        // First refresh: the stored token has expired, so it is renewed and
+        // the renewal is cached for the rest of the run.
+        StubPersonalUsageEndpointsURLProtocol.tokenRefreshResponse = (
+            200,
+            Data("""
+            {"access_token":"old-account-renewed","expires_in":28800}
+            """.utf8)
+        )
+        StubPersonalUsageEndpointsURLProtocol.profileLookupResponses = [
+            "old-account-renewed": (200, Data("""
+            {"organization":{"uuid":"\(organizationID)"}}
+            """.utf8))
+        ]
+        StubPersonalUsageEndpointsURLProtocol.memberUsageResponses = [
+            "old-account-renewed": (200, Data("""
+            {"extra_usage":{"is_enabled":true,"monthly_limit":5000,
+             "used_credits":111,"utilization":null,"currency":"USD"}}
+            """.utf8))
+        ]
+        StubPersonalUsageEndpointsURLProtocol.install()
+        defer { StubPersonalUsageEndpointsURLProtocol.reset() }
+
+        let first = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: organizationID,
+            profile: profile
+        )
+        XCTAssertEqual(
+            first.personalCostUsed,
+            111,
+            "the renewal itself must work, or the rest of this test proves "
+                + "nothing"
+        )
+        StubPersonalUsageEndpointsURLProtocol.requestedAccessTokens = []
+
+        // Re-link to a different Claude Code account. Its token is current,
+        // so nothing needs renewing — the only question is whether the
+        // cached renewal of the PREVIOUS account still shadows it.
+        profile.cliCredentialsJSON =
+            Self.cliCredentialsJSON(accessToken: "new-account")
+        StubPersonalUsageEndpointsURLProtocol.profileLookupResponses[
+            "new-account"
+        ] = (200, Data("""
+        {"organization":{"uuid":"\(organizationID)"}}
+        """.utf8))
+        StubPersonalUsageEndpointsURLProtocol.memberUsageResponses[
+            "new-account"
+        ] = (200, Data("""
+        {"extra_usage":{"is_enabled":true,"monthly_limit":5000,
+         "used_credits":222,"utilization":null,"currency":"USD"}}
+        """.utf8))
+
+        let second = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: organizationID,
+            profile: profile
+        )
+
+        XCTAssertFalse(
+            StubPersonalUsageEndpointsURLProtocol.requestedAccessTokens
+                .contains("old-account-renewed"),
+            "a re-linked profile must not keep presenting the renewed token "
+                + "of the account it was unlinked from"
+        )
+        XCTAssertTrue(
+            StubPersonalUsageEndpointsURLProtocol.requestedAccessTokens
+                .contains("new-account"),
+            "the replacement credential must actually be used"
+        )
+        XCTAssertEqual(
+            persisted.count,
+            1,
+            "exactly one renewal should have been persisted, and to the "
+                + "injected writer rather than the real credential store"
+        )
+        XCTAssertEqual(
+            second.personalCostUsed,
+            222,
+            "the figure shown must be the newly linked account's, not the "
+                + "one carried over from the previous account"
+        )
+    }
+
+    /// A credential whose token expired an hour ago, so the renewal path runs.
+    private static func expiredCLICredentialsJSON(
+        accessToken: String
+    ) -> String {
+        let expiresAt =
+            Date().addingTimeInterval(-3600).timeIntervalSince1970 * 1000
+        return """
+        {"claudeAiOauth":{"accessToken":"\(accessToken)",\
+        "refreshToken":"fixture-refresh-token","expiresAt":\(expiresAt),\
+        "scopes":["user:inference"],"subscriptionType":"max"}}
+        """
+    }
+
     private static func cliCredentialsJSON(accessToken: String) -> String {
         let expiresAt =
             Date().addingTimeInterval(8 * 3600).timeIntervalSince1970 * 1000
@@ -787,6 +923,11 @@ private nonisolated final class StubPersonalUsageEndpointsURLProtocol: URLProtoc
     nonisolated(unsafe) static var profileLookupResponses: [String: (Int, Data)] = [:]
     nonisolated(unsafe) static var memberUsageResponses: [String: (Int, Data)] = [:]
     nonisolated(unsafe) static var requestedAccessTokens: [String] = []
+    /// The token endpoint's answer, if a test exercises renewal. Renewal is
+    /// a different host from the two CLI read endpoints, so it needs its own
+    /// slot rather than another access-token-keyed table — the request that
+    /// renews a token does not carry one.
+    nonisolated(unsafe) static var tokenRefreshResponse: (Int, Data)?
 
     static func install() {
         isActive = true
@@ -800,11 +941,13 @@ private nonisolated final class StubPersonalUsageEndpointsURLProtocol: URLProtoc
         profileLookupResponses = [:]
         memberUsageResponses = [:]
         requestedAccessTokens = []
+        tokenRefreshResponse = nil
     }
 
     override class func canInit(with request: URLRequest) -> Bool {
         guard isActive, let host = request.url?.host else { return false }
-        return ["claude.ai", "api.anthropic.com"].contains(host)
+        return ["claude.ai", "api.anthropic.com", "platform.claude.com"]
+            .contains(host)
     }
 
     override class func canonicalRequest(for request: URLRequest) -> URLRequest {
@@ -819,7 +962,10 @@ private nonisolated final class StubPersonalUsageEndpointsURLProtocol: URLProtoc
 
         let statusCode: Int
         let body: Data
-        if url.host == "claude.ai" {
+        if url.host == "platform.claude.com" {
+            (statusCode, body) =
+                Self.tokenRefreshResponse ?? (503, Data("{}".utf8))
+        } else if url.host == "claude.ai" {
             // Organization-scoped figures are not under test here; an empty
             // body is enough to let the org-wide fetch complete.
             statusCode = 200
