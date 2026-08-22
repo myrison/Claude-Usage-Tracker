@@ -327,9 +327,11 @@ notarized, appcast, and Homebrew release gates, and
 
 ## Getting Help
 
-- **Questions?** Open an [Issue](https://github.com/revenium/RevvyTach/issues)
-- **Found a bug?** Open an [Issue](https://github.com/revenium/RevvyTach/issues)
-- **Need product support?** Email [support@revenium.io](mailto:support@revenium.io)
+RevvyTach is a Revenium Labs project. Questions, bug reports, and feature
+requests are handled on a best-effort basis; there is no formal support SLA.
+
+- **Questions, bugs, or feature requests?** Open an [Issue](https://github.com/revenium/RevvyTach/issues) or [talk with us on Discord](https://discord.gg/J2DbmjZ2nA).
+- **Security vulnerability?** Do not open a public issue; follow the private reporting instructions in [SECURITY.md](SECURITY.md).
 
 ---
 
