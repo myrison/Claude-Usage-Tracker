@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.6] - 2026-08-22
+
+### Fixed
+
+- **A member of a Team or Enterprise organisation now sees their own extra-usage
+  spend, with the organisation's shown separately beneath it.** The row
+  previously showed the whole company's spend directly under that person's own
+  session and weekly bars, where it reads as theirs — an admin reported looking
+  at $2,593.16 that was not his. The same applied to the credit balance beside
+  it. On a personal Max or Pro account the organisation is the person, so the
+  figure was already correct there and this changes nothing.
+
+- **A profile now reads the Claude Code login it is actually linked to.** Every
+  profile previously read one shared credential, and a file holding no login at
+  all was accepted as one, so the stored login could never be used — invisible
+  until now because usage comes from a separate per-profile browser sign-in.
+
+- **The organisation picker says what each organisation is** — Team, Enterprise,
+  Personal · Max, or API only — and will no longer select one that can never
+  report usage.
+
+- **When a member's own figure cannot be shown, the app says which sign-in is
+  missing and what fixes it**, rather than showing nothing. An expired Claude
+  Code login cannot be repaired by re-syncing, so Settings offers the sign-in
+  command directly.
+
+- **A stored Claude Code token is renewed while the app runs** instead of going
+  stale after a few hours, and is discarded when the profile is re-linked to a
+  different account.
+
+- The **Copy button** in Settings → CLI Account no longer stays on "Copied"
+  permanently after one click.
+
 ## [4.0.5] - 2026-08-20
 
 ### Added
