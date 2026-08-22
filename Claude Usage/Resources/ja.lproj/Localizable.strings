@@ -1290,3 +1290,5 @@
 "personal.session_key_validated" = "セッションキーを検証しました";
 "menubar.overage_balance" = "Credit Balance";
 "menubar.overage_balance_organization" = "Credit Balance · Organization";
+"popover.extra_usage.connect_account" = "これは組織全体の合計です。自分の分を表示するには Claude Code アカウントを接続してください。";
+"cli.connect_extra_usage_hint" = "自分の追加使用を表示するには Claude Code アカウントを接続してください。管理者の場合は、既定で組織の分が表示されます。";

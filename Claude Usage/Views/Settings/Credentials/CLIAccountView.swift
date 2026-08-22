@@ -40,6 +40,16 @@ struct CLIAccountView: View {
                     subtitle: "cli.subtitle".localized
                 )
 
+                // Says what linking an account buys, since the popover's
+                // extra-usage row is where most people notice it is missing.
+                Text("cli.connect_extra_usage_hint".localized)
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(
+                        "cli.connect_extra_usage_hint"
+                    )
+
                 if let profile = profileManager.activeClaudeProfile {
                     if profileManager.displayMode == .multi {
                         // Multi-profile mode: show linking flow

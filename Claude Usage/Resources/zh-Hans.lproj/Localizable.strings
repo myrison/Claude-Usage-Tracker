@@ -1286,3 +1286,5 @@
 "personal.session_key_validated" = "会话密钥已验证";
 "menubar.overage_balance" = "Credit Balance";
 "menubar.overage_balance_organization" = "Credit Balance · Organization";
+"popover.extra_usage.connect_account" = "这是您所在组织的总量。连接您的 Claude Code 账号即可查看自己的用量。";
+"cli.connect_extra_usage_hint" = "连接您的 Claude Code 账号即可查看自己的额外用量。如果您是管理员，默认显示的是组织的用量。";

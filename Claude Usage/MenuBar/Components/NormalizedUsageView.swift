@@ -1090,6 +1090,22 @@ struct NormalizedUsageView: View {
     let displayPreferences: NormalizedUsageDisplayPreferences
     let timeDisplay: PopoverTimeDisplay
     let now: Date
+    /// Opens Settings → CLI Account. Absent in surfaces that have nowhere to
+    /// navigate to, which also hides the invitation to connect an account.
+    var onConnectCLIAccount: (() -> Void)?
+
+    /// The organization's extra usage is on screen and the viewer's own is
+    /// not, so the popover explains whose number this is and how to get
+    /// theirs. Claude-specific, and driven by the data rather than by
+    /// provider identity.
+    private var offersCLIAccountInvitation: Bool {
+        guard onConnectCLIAccount != nil,
+              let usage = presentation.legacyClaudeUsage else {
+            return false
+        }
+        return ClaudeUsageProviderAdapter
+            .offersPersonalExtraUsageInvitation(for: usage)
+    }
 
     var body: some View {
         VStack(
@@ -1139,6 +1155,11 @@ struct NormalizedUsageView: View {
                     now: now
                 )
             }
+            if offersCLIAccountInvitation, let onConnectCLIAccount {
+                ConnectCLIAccountInvitationView(
+                    action: onConnectCLIAccount
+                )
+            }
             if let summary = presentation.summary {
                 NormalizedUsageSummaryView(
                     summary: summary,
@@ -1154,6 +1175,39 @@ struct NormalizedUsageView: View {
                 )
             }
         }
+    }
+}
+
+/// Sits directly beneath the organization's extra-usage row, in the same
+/// inline-notice style as the empty states, and opens the screen where a
+/// Claude Code account gets connected.
+private struct ConnectCLIAccountInvitationView: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "person.crop.circle.badge.plus")
+                    .foregroundColor(.secondary)
+                Text(
+                    NormalizedUsageStrings.localized(
+                        "popover.extra_usage.connect_account",
+                        default: "This is your organization's total. "
+                            + "Connect your Claude Code account to see "
+                            + "your own."
+                    )
+                )
+                .font(PopoverDesign.metaFont)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .popoverCard()
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("popover.extra_usage.connect_account")
     }
 }
 

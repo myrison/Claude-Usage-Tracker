@@ -551,6 +551,258 @@ class ClaudeAPIService: APIServiceProtocol {
             : .organization
     }
 
+    // MARK: - Member-scoped extra usage
+
+    /// `api.anthropic.com` endpoints reached with the CLI OAuth token. These
+    /// describe the signed-in member; the claude.ai `/organizations/...`
+    /// endpoints above describe the whole organization.
+    private static let oauthUsageURL =
+        "https://api.anthropic.com/api/oauth/usage"
+    private static let oauthProfileURL =
+        "https://api.anthropic.com/api/oauth/profile"
+
+    /// Credentials whose renewal already failed during this app run, so a
+    /// dead refresh token costs one request rather than one per refresh tick.
+    private var failedTokenRefreshes: Set<Int> = []
+
+    /// Credentials renewed during this app run, keyed by profile. The durable
+    /// store holds the same value; this keeps the run from re-reading the
+    /// expired copy still held in memory by the profile list.
+    private var renewedCLICredentials: [UUID: String] = [:]
+
+    /// The CLI credential each profile's organization was last resolved
+    /// from. An absent entry means the lookup has not run yet this app run.
+    private var cliOrganizationCredentialHashes: [UUID: Int] = [:]
+
+    /// Profiles whose organization lookup already failed this app run.
+    private var failedCLIOrganizationLookups: Set<UUID> = []
+
+    /// The signed-in member's own extra usage, or nil when it cannot be
+    /// established for the organization currently on screen.
+    ///
+    /// Nil is the normal answer in several ordinary situations — no CLI
+    /// login, extra usage switched off for that member, a login belonging to
+    /// a different organization — and the popover simply shows no personal
+    /// figure in all of them.
+    private func personalExtraUsage(
+        forOrganization organizationId: String
+    ) async -> OAuthUsageResponse.ExtraUsage? {
+        // Matched on the organization alone, like `resolveExtraUsageScope`:
+        // a profile carrying a claude.ai organization is a Claude profile by
+        // construction.
+        guard let profile = profileManager.profiles.first(
+            where: { $0.organizationId == organizationId }
+        ) else { return nil }
+
+        let stored = renewedCLICredentials[profile.id]
+            ?? profile.cliCredentialsJSON
+        guard let stored else { return nil }
+
+        guard let credential = await usableCLICredential(
+            for: profile,
+            credentialsJSON: stored
+        ) else { return nil }
+
+        guard let cliOrganizationId = await cliOrganizationID(
+            for: profile,
+            credential: credential
+        ) else { return nil }
+
+        // The guard this whole path exists for. One person can hold two CLI
+        // logins under the same email — one on their company's team, one on
+        // a personal subscription — so an email or account match proves
+        // nothing. Only the organization does.
+        guard cliOrganizationId == organizationId else {
+            LoggingService.shared.logWarning(
+                "The linked Claude Code account belongs to organization "
+                + "\(cliOrganizationId) but this profile is showing "
+                + "organization \(organizationId); skipping the member's own "
+                + "extra usage rather than showing one context's figure under "
+                + "the other's label."
+            )
+            return nil
+        }
+
+        guard let data = await performOAuthRequest(
+            urlString: Self.oauthUsageURL,
+            accessToken: credential.accessToken
+        ) else { return nil }
+
+        guard let usage = try? JSONDecoder().decode(
+            OAuthUsageResponse.self,
+            from: data
+        ) else {
+            LoggingService.shared.logWarning(
+                "Could not read the member's extra usage response."
+            )
+            return nil
+        }
+
+        guard let extraUsage = usage.extraUsage,
+              extraUsage.isEnabled == true else { return nil }
+        return extraUsage
+    }
+
+    /// A CLI credential with a token that is actually usable right now.
+    ///
+    /// The stored credential is a snapshot taken when the profile was last
+    /// synced, and these tokens last hours, so a menu bar app left running
+    /// goes stale within a day. An expired one is renewed once per credential
+    /// per app run; a failed renewal leaves the stored credential exactly as
+    /// it was.
+    private func usableCLICredential(
+        for profile: Profile,
+        credentialsJSON: String
+    ) async -> (credentialsJSON: String, accessToken: String)? {
+        let sync = ClaudeCodeSyncService.shared
+        if !sync.isTokenExpired(credentialsJSON),
+           let accessToken = sync.extractAccessToken(from: credentialsJSON) {
+            return (credentialsJSON, accessToken)
+        }
+
+        let fingerprint = credentialsJSON.hashValue
+        guard !failedTokenRefreshes.contains(fingerprint) else { return nil }
+
+        guard
+            let refreshed = await ClaudeCLITokenRefresher.refreshedCredentials(
+                from: credentialsJSON
+            ),
+            let accessToken = sync.extractAccessToken(from: refreshed)
+        else {
+            failedTokenRefreshes.insert(fingerprint)
+            return nil
+        }
+
+        do {
+            try sync.saveRefreshedCredentials(refreshed, for: profile.id)
+        } catch {
+            // The stored credential is untouched. The renewed token still
+            // works for this run, so use it rather than discarding a
+            // successful renewal because persistence failed.
+            LoggingService.shared.logWarning(
+                "Could not store the renewed Claude Code token: "
+                + "\(error.localizedDescription). The saved credential is "
+                + "unchanged."
+            )
+        }
+        renewedCLICredentials[profile.id] = refreshed
+        // A rotated token is not a different account, so the organization
+        // already resolved for this profile still stands.
+        if cliOrganizationCredentialHashes[profile.id] == fingerprint {
+            cliOrganizationCredentialHashes[profile.id] = refreshed.hashValue
+        }
+        return (refreshed, accessToken)
+    }
+
+    /// The organization the CLI login belongs to.
+    ///
+    /// Resolved at most once per profile per app run, and again if the stored
+    /// credential changes: the sequential request discipline in
+    /// `fetchUsageData` exists because extra per-profile requests on every
+    /// tick contributed to 429s. The answer is cached on the profile so a
+    /// lookup that cannot be repeated (offline, expired login) still has an
+    /// answer to fall back on.
+    private func cliOrganizationID(
+        for profile: Profile,
+        credential: (credentialsJSON: String, accessToken: String)
+    ) async -> String? {
+        let fingerprint = credential.credentialsJSON.hashValue
+        if cliOrganizationCredentialHashes[profile.id] == fingerprint,
+           let cached = profile.cliOrganizationId {
+            return cached
+        }
+        guard !failedCLIOrganizationLookups.contains(profile.id) else {
+            return profile.cliOrganizationId
+        }
+
+        guard
+            let data = await performOAuthRequest(
+                urlString: Self.oauthProfileURL,
+                accessToken: credential.accessToken
+            ),
+            let response = try? JSONDecoder().decode(
+                OAuthProfileResponse.self,
+                from: data
+            ),
+            let uuid = response.organization?.uuid
+        else {
+            failedCLIOrganizationLookups.insert(profile.id)
+            LoggingService.shared.logWarning(
+                "Could not establish which organization the linked Claude "
+                + "Code account belongs to."
+            )
+            return profile.cliOrganizationId
+        }
+
+        cliOrganizationCredentialHashes[profile.id] = fingerprint
+        if profile.cliOrganizationId != uuid {
+            profileManager.updateCliOrganizationId(uuid, for: profile.id)
+        }
+        return uuid
+    }
+
+    /// A GET against an `api.anthropic.com` OAuth endpoint. Every failure is
+    /// answered with nil: none of these responses is worth failing a whole
+    /// refresh over.
+    private func performOAuthRequest(
+        urlString: String,
+        accessToken: String
+    ) async -> Data? {
+        guard let url = URL(string: urlString) else { return nil }
+        var request = buildAuthenticatedRequest(
+            url: url,
+            auth: .cliOAuth(accessToken)
+        )
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+
+        let startTime = Date()
+        do {
+            let (data, response) = try await URLSession.shared.data(
+                for: request
+            )
+            let statusCode = (response as? HTTPURLResponse)?.statusCode
+            NetworkLoggerService.shared.logRequest(
+                url: urlString,
+                method: "GET",
+                requestBody: nil,
+                responseData: nil,
+                statusCode: statusCode,
+                duration: Date().timeIntervalSince(startTime),
+                error: nil
+            )
+            guard statusCode == 200 else { return nil }
+            return data
+        } catch {
+            NetworkLoggerService.shared.logRequest(
+                url: urlString,
+                method: "GET",
+                requestBody: nil,
+                responseData: nil,
+                statusCode: nil,
+                duration: Date().timeIntervalSince(startTime),
+                error: error
+            )
+            return nil
+        }
+    }
+
+    /// Copies a member's extra usage onto the usage record, leaving the
+    /// fields nil whenever the figure could not be established.
+    private func applyPersonalExtraUsage(
+        to usage: inout ClaudeUsage,
+        organizationId: String
+    ) async {
+        guard let extraUsage = await personalExtraUsage(
+            forOrganization: organizationId
+        ),
+        let used = extraUsage.usedCredits,
+        let limit = extraUsage.monthlyLimit else { return }
+        usage.personalCostUsed = used
+        usage.personalCostLimit = limit
+        usage.personalCostCurrency = extraUsage.currency
+    }
+
     /// Fetches usage data for a specific profile using provided credentials
     /// - Parameters:
     ///   - sessionKey: The Claude.ai session key
@@ -588,6 +840,17 @@ class ClaudeAPIService: APIServiceProtocol {
             claudeUsage.costScope = await resolveExtraUsageScope(
                 organizationId: organizationId,
                 sessionKey: sessionKey
+            )
+        }
+
+        // The member's own figure, from a CLI-authenticated endpoint. Still
+        // sequential, gated on the same preference as the organization's
+        // figure, and skipped entirely unless the linked Claude Code account
+        // belongs to the organization on screen.
+        if checkOverageLimitEnabled {
+            await applyPersonalExtraUsage(
+                to: &claudeUsage,
+                organizationId: organizationId
             )
         }
 
@@ -847,6 +1110,14 @@ class ClaudeAPIService: APIServiceProtocol {
                 claudeUsage.costScope = await resolveExtraUsageScope(
                     organizationId: orgId,
                     sessionKey: sessionKey
+                )
+            }
+
+            // See the identical call in the credentials-based overload.
+            if checkOverage {
+                await applyPersonalExtraUsage(
+                    to: &claudeUsage,
+                    organizationId: orgId
                 )
             }
 

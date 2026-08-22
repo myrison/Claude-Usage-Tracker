@@ -1290,3 +1290,5 @@
 "personal.session_key_validated" = "Chiave di sessione convalidata";
 "menubar.overage_balance" = "Credit Balance";
 "menubar.overage_balance_organization" = "Credit Balance · Organization";
+"popover.extra_usage.connect_account" = "Questo è il totale della tua organizzazione. Collega il tuo account Claude Code per vedere il tuo.";
+"cli.connect_extra_usage_hint" = "Collega il tuo account Claude Code per vedere il tuo utilizzo extra. Se sei un amministratore, per impostazione predefinita vedrai quello della tua organizzazione.";

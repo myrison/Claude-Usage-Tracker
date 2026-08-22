@@ -126,32 +126,32 @@ enum ClaudeUsageProviderAdapter {
             )
         }
 
-        if let used = usage.costUsed,
-           let limit = usage.costLimit,
-           let rawCurrency = usage.costCurrency,
-           limit > 0 {
-            let currency = try UsageCurrencyCode(rawCurrency)
-            groups.append(
-                try UsageLimitGroup(
-                    id: UsageLimitGroupID("extra-usage"),
-                    displayName: extraUsageDisplayName(for: usage.costScope),
-                    windows: [
-                        try UsageWindow(
-                            id: UsageWindowID("current"),
-                            usedPercentage: used / limit * 100,
-                            quantity: try UsageQuantity(
-                                // ClaudeUsage stores monetary values in minor
-                                // currency units; UsageCore carries display
-                                // values in major units with an explicit code.
-                                used: used / 100,
-                                limit: limit / 100,
-                                unit: .currency,
-                                currencyCode: currency
-                            )
-                        )
-                    ]
-                )
-            )
+        // The viewer's own extra usage leads, because it is the figure they
+        // came to read. The organization's follows only when we have it.
+        let personalGroup = try extraUsageGroup(
+            id: "extra-usage",
+            displayName: extraUsageDisplayName(for: .personal),
+            used: usage.personalCostUsed,
+            limit: usage.personalCostLimit,
+            rawCurrency: usage.personalCostCurrency
+        )
+        if let personalGroup {
+            groups.append(personalGroup)
+        }
+
+        // Alone, the organization's figure keeps the identifier and the
+        // scope-driven name it has always had. Beneath a personal one it is
+        // the organization's by construction, so it says so outright.
+        if let organizationGroup = try extraUsageGroup(
+            id: personalGroup == nil ? "extra-usage" : "extra-usage-organization",
+            displayName: personalGroup == nil
+                ? extraUsageDisplayName(for: usage.costScope)
+                : extraUsageDisplayName(for: .organization),
+            used: usage.costUsed,
+            limit: usage.costLimit,
+            rawCurrency: usage.costCurrency
+        ) {
+            groups.append(organizationGroup)
         }
 
         var credits: [UsageCredit] = []
@@ -177,6 +177,56 @@ enum ClaudeUsageProviderAdapter {
             sourceUpdatedAt: usage.lastUpdated,
             fetchedAt: context.fetchedAt,
             staleAt: context.staleAt
+        )
+    }
+
+    /// Whether the popover should offer to connect a Claude Code account.
+    ///
+    /// True exactly when the organization's spend is on screen and the
+    /// viewer's own is not — the case where someone reads a company-wide
+    /// number and has no way to find their own.
+    static func offersPersonalExtraUsageInvitation(
+        for usage: ClaudeUsage
+    ) -> Bool {
+        let hasOrganizationFigure = usage.costUsed != nil
+            && (usage.costLimit ?? 0) > 0
+            && usage.costCurrency != nil
+            && usage.costScope != .personal
+        let hasPersonalFigure = usage.personalCostUsed != nil
+            && (usage.personalCostLimit ?? 0) > 0
+            && usage.personalCostCurrency != nil
+        return hasOrganizationFigure && !hasPersonalFigure
+    }
+
+    /// One extra-usage group, or nil when the figure is absent or unusable.
+    private static func extraUsageGroup(
+        id: String,
+        displayName: String,
+        used: Double?,
+        limit: Double?,
+        rawCurrency: String?
+    ) throws -> UsageLimitGroup? {
+        guard let used, let limit, let rawCurrency, limit > 0 else {
+            return nil
+        }
+        return try UsageLimitGroup(
+            id: UsageLimitGroupID(id),
+            displayName: displayName,
+            windows: [
+                try UsageWindow(
+                    id: UsageWindowID("current"),
+                    usedPercentage: used / limit * 100,
+                    quantity: try UsageQuantity(
+                        // ClaudeUsage stores monetary values in minor currency
+                        // units; UsageCore carries display values in major
+                        // units with an explicit code.
+                        used: used / 100,
+                        limit: limit / 100,
+                        unit: .currency,
+                        currencyCode: try UsageCurrencyCode(rawCurrency)
+                    )
+                )
+            ]
         )
     }
 

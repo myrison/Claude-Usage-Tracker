@@ -61,6 +61,16 @@ struct ClaudeUsage: Codable, Equatable {
     /// always returned.
     var costScope: ExtraUsageScope?
 
+    /// The signed-in member's own extra usage, from the CLI-authenticated
+    /// `/api/oauth/usage` endpoint rather than the organization-scoped
+    /// claude.ai one. Nil whenever the member figure could not be obtained:
+    /// no CLI credential, a credential belonging to a different organization,
+    /// or extra usage switched off for that member. Stored in minor currency
+    /// units like `costUsed`/`costLimit`.
+    var personalCostUsed: Double?
+    var personalCostLimit: Double?
+    var personalCostCurrency: String?
+
     // Overage credit grant balance
     var overageBalance: Double?
     var overageBalanceCurrency: String?
@@ -91,6 +101,9 @@ struct ClaudeUsage: Codable, Equatable {
         costLimit: Double?,
         costCurrency: String?,
         costScope: ExtraUsageScope? = nil,
+        personalCostUsed: Double? = nil,
+        personalCostLimit: Double? = nil,
+        personalCostCurrency: String? = nil,
         overageBalance: Double? = nil,
         overageBalanceCurrency: String? = nil,
         lastUpdated: Date,
@@ -117,6 +130,9 @@ struct ClaudeUsage: Codable, Equatable {
         self.costLimit = costLimit
         self.costCurrency = costCurrency
         self.costScope = costScope
+        self.personalCostUsed = personalCostUsed
+        self.personalCostLimit = personalCostLimit
+        self.personalCostCurrency = personalCostCurrency
         self.overageBalance = overageBalance
         self.overageBalanceCurrency = overageBalanceCurrency
         self.lastUpdated = lastUpdated
@@ -150,6 +166,12 @@ struct ClaudeUsage: Codable, Equatable {
         costLimit = try container.decodeIfPresent(Double.self, forKey: .costLimit)
         costCurrency = try container.decodeIfPresent(String.self, forKey: .costCurrency)
         costScope = try container.decodeIfPresent(ExtraUsageScope.self, forKey: .costScope)
+        personalCostUsed = try container.decodeIfPresent(Double.self, forKey: .personalCostUsed)
+        personalCostLimit = try container.decodeIfPresent(Double.self, forKey: .personalCostLimit)
+        personalCostCurrency = try container.decodeIfPresent(
+            String.self,
+            forKey: .personalCostCurrency
+        )
         overageBalance = try container.decodeIfPresent(Double.self, forKey: .overageBalance)
         overageBalanceCurrency = try container.decodeIfPresent(String.self, forKey: .overageBalanceCurrency)
         lastUpdated = try container.decode(Date.self, forKey: .lastUpdated)

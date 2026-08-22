@@ -469,6 +469,28 @@ class ClaudeCodeSyncService {
         LoggingService.shared.log("✅ Applied profile CLI credentials to system: \(profileId)")
     }
 
+    /// Persists a credential blob the app renewed itself.
+    ///
+    /// Same verified Keychain write as every other credential path here, with
+    /// one deliberate difference: no change notification is posted. A token
+    /// rotation is not a change of account, and `.credentialsChanged` triggers
+    /// a usage refresh — which is what asked for the rotation in the first
+    /// place.
+    func saveRefreshedCredentials(
+        _ jsonData: String,
+        for profileId: UUID
+    ) throws {
+        guard let data = jsonData.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: data))
+                as? [String: Any] != nil else {
+            throw ClaudeCodeError.invalidJSON
+        }
+        try profileStore.saveCLIProfileCredential(jsonData, for: profileId)
+        LoggingService.shared.log(
+            "Stored a renewed CLI access token for profile: \(profileId)"
+        )
+    }
+
     /// Removes CLI credentials from profile (doesn't affect system)
     func removeFromProfile(_ profileId: UUID) throws {
         let previous = try profileStore

@@ -1640,6 +1640,19 @@ class ProfileManager: ObservableObject {
         updateProfile(profile)
     }
 
+    /// Caches the organization the profile's CLI credential belongs to.
+    ///
+    /// The CLI login can belong to a different organization than the
+    /// claude.ai session key, so this is what member-scoped figures are
+    /// checked against before they are shown under this profile.
+    func updateCliOrganizationId(_ orgId: String?, for profileId: UUID) {
+        guard var profile = profiles.first(where: { $0.id == profileId }) else {
+            return
+        }
+        profile.cliOrganizationId = orgId
+        updateProfile(profile)
+    }
+
     /// Updates API organization ID for a profile
     func updateAPIOrganizationId(_ orgId: String?, for profileId: UUID) {
         guard var profile = profiles.first(where: { $0.id == profileId }) else {
