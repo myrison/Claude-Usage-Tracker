@@ -565,6 +565,11 @@ class ClaudeAPIService: APIServiceProtocol {
     /// dead refresh token costs one request rather than one per refresh tick.
     private var failedTokenRefreshes: Set<Int> = []
 
+    /// Credentials whose renewal failed specifically because the account's
+    /// login is too old. Kept apart from the general failure set so the
+    /// popover can tell someone to sign in rather than to re-sync.
+    private var expiredCLILogins: Set<Int> = []
+
     /// Credentials renewed during this app run, keyed by profile. The durable
     /// store holds the same value; this keeps the run from re-reading the
     /// expired copy still held in memory by the profile list.
@@ -628,12 +633,13 @@ class ClaudeAPIService: APIServiceProtocol {
             for: profile,
             credentialsJSON: stored
         ) else {
+            let expired = expiredCLILogins.contains(stored.hashValue)
             LoggingService.shared.logDebug(
                 "Profile '\(profile.name)' has a Claude Code credential that "
                 + "could not be made usable; skipping the member's own extra "
-                + "usage."
+                + "usage. Login expired: \(expired)."
             )
-            return .issue(.signInUnusable)
+            return .issue(expired ? .signInExpired : .signInUnusable)
         }
 
         guard let cliOrganizationId = await cliOrganizationID(
@@ -698,15 +704,20 @@ class ClaudeAPIService: APIServiceProtocol {
         let fingerprint = credentialsJSON.hashValue
         guard !failedTokenRefreshes.contains(fingerprint) else { return nil }
 
+        let outcome = await ClaudeCLITokenRefresher.refreshOutcome(
+            from: credentialsJSON
+        )
         guard
-            let refreshed = await ClaudeCLITokenRefresher.refreshedCredentials(
-                from: credentialsJSON
-            ),
+            case .renewed(let refreshed) = outcome,
             let accessToken = sync.extractAccessToken(from: refreshed)
         else {
             failedTokenRefreshes.insert(fingerprint)
+            if case .failed(.expired) = outcome {
+                expiredCLILogins.insert(fingerprint)
+            }
             return nil
         }
+        expiredCLILogins.remove(fingerprint)
 
         do {
             try sync.saveRefreshedCredentials(refreshed, for: profile.id)

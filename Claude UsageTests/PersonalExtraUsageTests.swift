@@ -209,6 +209,16 @@ final class PersonalExtraUsageTests: XCTestCase {
             .signInUnusable
         )
 
+        // Distinct from the above: re-syncing cannot renew an expired login,
+        // so the two must never collapse into one message.
+        var expiredSignIn = organizationOnly
+        expiredSignIn.personalExtraUsageIssue = .signInExpired
+        XCTAssertEqual(
+            ClaudeUsageProviderAdapter
+                .personalExtraUsageIssueToExplain(for: expiredSignIn),
+            .signInExpired
+        )
+
         var otherOrganization = organizationOnly
         otherOrganization.personalExtraUsageIssue = .differentOrganization
         XCTAssertEqual(
@@ -541,6 +551,17 @@ final class PersonalExtraUsageTests: XCTestCase {
         )
     }
 
+    /// An expired login must be reported as expired, not as a generic
+    /// failure: the remedies are opposite and the wrong one is a dead end.
+    func testAnExpiredLoginIsReportedAsExpired() async {
+        let noRefreshToken = #"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x"}}"#
+        let outcome = await ClaudeCLITokenRefresher.refreshOutcome(
+            from: noRefreshToken,
+            session: .shared
+        )
+        XCTAssertEqual(outcome, .failed(.expired))
+    }
+
     // MARK: - Catalog
 
     func testEnglishCatalogCarriesEveryPersonalUsageMessage() throws {
@@ -562,16 +583,40 @@ final class PersonalExtraUsageTests: XCTestCase {
                 + "from Claude Code, which isn't linked to this account yet "
                 + "— add it in Settings → CLI Account."
         )
+        // An expired login and a stale copy need OPPOSITE advice. Telling
+        // someone to re-sync an expired login sends them round a loop where
+        // the button appears to work and nothing changes — observed live.
+        XCTAssertEqual(
+            english.localizedString(
+                forKey: "popover.extra_usage.cli_sign_in_expired",
+                value: nil,
+                table: nil
+            ),
+            "This is your organization's total. The Claude Code sign-in for "
+                + "this account has expired — sign in to it again to see your "
+                + "own extra usage. Settings → CLI Account shows you how."
+        )
         XCTAssertEqual(
             english.localizedString(
                 forKey: "popover.extra_usage.cli_sign_in_unusable",
                 value: nil,
                 table: nil
             ),
-            "This is your organization's total. Your Claude Code sign-in has "
-                + "stopped working, so your own extra usage can't be read — "
-                + "re-sync it in Settings → CLI Account."
+            "This is your organization's total. Your own extra usage couldn't "
+                + "be read just now — re-sync your Claude Code account in "
+                + "Settings → CLI Account."
         )
+        for key in [
+            "cli.login_expired_title",
+            "cli.login_expired_explain",
+            "cli.login_expired_then_resync"
+        ] {
+            XCTAssertNotEqual(
+                english.localizedString(forKey: key, value: nil, table: nil),
+                key,
+                "\(key) is missing from the English catalog."
+            )
+        }
         XCTAssertEqual(
             english.localizedString(
                 forKey: "popover.extra_usage.cli_other_organization",

@@ -83,7 +83,14 @@ struct ClaudeUsage: Codable, Equatable {
     enum PersonalExtraUsageIssue: String, Codable, Equatable {
         /// No Claude Code account is linked to this profile.
         case notLinked
-        /// One is linked, but its sign-in could not be used or renewed.
+        /// One is linked, but its sign-in is too old to renew. Only signing
+        /// in to that Claude Code account again fixes this — re-syncing
+        /// copies a login, it does not renew one, so advising a re-sync here
+        /// sends someone round a loop that appears to work and changes
+        /// nothing.
+        case signInExpired
+        /// One is linked and its sign-in is current, but it could not be
+        /// used this time. Re-syncing is the right remedy here.
         case signInUnusable
         /// The linked account is signed in to a different organization than
         /// the one being displayed, so its figures describe someone else's

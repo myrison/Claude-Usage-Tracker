@@ -1291,6 +1291,10 @@
 "menubar.overage_balance" = "Credit Balance";
 "menubar.overage_balance_organization" = "Credit Balance · Organization";
 "popover.extra_usage.cli_not_linked" = "これは組織全体の合計です。ご自身の追加使用量は Claude Code から取得されますが、このアカウントにはまだ連携されていません。設定 → CLI アカウントで追加してください。";
-"popover.extra_usage.cli_sign_in_unusable" = "これは組織全体の合計です。Claude Code のサインインが機能しなくなったため、ご自身の追加使用量を読み取れません。設定 → CLI アカウントで再同期してください。";
+"popover.extra_usage.cli_sign_in_expired" = "これは組織全体の合計です。このアカウントの Claude Code サインインは期限切れです。再度サインインすると、ご自身の追加使用量が表示されます。方法は「設定 → CLI アカウント」に記載されています。";
+"popover.extra_usage.cli_sign_in_unusable" = "これは組織全体の合計です。ご自身の追加使用量を今回読み取れませんでした。「設定 → CLI アカウント」で Claude Code アカウントを再同期してください。";
+"cli.login_expired_title" = "サインインの期限切れ";
+"cli.login_expired_explain" = "再同期では解決しません。再同期はこのアカウントのサインインを複製するもので、そのサインイン自体が期限切れです。ターミナルで次を実行して再度サインインしてください。";
+"cli.login_expired_then_resync" = "サインインが完了したら、ここに戻って「再同期」を押してください。";
 "popover.extra_usage.cli_other_organization" = "これは組織全体の合計です。連携されている Claude Code アカウントは別の組織に属しているため、その使用量はここには表示されません。";
 "cli.connect_extra_usage_hint" = "自分の追加使用を表示するには Claude Code アカウントを接続してください。管理者の場合は、既定で組織の分が表示されます。";

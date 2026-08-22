@@ -1200,12 +1200,20 @@ private struct PersonalExtraUsageNoticeView: View {
                     + "usage comes from Claude Code, which isn't linked to "
                     + "this account yet — add it in Settings → CLI Account."
             )
+        case .signInExpired:
+            return NormalizedUsageStrings.localized(
+                "popover.extra_usage.cli_sign_in_expired",
+                default: "This is your organization's total. The Claude Code "
+                    + "sign-in for this account has expired — sign in to it "
+                    + "again to see your own extra usage. Settings → CLI "
+                    + "Account shows you how."
+            )
         case .signInUnusable:
             return NormalizedUsageStrings.localized(
                 "popover.extra_usage.cli_sign_in_unusable",
-                default: "This is your organization's total. Your Claude Code "
-                    + "sign-in has stopped working, so your own extra usage "
-                    + "can't be read — re-sync it in Settings → CLI Account."
+                default: "This is your organization's total. Your own extra "
+                    + "usage couldn't be read just now — re-sync your Claude "
+                    + "Code account in Settings → CLI Account."
             )
         case .differentOrganization:
             return NormalizedUsageStrings.localized(
@@ -1221,7 +1229,7 @@ private struct PersonalExtraUsageNoticeView: View {
         switch issue {
         case .notLinked:
             return "person.crop.circle.badge.plus"
-        case .signInUnusable:
+        case .signInExpired, .signInUnusable:
             return "exclamationmark.triangle"
         case .differentOrganization:
             return "person.2.slash"

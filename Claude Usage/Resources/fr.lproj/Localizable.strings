@@ -1271,6 +1271,10 @@
 "menubar.overage_balance" = "Credit Balance";
 "menubar.overage_balance_organization" = "Credit Balance · Organization";
 "popover.extra_usage.cli_not_linked" = "Il s'agit du total de votre organisation. Votre propre utilisation supplémentaire provient de Claude Code, qui n'est pas encore lié à ce compte — ajoutez-le dans Réglages → Compte CLI.";
-"popover.extra_usage.cli_sign_in_unusable" = "Il s'agit du total de votre organisation. Votre connexion Claude Code ne fonctionne plus, votre utilisation supplémentaire ne peut donc pas être lue — resynchronisez-la dans Réglages → Compte CLI.";
+"popover.extra_usage.cli_sign_in_expired" = "Il s'agit du total de votre organisation. La connexion Claude Code de ce compte a expiré — reconnectez-vous pour voir votre utilisation supplémentaire. Réglages → Compte CLI vous explique comment.";
+"popover.extra_usage.cli_sign_in_unusable" = "Il s'agit du total de votre organisation. Votre utilisation supplémentaire n'a pas pu être lue à l'instant — resynchronisez votre compte Claude Code dans Réglages → Compte CLI.";
+"cli.login_expired_title" = "Connexion expirée";
+"cli.login_expired_explain" = "Une resynchronisation n'y changera rien : elle copie la connexion de ce compte, et cette connexion a expiré. Exécutez ceci dans le Terminal pour vous reconnecter.";
+"cli.login_expired_then_resync" = "Une fois connecté, revenez ici et appuyez sur Resynchroniser.";
 "popover.extra_usage.cli_other_organization" = "Il s'agit du total de votre organisation. Votre compte Claude Code lié appartient à une autre organisation, son utilisation n'est donc pas affichée ici.";
 "cli.connect_extra_usage_hint" = "Connectez votre compte Claude Code pour voir votre propre utilisation supplémentaire. Si vous êtes administrateur, celle de votre organisation s'affiche par défaut.";

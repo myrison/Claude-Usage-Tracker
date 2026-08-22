@@ -36,22 +36,61 @@ enum ClaudeCLITokenRefresher {
         return token
     }
 
-    /// Exchanges the stored refresh token for a fresh credential blob.
+    /// Why a renewal did not produce a usable credential.
     ///
-    /// - Returns: the complete replacement blob, in the same shape the rest of
-    ///   the app expects, or `nil` if anything at all went wrong.
+    /// An expired login and a failed attempt need opposite advice: the first
+    /// is fixed by signing in to that Claude Code account again, the second
+    /// by nothing the person can do. Telling someone to re-sync an expired
+    /// login sends them round a loop where the button appears to work and
+    /// changes nothing, because re-syncing copies a login, it does not renew
+    /// one.
+    enum RefreshFailure: Equatable {
+        /// The account's login is too old to renew. Signing in again fixes it.
+        case expired
+        /// Anything else: offline, a server error, a malformed credential.
+        case unavailable
+    }
+
+    enum RefreshOutcome: Equatable {
+        case renewed(String)
+        case failed(RefreshFailure)
+    }
+
+    /// Exchanges the stored refresh token for a fresh credential blob.
     static func refreshedCredentials(
         from credentialsJSON: String,
         session: URLSession = .shared,
         now: Date = Date()
     ) async -> String? {
+        switch await refreshOutcome(
+            from: credentialsJSON,
+            session: session,
+            now: now
+        ) {
+        case .renewed(let blob):
+            return blob
+        case .failed:
+            return nil
+        }
+    }
+
+    static func refreshOutcome(
+        from credentialsJSON: String,
+        session: URLSession = .shared,
+        now: Date = Date()
+    ) async -> RefreshOutcome {
         guard let refreshToken = refreshToken(in: credentialsJSON) else {
+            // A credential with no renewal token at all is one the app copied
+            // before the account had a full login stored. Signing in again is
+            // what produces one.
             LoggingService.shared.logWarning(
                 "CLI credential has no refresh token; leaving it untouched."
             )
-            return nil
+            return .failed(.expired)
         }
-        guard let url = URL(string: tokenEndpoint) else { return nil }
+        guard let url = URL(string: tokenEndpoint) else {
+            return .failed(.unavailable)
+        }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -64,7 +103,7 @@ enum ClaudeCLITokenRefresher {
         ]
         guard let httpBody = try? JSONSerialization.data(
             withJSONObject: body
-        ) else { return nil }
+        ) else { return .failed(.unavailable) }
         request.httpBody = httpBody
 
         let data: Data
@@ -77,7 +116,7 @@ enum ClaudeCLITokenRefresher {
                 + "\(error.localizedDescription). The stored credential is "
                 + "unchanged."
             )
-            return nil
+            return .failed(.unavailable)
         }
 
         guard let http = response as? HTTPURLResponse,
@@ -99,7 +138,7 @@ enum ClaudeCLITokenRefresher {
                      + " account again will renew it."
                    : "")
             )
-            return nil
+            return .failed(code == "invalid_grant" ? .expired : .unavailable)
         }
 
         guard let merged = merging(
@@ -111,9 +150,9 @@ enum ClaudeCLITokenRefresher {
                 "CLI token refresh response could not be applied. The stored "
                 + "credential is unchanged."
             )
-            return nil
+            return .failed(.unavailable)
         }
-        return merged
+        return .renewed(merged)
     }
 
     /// Rewrites a stored credential blob around a token-endpoint response.
