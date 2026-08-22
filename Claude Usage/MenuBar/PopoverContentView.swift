@@ -393,6 +393,11 @@ struct PopoverContentView: View {
                     displayPreferences: displayPreferences,
                     timeDisplay: timeDisplay,
                     now: now,
+                    // Always available: every reason a member's figure is
+                    // missing is resolved on the same screen, and hiding the
+                    // notice from an already-linked profile would bury a
+                    // broken sign-in rather than surface it. Which of the
+                    // three explanations appears is decided from the data.
                     onConnectCLIAccount: navigationActions.cliAccount
                 )
             }

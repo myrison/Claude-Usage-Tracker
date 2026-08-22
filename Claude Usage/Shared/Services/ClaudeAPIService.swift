@@ -584,29 +584,62 @@ class ClaudeAPIService: APIServiceProtocol {
     /// login, extra usage switched off for that member, a login belonging to
     /// a different organization — and the popover simply shows no personal
     /// figure in all of them.
+    /// The member's figure, or the reason it is missing. The reason reaches
+    /// the popover: "link an account" and "renew the one you have" send a
+    /// person to different actions on the same screen, and telling a linked
+    /// user to link sends them somewhere with nothing to do.
+    private enum PersonalExtraUsageOutcome {
+        case available(OAuthUsageResponse.ExtraUsage)
+        case issue(ClaudeUsage.PersonalExtraUsageIssue)
+        /// Nothing to report: no profile, or the member has extra usage off.
+        case notApplicable
+    }
+
     private func personalExtraUsage(
         forOrganization organizationId: String
-    ) async -> OAuthUsageResponse.ExtraUsage? {
+    ) async -> PersonalExtraUsageOutcome {
         // Matched on the organization alone, like `resolveExtraUsageScope`:
         // a profile carrying a claude.ai organization is a Claude profile by
         // construction.
+        // Each exit below says why. Returning nil silently made a member's
+        // figure that never arrived indistinguishable from one that is
+        // genuinely unavailable, which cost a live debugging session.
         guard let profile = profileManager.profiles.first(
             where: { $0.organizationId == organizationId }
-        ) else { return nil }
+        ) else {
+            LoggingService.shared.logDebug(
+                "No profile is bound to organization \(organizationId); "
+                + "skipping the member's own extra usage."
+            )
+            return .notApplicable
+        }
 
         let stored = renewedCLICredentials[profile.id]
             ?? profile.cliCredentialsJSON
-        guard let stored else { return nil }
+        guard let stored else {
+            LoggingService.shared.logDebug(
+                "Profile '\(profile.name)' has no stored Claude Code "
+                + "credential; skipping the member's own extra usage."
+            )
+            return .issue(.notLinked)
+        }
 
         guard let credential = await usableCLICredential(
             for: profile,
             credentialsJSON: stored
-        ) else { return nil }
+        ) else {
+            LoggingService.shared.logDebug(
+                "Profile '\(profile.name)' has a Claude Code credential that "
+                + "could not be made usable; skipping the member's own extra "
+                + "usage."
+            )
+            return .issue(.signInUnusable)
+        }
 
         guard let cliOrganizationId = await cliOrganizationID(
             for: profile,
             credential: credential
-        ) else { return nil }
+        ) else { return .issue(.signInUnusable) }
 
         // The guard this whole path exists for. One person can hold two CLI
         // logins under the same email — one on their company's team, one on
@@ -620,13 +653,13 @@ class ClaudeAPIService: APIServiceProtocol {
                 + "extra usage rather than showing one context's figure under "
                 + "the other's label."
             )
-            return nil
+            return .issue(.differentOrganization)
         }
 
         guard let data = await performOAuthRequest(
             urlString: Self.oauthUsageURL,
             accessToken: credential.accessToken
-        ) else { return nil }
+        ) else { return .issue(.signInUnusable) }
 
         guard let usage = try? JSONDecoder().decode(
             OAuthUsageResponse.self,
@@ -635,12 +668,14 @@ class ClaudeAPIService: APIServiceProtocol {
             LoggingService.shared.logWarning(
                 "Could not read the member's extra usage response."
             )
-            return nil
+            return .issue(.signInUnusable)
         }
 
+        // Extra usage switched off for this member is a settled answer, not a
+        // problem to report: there is no figure to show and nothing to fix.
         guard let extraUsage = usage.extraUsage,
-              extraUsage.isEnabled == true else { return nil }
-        return extraUsage
+              extraUsage.isEnabled == true else { return .notApplicable }
+        return .available(extraUsage)
     }
 
     /// A CLI credential with a token that is actually usable right now.
@@ -793,14 +828,21 @@ class ClaudeAPIService: APIServiceProtocol {
         to usage: inout ClaudeUsage,
         organizationId: String
     ) async {
-        guard let extraUsage = await personalExtraUsage(
-            forOrganization: organizationId
-        ),
-        let used = extraUsage.usedCredits,
-        let limit = extraUsage.monthlyLimit else { return }
-        usage.personalCostUsed = used
-        usage.personalCostLimit = limit
-        usage.personalCostCurrency = extraUsage.currency
+        switch await personalExtraUsage(forOrganization: organizationId) {
+        case .available(let extraUsage):
+            guard let used = extraUsage.usedCredits,
+                  let limit = extraUsage.monthlyLimit else {
+                usage.personalExtraUsageIssue = .signInUnusable
+                return
+            }
+            usage.personalCostUsed = used
+            usage.personalCostLimit = limit
+            usage.personalCostCurrency = extraUsage.currency
+        case .issue(let issue):
+            usage.personalExtraUsageIssue = issue
+        case .notApplicable:
+            break
+        }
     }
 
     /// Fetches usage data for a specific profile using provided credentials

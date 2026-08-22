@@ -1095,16 +1095,16 @@ struct NormalizedUsageView: View {
     var onConnectCLIAccount: (() -> Void)?
 
     /// The organization's extra usage is on screen and the viewer's own is
-    /// not, so the popover explains whose number this is and how to get
-    /// theirs. Claude-specific, and driven by the data rather than by
-    /// provider identity.
-    private var offersCLIAccountInvitation: Bool {
+    /// not, so the popover explains whose number this is and what is missing.
+    /// Claude-specific, and driven by the data rather than by provider
+    /// identity.
+    private var personalExtraUsageIssue: ClaudeUsage.PersonalExtraUsageIssue? {
         guard onConnectCLIAccount != nil,
               let usage = presentation.legacyClaudeUsage else {
-            return false
+            return nil
         }
         return ClaudeUsageProviderAdapter
-            .offersPersonalExtraUsageInvitation(for: usage)
+            .personalExtraUsageIssueToExplain(for: usage)
     }
 
     var body: some View {
@@ -1155,8 +1155,9 @@ struct NormalizedUsageView: View {
                     now: now
                 )
             }
-            if offersCLIAccountInvitation, let onConnectCLIAccount {
-                ConnectCLIAccountInvitationView(
+            if let personalExtraUsageIssue, let onConnectCLIAccount {
+                PersonalExtraUsageNoticeView(
+                    issue: personalExtraUsageIssue,
                     action: onConnectCLIAccount
                 )
             }
@@ -1181,33 +1182,69 @@ struct NormalizedUsageView: View {
 /// Sits directly beneath the organization's extra-usage row, in the same
 /// inline-notice style as the empty states, and opens the screen where a
 /// Claude Code account gets connected.
-private struct ConnectCLIAccountInvitationView: View {
+private struct PersonalExtraUsageNoticeView: View {
+    let issue: ClaudeUsage.PersonalExtraUsageIssue
     let action: () -> Void
+
+    /// Each case names the connection that is missing and where to fix it.
+    /// A profile signs in twice — once to claude.ai in a browser, which is
+    /// what produced the organization figure above, and once to Claude Code,
+    /// which is the only source of the member's own. Saying just "connect
+    /// your account" left people unable to tell which of the two was meant.
+    private var message: String {
+        switch issue {
+        case .notLinked:
+            return NormalizedUsageStrings.localized(
+                "popover.extra_usage.cli_not_linked",
+                default: "This is your organization's total. Your own extra "
+                    + "usage comes from Claude Code, which isn't linked to "
+                    + "this account yet — add it in Settings → CLI Account."
+            )
+        case .signInUnusable:
+            return NormalizedUsageStrings.localized(
+                "popover.extra_usage.cli_sign_in_unusable",
+                default: "This is your organization's total. Your Claude Code "
+                    + "sign-in has stopped working, so your own extra usage "
+                    + "can't be read — re-sync it in Settings → CLI Account."
+            )
+        case .differentOrganization:
+            return NormalizedUsageStrings.localized(
+                "popover.extra_usage.cli_other_organization",
+                default: "This is your organization's total. Your linked "
+                    + "Claude Code account belongs to a different "
+                    + "organization, so its usage isn't shown here."
+            )
+        }
+    }
+
+    private var icon: String {
+        switch issue {
+        case .notLinked:
+            return "person.crop.circle.badge.plus"
+        case .signInUnusable:
+            return "exclamationmark.triangle"
+        case .differentOrganization:
+            return "person.2.slash"
+        }
+    }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Image(systemName: "person.crop.circle.badge.plus")
+                Image(systemName: icon)
                     .foregroundColor(.secondary)
-                Text(
-                    NormalizedUsageStrings.localized(
-                        "popover.extra_usage.connect_account",
-                        default: "This is your organization's total. "
-                            + "Connect your Claude Code account to see "
-                            + "your own."
-                    )
-                )
-                .font(PopoverDesign.metaFont)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
+                Text(message)
+                    .font(PopoverDesign.metaFont)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
             .popoverCard()
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("popover.extra_usage.connect_account")
+        .accessibilityIdentifier("popover.extra_usage.personal_notice")
     }
 }
 

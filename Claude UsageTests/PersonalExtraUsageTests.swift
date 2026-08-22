@@ -183,39 +183,69 @@ final class PersonalExtraUsageTests: XCTestCase {
         XCTAssertEqual(groups[0].displayName, "Extra Usage · Organization")
     }
 
-    /// The popover's offer to connect an account appears only when there is
-    /// an organization figure with no member figure beside it.
-    func testTheConnectInvitationAppearsOnlyForAnUnaccompaniedOrganizationFigure() {
+    /// The popover explains a missing member figure only when there is an
+    /// organization figure with no member figure beside it — and says which
+    /// of the three reasons applies, because they need different actions.
+    func testTheNoticeAppearsOnlyForAnUnaccompaniedOrganizationFigure() {
         var organizationOnly = ClaudeUsage.empty
         organizationOnly.costUsed = 26_118
         organizationOnly.costLimit = 100_000
         organizationOnly.costCurrency = "USD"
         organizationOnly.costScope = .organization
-        XCTAssertTrue(
+        organizationOnly.personalExtraUsageIssue = .notLinked
+        XCTAssertEqual(
             ClaudeUsageProviderAdapter
-                .offersPersonalExtraUsageInvitation(for: organizationOnly)
+                .personalExtraUsageIssueToExplain(for: organizationOnly),
+            .notLinked
+        )
+
+        // A linked account whose sign-in stopped working must not be told to
+        // link one: that sends someone to a screen with nothing to connect.
+        var brokenSignIn = organizationOnly
+        brokenSignIn.personalExtraUsageIssue = .signInUnusable
+        XCTAssertEqual(
+            ClaudeUsageProviderAdapter
+                .personalExtraUsageIssueToExplain(for: brokenSignIn),
+            .signInUnusable
+        )
+
+        var otherOrganization = organizationOnly
+        otherOrganization.personalExtraUsageIssue = .differentOrganization
+        XCTAssertEqual(
+            ClaudeUsageProviderAdapter
+                .personalExtraUsageIssueToExplain(for: otherOrganization),
+            .differentOrganization
         )
 
         var withPersonal = organizationOnly
         withPersonal.personalCostUsed = 0
         withPersonal.personalCostLimit = 5_000
         withPersonal.personalCostCurrency = "USD"
-        XCTAssertFalse(
+        withPersonal.personalExtraUsageIssue = nil
+        XCTAssertNil(
             ClaudeUsageProviderAdapter
-                .offersPersonalExtraUsageInvitation(for: withPersonal)
+                .personalExtraUsageIssueToExplain(for: withPersonal)
         )
 
         // A single-person organization's figure already is the viewer's.
         var singlePerson = organizationOnly
         singlePerson.costScope = .personal
-        XCTAssertFalse(
+        XCTAssertNil(
             ClaudeUsageProviderAdapter
-                .offersPersonalExtraUsageInvitation(for: singlePerson)
+                .personalExtraUsageIssueToExplain(for: singlePerson)
         )
 
-        XCTAssertFalse(
+        // Extra usage simply switched off leaves no reason to explain.
+        var noReason = organizationOnly
+        noReason.personalExtraUsageIssue = nil
+        XCTAssertNil(
             ClaudeUsageProviderAdapter
-                .offersPersonalExtraUsageInvitation(for: .empty)
+                .personalExtraUsageIssueToExplain(for: noReason)
+        )
+
+        XCTAssertNil(
+            ClaudeUsageProviderAdapter
+                .personalExtraUsageIssueToExplain(for: .empty)
         )
     }
 
@@ -399,22 +429,94 @@ final class PersonalExtraUsageTests: XCTestCase {
         )
     }
 
+    // MARK: - The credentials file that is not a login
+
+    /// The defect behind every profile showing an organization figure with no
+    /// member figure: `~/.claude/.credentials.json` exists on installs that
+    /// have only MCP server logins, holds `mcpOAuth` and nothing else, and is
+    /// perfectly valid JSON. It was read before the Keychain and accepted on
+    /// JSON validity alone, so it won, carried no token, and could not be
+    /// renewed — leaving profiles that looked linked but never once returned
+    /// the signed-in member's usage.
+    func testACredentialsFileWithoutALoginIsNotAcceptedAsOne() throws {
+        let mcpOnly = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: Data(#"{"mcpOAuth":{"some-server":{"accessToken":"x"}}}"#.utf8)
+            ) as? [String: Any]
+        )
+        XCTAssertFalse(
+            ClaudeCodeSyncService.containsClaudeCodeLogin(mcpOnly),
+            "An MCP-only credentials file must fall through to the Keychain."
+        )
+
+        let empty = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data("{}".utf8))
+                as? [String: Any]
+        )
+        XCTAssertFalse(ClaudeCodeSyncService.containsClaudeCodeLogin(empty))
+
+        let blankToken = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: Data(#"{"claudeAiOauth":{"accessToken":""}}"#.utf8)
+            ) as? [String: Any]
+        )
+        XCTAssertFalse(
+            ClaudeCodeSyncService.containsClaudeCodeLogin(blankToken),
+            "An empty token is no more usable than a missing one."
+        )
+
+        let realLogin = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: Data(
+                    #"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-abc","refreshToken":"sk-ant-ort01-def"}}"#.utf8
+                )
+            ) as? [String: Any]
+        )
+        XCTAssertTrue(
+            ClaudeCodeSyncService.containsClaudeCodeLogin(realLogin)
+        )
+    }
+
     // MARK: - Catalog
 
-    func testEnglishCatalogCarriesBothInvitations() throws {
+    func testEnglishCatalogCarriesEveryPersonalUsageMessage() throws {
         let path = try XCTUnwrap(
             Bundle.main.path(forResource: "en", ofType: "lproj")
         )
         let english = try XCTUnwrap(Bundle(path: path))
 
+        // Each names the missing connection and where to fix it. A profile
+        // signs in twice — claude.ai in a browser, and Claude Code — so a
+        // message that says only "connect your account" cannot be acted on.
         XCTAssertEqual(
             english.localizedString(
-                forKey: "popover.extra_usage.connect_account",
+                forKey: "popover.extra_usage.cli_not_linked",
                 value: nil,
                 table: nil
             ),
-            "This is your organization's total. Connect your Claude Code "
-                + "account to see your own."
+            "This is your organization's total. Your own extra usage comes "
+                + "from Claude Code, which isn't linked to this account yet "
+                + "— add it in Settings → CLI Account."
+        )
+        XCTAssertEqual(
+            english.localizedString(
+                forKey: "popover.extra_usage.cli_sign_in_unusable",
+                value: nil,
+                table: nil
+            ),
+            "This is your organization's total. Your Claude Code sign-in has "
+                + "stopped working, so your own extra usage can't be read — "
+                + "re-sync it in Settings → CLI Account."
+        )
+        XCTAssertEqual(
+            english.localizedString(
+                forKey: "popover.extra_usage.cli_other_organization",
+                value: nil,
+                table: nil
+            ),
+            "This is your organization's total. Your linked Claude Code "
+                + "account belongs to a different organization, so its usage "
+                + "isn't shown here."
         )
         XCTAssertEqual(
             english.localizedString(

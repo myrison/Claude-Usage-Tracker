@@ -156,6 +156,23 @@ class ClaudeCodeSyncService {
 
     // MARK: - Private Credential Sources
 
+    /// Whether a decoded credentials file actually carries a Claude Code
+    /// login, as opposed to merely being well-formed JSON.
+    ///
+    /// `.credentials.json` is shared with other features: an installation
+    /// with only MCP server logins has one containing just `mcpOAuth` and no
+    /// account at all. Treating "parses as JSON" as "is a login" made the
+    /// file win over the Keychain, so every profile stored a credential with
+    /// no token in it and every member-scoped request was skipped.
+    static func containsClaudeCodeLogin(_ object: [String: Any]) -> Bool {
+        guard
+            let oauth = object["claudeAiOauth"] as? [String: Any],
+            let token = oauth["accessToken"] as? String,
+            !token.isEmpty
+        else { return false }
+        return true
+    }
+
     /// Reads credentials from ~/.claude/.credentials.json or ~/.claude/credentials.json file
     private func readCredentialsFile() -> String? {
         let paths = [
@@ -174,8 +191,25 @@ class ClaudeCodeSyncService {
             }
 
             // Validate it's actually valid JSON
-            guard let _ = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 LoggingService.shared.log("credentials file contains invalid JSON: \(fileURL.lastPathComponent)")
+                continue
+            }
+
+            // Being valid JSON is not enough. This file is shared with other
+            // features — an installation with only MCP server logins has a
+            // `.credentials.json` holding just `mcpOAuth`, with no Claude
+            // Code login in it at all. Accepting that as the credential shed
+            // the account silently: the profile looked linked, the stored
+            // credential carried no token, and every member-scoped request
+            // was skipped for the life of the install. The Keychain below is
+            // the real source, so anything without a login must fall through
+            // to it rather than short-circuit the chain.
+            guard Self.containsClaudeCodeLogin(object) else {
+                LoggingService.shared.log(
+                    "credentials file \(fileURL.lastPathComponent) holds no "
+                    + "Claude Code login; falling through to the Keychain"
+                )
                 continue
             }
 

@@ -180,14 +180,18 @@ enum ClaudeUsageProviderAdapter {
         )
     }
 
-    /// Whether the popover should offer to connect a Claude Code account.
+    /// Why the popover should explain a missing personal figure, if it should.
     ///
-    /// True exactly when the organization's spend is on screen and the
-    /// viewer's own is not — the case where someone reads a company-wide
-    /// number and has no way to find their own.
-    static func offersPersonalExtraUsageInvitation(
+    /// Returned only when the organization's spend is on screen and the
+    /// viewer's own is not — someone reading a company-wide number with no
+    /// way to find their own. The reason comes back with it because the
+    /// remedies differ: one person has no Claude Code account linked, another
+    /// has one whose sign-in stopped working, and a third is linked to a
+    /// different organization entirely. A single "connect your account" line
+    /// was wrong for two of the three.
+    static func personalExtraUsageIssueToExplain(
         for usage: ClaudeUsage
-    ) -> Bool {
+    ) -> ClaudeUsage.PersonalExtraUsageIssue? {
         let hasOrganizationFigure = usage.costUsed != nil
             && (usage.costLimit ?? 0) > 0
             && usage.costCurrency != nil
@@ -195,7 +199,8 @@ enum ClaudeUsageProviderAdapter {
         let hasPersonalFigure = usage.personalCostUsed != nil
             && (usage.personalCostLimit ?? 0) > 0
             && usage.personalCostCurrency != nil
-        return hasOrganizationFigure && !hasPersonalFigure
+        guard hasOrganizationFigure, !hasPersonalFigure else { return nil }
+        return usage.personalExtraUsageIssue
     }
 
     /// One extra-usage group, or nil when the figure is absent or unusable.

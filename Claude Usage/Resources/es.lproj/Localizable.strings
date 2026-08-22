@@ -1273,5 +1273,7 @@
 "personal.session_key_validated" = "Clave de sesión validada";
 "menubar.overage_balance" = "Credit Balance";
 "menubar.overage_balance_organization" = "Credit Balance · Organization";
-"popover.extra_usage.connect_account" = "Este es el total de tu organización. Conecta tu cuenta de Claude Code para ver el tuyo.";
+"popover.extra_usage.cli_not_linked" = "Este es el total de tu organización. Tu uso adicional proviene de Claude Code, que aún no está vinculado a esta cuenta: añádelo en Ajustes → Cuenta CLI.";
+"popover.extra_usage.cli_sign_in_unusable" = "Este es el total de tu organización. Tu inicio de sesión de Claude Code ha dejado de funcionar, así que no se puede leer tu uso adicional: vuelve a sincronizarlo en Ajustes → Cuenta CLI.";
+"popover.extra_usage.cli_other_organization" = "Este es el total de tu organización. Tu cuenta de Claude Code vinculada pertenece a otra organización, por lo que su uso no se muestra aquí.";
 "cli.connect_extra_usage_hint" = "Conecta tu cuenta de Claude Code para ver tu propio uso extra. Si eres administrador, verás el de tu organización de forma predeterminada.";

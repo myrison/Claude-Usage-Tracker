@@ -1286,5 +1286,7 @@
 "personal.session_key_validated" = "会话密钥已验证";
 "menubar.overage_balance" = "Credit Balance";
 "menubar.overage_balance_organization" = "Credit Balance · Organization";
-"popover.extra_usage.connect_account" = "这是您所在组织的总量。连接您的 Claude Code 账号即可查看自己的用量。";
+"popover.extra_usage.cli_not_linked" = "这是您所在组织的总量。您自己的额外用量来自 Claude Code，但尚未关联到此账号 — 请在“设置 → CLI 账号”中添加。";
+"popover.extra_usage.cli_sign_in_unusable" = "这是您所在组织的总量。您的 Claude Code 登录已失效，无法读取您自己的额外用量 — 请在“设置 → CLI 账号”中重新同步。";
+"popover.extra_usage.cli_other_organization" = "这是您所在组织的总量。已关联的 Claude Code 账号属于其他组织，因此不会在此显示其用量。";
 "cli.connect_extra_usage_hint" = "连接您的 Claude Code 账号即可查看自己的额外用量。如果您是管理员，默认显示的是组织的用量。";

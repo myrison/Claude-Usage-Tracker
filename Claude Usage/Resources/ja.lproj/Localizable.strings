@@ -1290,5 +1290,7 @@
 "personal.session_key_validated" = "セッションキーを検証しました";
 "menubar.overage_balance" = "Credit Balance";
 "menubar.overage_balance_organization" = "Credit Balance · Organization";
-"popover.extra_usage.connect_account" = "これは組織全体の合計です。自分の分を表示するには Claude Code アカウントを接続してください。";
+"popover.extra_usage.cli_not_linked" = "これは組織全体の合計です。ご自身の追加使用量は Claude Code から取得されますが、このアカウントにはまだ連携されていません。設定 → CLI アカウントで追加してください。";
+"popover.extra_usage.cli_sign_in_unusable" = "これは組織全体の合計です。Claude Code のサインインが機能しなくなったため、ご自身の追加使用量を読み取れません。設定 → CLI アカウントで再同期してください。";
+"popover.extra_usage.cli_other_organization" = "これは組織全体の合計です。連携されている Claude Code アカウントは別の組織に属しているため、その使用量はここには表示されません。";
 "cli.connect_extra_usage_hint" = "自分の追加使用を表示するには Claude Code アカウントを接続してください。管理者の場合は、既定で組織の分が表示されます。";
