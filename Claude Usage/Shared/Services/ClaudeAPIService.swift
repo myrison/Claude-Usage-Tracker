@@ -596,13 +596,6 @@ class ClaudeAPIService: APIServiceProtocol {
     /// the failure must not suppress a retry with the new credential.
     private var failedCLIOrganizationLookupFingerprints: [UUID: Int] = [:]
 
-    /// The signed-in member's own extra usage, or nil when it cannot be
-    /// established for the organization currently on screen.
-    ///
-    /// Nil is the normal answer in several ordinary situations — no CLI
-    /// login, extra usage switched off for that member, a login belonging to
-    /// a different organization — and the popover simply shows no personal
-    /// figure in all of them.
     /// The member's figure, or the reason it is missing. The reason reaches
     /// the popover: "link an account" and "renew the one you have" send a
     /// person to different actions on the same screen, and telling a linked

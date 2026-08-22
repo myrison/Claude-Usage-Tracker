@@ -274,9 +274,7 @@ struct CLIAccountView: View {
                 Button(action: {
                     let command = "CLAUDE_CONFIG_DIR="
                         + "~/.claude-accounts/\(accountName) claude"
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(command, forType: .string)
-                    copiedToClipboard = true
+                    copyToClipboard(command)
                 }) {
                     Text(
                         copiedToClipboard

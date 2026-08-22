@@ -1288,8 +1288,8 @@
 "chrome_assisted.new_claude_profile" = "neues Claude-Profil";
 "personal.session_key_stored" = "Sitzungsschlüssel gespeichert";
 "personal.session_key_validated" = "Sitzungsschlüssel validiert";
-"menubar.overage_balance" = "Credit Balance";
-"menubar.overage_balance_organization" = "Credit Balance · Organization";
+"menubar.overage_balance" = "Guthaben";
+"menubar.overage_balance_organization" = "Guthaben · Organisation";
 "popover.extra_usage.cli_not_linked" = "Dies ist die Gesamtsumme Ihrer Organisation. Ihre eigene Zusatznutzung stammt aus Claude Code, das mit diesem Konto noch nicht verknüpft ist – fügen Sie es unter Einstellungen → CLI-Konto hinzu.";
 "popover.extra_usage.cli_sign_in_expired" = "Dies ist die Gesamtsumme Ihrer Organisation. Die Claude Code-Anmeldung für dieses Konto ist abgelaufen – melden Sie sich erneut an, um Ihre eigene Zusatznutzung zu sehen. Einstellungen → CLI-Konto zeigt Ihnen wie.";
 "popover.extra_usage.cli_sign_in_unusable" = "Dies ist die Gesamtsumme Ihrer Organisation. Ihre eigene Zusatznutzung konnte gerade nicht gelesen werden – synchronisieren Sie Ihr Claude Code-Konto unter Einstellungen → CLI-Konto erneut.";

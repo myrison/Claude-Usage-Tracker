@@ -332,10 +332,15 @@ class ClaudeCodeSyncService {
     }
 
     /// The configuration directory a linked CLI account lives in.
+    ///
+    /// Delegates to `ClaudeSwitchService.accountDirectoryPath(for:)` — the
+    /// same computation used where the account directory is actually
+    /// created — rather than recomputing the path independently. The
+    /// Keychain service name above is a hash of this exact path string, so a
+    /// second, drifting implementation here would silently break the lookup
+    /// the moment the two disagreed.
     static func configurationDirectory(forAccountNamed name: String) -> URL {
-        Constants.ClaudePaths.homeDirectory
-            .appendingPathComponent(".claude-accounts")
-            .appendingPathComponent(name)
+        ClaudeSwitchService.shared.accountDirectoryPath(for: name)
     }
 
     /// The Keychain service holding one linked account's login, when that

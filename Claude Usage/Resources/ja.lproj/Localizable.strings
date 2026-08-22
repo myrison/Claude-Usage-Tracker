@@ -1288,8 +1288,8 @@
 "chrome_assisted.new_claude_profile" = "新しい Claude プロファイル";
 "personal.session_key_stored" = "セッションキーを保存しました";
 "personal.session_key_validated" = "セッションキーを検証しました";
-"menubar.overage_balance" = "Credit Balance";
-"menubar.overage_balance_organization" = "Credit Balance · Organization";
+"menubar.overage_balance" = "クレジット残高";
+"menubar.overage_balance_organization" = "クレジット残高 · 組織";
 "popover.extra_usage.cli_not_linked" = "これは組織全体の合計です。ご自身の追加使用量は Claude Code から取得されますが、このアカウントにはまだ連携されていません。設定 → CLI アカウントで追加してください。";
 "popover.extra_usage.cli_sign_in_expired" = "これは組織全体の合計です。このアカウントの Claude Code サインインは期限切れです。再度サインインすると、ご自身の追加使用量が表示されます。方法は「設定 → CLI アカウント」に記載されています。";
 "popover.extra_usage.cli_sign_in_unusable" = "これは組織全体の合計です。ご自身の追加使用量を今回読み取れませんでした。「設定 → CLI アカウント」で Claude Code アカウントを再同期してください。";
