@@ -520,6 +520,187 @@ final class ExtraUsageScopeTests: XCTestCase {
         )
     }
 
+    // MARK: - Member-scoped identity
+    //
+    // Two Greptile P1 findings on PR #66, both the same class of defect the
+    // rest of this file exists to fix: profile identity resolved by matching
+    // `organizationId` rather than by the specific profile in hand, so one
+    // person's data can land under a different profile.
+
+    /// Two profiles bound to the same claude.ai organization but linked to
+    /// different Claude Code CLI accounts. Before this fix,
+    /// `personalExtraUsage(forOrganization:)` re-derived "the" profile via
+    /// `profiles.first(where: { $0.organizationId == organizationId })`
+    /// instead of using the profile the caller was actually refreshing — so
+    /// refreshing the second profile could silently show the first profile's
+    /// member figure (or its unrelated mismatch), depending only on which
+    /// happened to sort first in `profileManager.profiles`.
+    @MainActor
+    func testPersonalExtraUsageAttachesToTheProfileThatTriggeredTheRefresh() async throws {
+        let organizationID = "org-shared-by-two-profiles"
+        let store = makeIsolatedProfileStore()
+
+        let profileA = Profile(
+            name: "First",
+            organizationId: organizationID,
+            organizationIsPersonal: false,
+            cliCredentialsJSON: Self.cliCredentialsJSON(accessToken: "token-a-wrong-org"),
+            hasCliAccount: true
+        )
+        let profileB = Profile(
+            name: "Second",
+            organizationId: organizationID,
+            organizationIsPersonal: false,
+            cliCredentialsJSON: Self.cliCredentialsJSON(accessToken: "token-b-right-org"),
+            hasCliAccount: true
+        )
+        try seedProfilesForTesting([profileA, profileB], in: store)
+
+        let manager = ProfileManager(profileStore: store)
+        // profileA sorts first: this is exactly the ordering `.first(where:)`
+        // would have exploited.
+        manager.profiles = [profileA, profileB]
+        let service = ClaudeAPIService(
+            profileManager: manager,
+            systemCredentialsReader: { nil }
+        )
+
+        StubPersonalUsageEndpointsURLProtocol.profileLookupResponses = [
+            "token-a-wrong-org": (200, Data("""
+            {"organization":{"uuid":"org-not-this-one"}}
+            """.utf8)),
+            "token-b-right-org": (200, Data("""
+            {"organization":{"uuid":"\(organizationID)"}}
+            """.utf8))
+        ]
+        StubPersonalUsageEndpointsURLProtocol.memberUsageResponses = [
+            "token-a-wrong-org": (200, Data("""
+            {"extra_usage":{"is_enabled":true,"monthly_limit":9999,
+             "used_credits":111111,"utilization":null,"currency":"USD"}}
+            """.utf8)),
+            "token-b-right-org": (200, Data("""
+            {"extra_usage":{"is_enabled":true,"monthly_limit":5000,
+             "used_credits":777,"utilization":null,"currency":"USD"}}
+            """.utf8))
+        ]
+        StubPersonalUsageEndpointsURLProtocol.install()
+        defer { StubPersonalUsageEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: organizationID,
+            profile: profileB
+        )
+
+        // Profile B's own figure — not profile A's figure, and not A's
+        // organization mismatch either.
+        XCTAssertNil(usage.personalExtraUsageIssue)
+        XCTAssertEqual(usage.personalCostUsed, 777)
+        XCTAssertEqual(usage.personalCostLimit, 5_000)
+        XCTAssertTrue(
+            StubPersonalUsageEndpointsURLProtocol.requestedAccessTokens
+                .contains("token-b-right-org"),
+            "the refresh must call out using profile B's own CLI credential"
+        )
+        XCTAssertFalse(
+            StubPersonalUsageEndpointsURLProtocol.requestedAccessTokens
+                .contains("token-a-wrong-org"),
+            "profile A's credential must never be used while profile B is "
+                + "the one being refreshed"
+        )
+    }
+
+    /// A profile whose CLI organization lookup fails once, then is re-linked
+    /// to a different Claude Code account — a new credential, a new
+    /// fingerprint. Before this fix, `failedCLIOrganizationLookups` — keyed
+    /// by profile id and never cleared — kept short-circuiting to the stale
+    /// pre-relink organization id forever, because the guard only asked "has
+    /// this profile ever failed" rather than "has this exact credential
+    /// already failed".
+    @MainActor
+    func testCLIOrganizationLookupRetriesAfterARelinkFollowingAFailure() async throws {
+        let organizationID = "org-retry-after-relink"
+        let store = makeIsolatedProfileStore()
+
+        var profile = Profile(
+            name: "Retried",
+            organizationId: organizationID,
+            organizationIsPersonal: false,
+            cliCredentialsJSON: Self.cliCredentialsJSON(accessToken: "first-credential"),
+            hasCliAccount: true
+        )
+        try seedProfilesForTesting([profile], in: store)
+
+        let manager = ProfileManager(profileStore: store)
+        manager.profiles = [profile]
+        let service = ClaudeAPIService(
+            profileManager: manager,
+            systemCredentialsReader: { nil }
+        )
+
+        // First attempt: the lookup fails outright, landing the profile in
+        // the failure cache.
+        StubPersonalUsageEndpointsURLProtocol.profileLookupResponses = [
+            "first-credential": (404, Data("{}".utf8))
+        ]
+        StubPersonalUsageEndpointsURLProtocol.install()
+
+        _ = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: organizationID,
+            profile: profile
+        )
+
+        XCTAssertTrue(
+            StubPersonalUsageEndpointsURLProtocol.requestedAccessTokens
+                .contains("first-credential"),
+            "the first lookup must actually be attempted"
+        )
+        StubPersonalUsageEndpointsURLProtocol.requestedAccessTokens = []
+
+        // Re-link: a different Claude Code account, a different credential —
+        // this time one that resolves to the organization on screen.
+        profile.cliCredentialsJSON =
+            Self.cliCredentialsJSON(accessToken: "second-credential")
+        StubPersonalUsageEndpointsURLProtocol.profileLookupResponses = [
+            "second-credential": (200, Data("""
+            {"organization":{"uuid":"\(organizationID)"}}
+            """.utf8))
+        ]
+        StubPersonalUsageEndpointsURLProtocol.memberUsageResponses = [
+            "second-credential": (200, Data("""
+            {"extra_usage":{"is_enabled":true,"monthly_limit":5000,
+             "used_credits":321,"utilization":null,"currency":"USD"}}
+            """.utf8))
+        ]
+        defer { StubPersonalUsageEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: organizationID,
+            profile: profile
+        )
+
+        XCTAssertTrue(
+            StubPersonalUsageEndpointsURLProtocol.requestedAccessTokens
+                .contains("second-credential"),
+            "a re-linked credential must trigger a fresh lookup rather than "
+                + "short-circuiting on the earlier failure"
+        )
+        XCTAssertNil(usage.personalExtraUsageIssue)
+        XCTAssertEqual(usage.personalCostUsed, 321)
+    }
+
+    private static func cliCredentialsJSON(accessToken: String) -> String {
+        let expiresAt =
+            Date().addingTimeInterval(8 * 3600).timeIntervalSince1970 * 1000
+        return """
+        {"claudeAiOauth":{"accessToken":"\(accessToken)",\
+        "refreshToken":"fixture-refresh-token","expiresAt":\(expiresAt),\
+        "scopes":["user:inference"],"subscriptionType":"max"}}
+        """
+    }
+
     // MARK: - Helpers
 
     @MainActor
@@ -592,4 +773,90 @@ private nonisolated final class UnusedProfileSecretStore: ProfileSecretStore {
     func delete(_ locator: ProfileSecretLocator) throws {
         XCTFail("Unexpected secret delete for \(locator.safeDescription)")
     }
+}
+
+/// Serves the endpoints reached while resolving a profile's own extra usage.
+/// `claude.ai` requests answer generically — those endpoints are
+/// organization-scoped and are not what these tests are pinning. The two
+/// `api.anthropic.com` CLI endpoints answer per **access token**, the same
+/// way the real API tells two people's requests apart, so a test can prove
+/// exactly whose credential a call actually used rather than only what
+/// answer came back.
+private nonisolated final class StubPersonalUsageEndpointsURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var isActive = false
+    nonisolated(unsafe) static var profileLookupResponses: [String: (Int, Data)] = [:]
+    nonisolated(unsafe) static var memberUsageResponses: [String: (Int, Data)] = [:]
+    nonisolated(unsafe) static var requestedAccessTokens: [String] = []
+
+    static func install() {
+        isActive = true
+        URLProtocol.registerClass(StubPersonalUsageEndpointsURLProtocol.self)
+    }
+
+    static func reset() {
+        guard isActive else { return }
+        URLProtocol.unregisterClass(StubPersonalUsageEndpointsURLProtocol.self)
+        isActive = false
+        profileLookupResponses = [:]
+        memberUsageResponses = [:]
+        requestedAccessTokens = []
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        guard isActive, let host = request.url?.host else { return false }
+        return ["claude.ai", "api.anthropic.com"].contains(host)
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+
+        let statusCode: Int
+        let body: Data
+        if url.host == "claude.ai" {
+            // Organization-scoped figures are not under test here; an empty
+            // body is enough to let the org-wide fetch complete.
+            statusCode = 200
+            body = Data("{}".utf8)
+        } else {
+            let authorization =
+                request.value(forHTTPHeaderField: "Authorization") ?? ""
+            let token = authorization
+                .replacingOccurrences(of: "Bearer ", with: "")
+            Self.requestedAccessTokens.append(token)
+            let table = url.path.hasSuffix("/oauth/profile")
+                ? Self.profileLookupResponses
+                : Self.memberUsageResponses
+            if let canned = table[token] {
+                (statusCode, body) = canned
+            } else {
+                statusCode = 404
+                body = Data("{}".utf8)
+            }
+        }
+
+        guard let response = HTTPURLResponse(
+            url: url,
+            statusCode: statusCode,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+        ) else {
+            client?.urlProtocol(
+                self,
+                didFailWithError: URLError(.badServerResponse)
+            )
+            return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

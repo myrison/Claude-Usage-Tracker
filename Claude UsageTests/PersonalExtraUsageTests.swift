@@ -282,7 +282,8 @@ final class PersonalExtraUsageTests: XCTestCase {
 
         let usage = try await service.fetchUsageData(
             sessionKey: "sk-ant-sid01-fixture-session-key-value",
-            organizationId: teamOrganizationID
+            organizationId: teamOrganizationID,
+            profile: try seededProfile(profileID)
         )
 
         XCTAssertNil(usage.personalCostUsed)
@@ -317,7 +318,8 @@ final class PersonalExtraUsageTests: XCTestCase {
 
         let usage = try await service.fetchUsageData(
             sessionKey: "sk-ant-sid01-fixture-session-key-value",
-            organizationId: teamOrganizationID
+            organizationId: teamOrganizationID,
+            profile: try seededProfile(profileID)
         )
 
         XCTAssertEqual(usage.personalCostUsed, 0)
@@ -349,7 +351,8 @@ final class PersonalExtraUsageTests: XCTestCase {
 
         let usage = try await service.fetchUsageData(
             sessionKey: "sk-ant-sid01-fixture-session-key-value",
-            organizationId: teamOrganizationID
+            organizationId: teamOrganizationID,
+            profile: try seededProfile(profileID)
         )
 
         XCTAssertNil(usage.personalCostUsed)
@@ -693,6 +696,13 @@ final class PersonalExtraUsageTests: XCTestCase {
     }
 
     private var seededProfiles: [Profile] = []
+
+    /// The exact profile a test seeded, so it can be threaded into
+    /// `fetchUsageData(sessionKey:organizationId:profile:)` the same way a
+    /// real caller would rather than left for the service to re-derive.
+    private func seededProfile(_ id: UUID) throws -> Profile {
+        try XCTUnwrap(seededProfiles.first { $0.id == id })
+    }
 
     private func makeService(
         profileID: UUID,
