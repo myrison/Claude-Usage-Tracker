@@ -37,10 +37,29 @@ struct ClaudeUsage: Codable, Equatable {
     /// whose response does not include a Fable limit.
     var fableWeeklyLimitAvailable: Bool
 
+    /// Who the extra-usage figures below actually belong to.
+    ///
+    /// claude.ai reports extra usage from an organization-scoped endpoint, so
+    /// on a Team or Enterprise account the amounts are the whole company's
+    /// spend rather than the signed-in member's. On a personal Max/Pro
+    /// subscription the organization *is* the person, so the same numbers are
+    /// individual. The UI needs the distinction to avoid presenting a
+    /// company-wide figure as the viewer's own.
+    enum ExtraUsageScope: String, Codable, Equatable {
+        /// Shared organization (Team/Enterprise): the amounts cover everyone.
+        case organization
+        /// Single-person organization: the amounts are this person's.
+        case personal
+    }
+
     // Extra usage data
     var costUsed: Double?
     var costLimit: Double?
     var costCurrency: String?
+    /// Nil on records written before this field existed. Treat nil as
+    /// `.organization` at every point of use: that is what the endpoint has
+    /// always returned.
+    var costScope: ExtraUsageScope?
 
     // Overage credit grant balance
     var overageBalance: Double?
@@ -71,6 +90,7 @@ struct ClaudeUsage: Codable, Equatable {
         costUsed: Double?,
         costLimit: Double?,
         costCurrency: String?,
+        costScope: ExtraUsageScope? = nil,
         overageBalance: Double? = nil,
         overageBalanceCurrency: String? = nil,
         lastUpdated: Date,
@@ -96,6 +116,7 @@ struct ClaudeUsage: Codable, Equatable {
         self.costUsed = costUsed
         self.costLimit = costLimit
         self.costCurrency = costCurrency
+        self.costScope = costScope
         self.overageBalance = overageBalance
         self.overageBalanceCurrency = overageBalanceCurrency
         self.lastUpdated = lastUpdated
@@ -128,6 +149,7 @@ struct ClaudeUsage: Codable, Equatable {
         costUsed = try container.decodeIfPresent(Double.self, forKey: .costUsed)
         costLimit = try container.decodeIfPresent(Double.self, forKey: .costLimit)
         costCurrency = try container.decodeIfPresent(String.self, forKey: .costCurrency)
+        costScope = try container.decodeIfPresent(ExtraUsageScope.self, forKey: .costScope)
         overageBalance = try container.decodeIfPresent(Double.self, forKey: .overageBalance)
         overageBalanceCurrency = try container.decodeIfPresent(String.self, forKey: .overageBalanceCurrency)
         lastUpdated = try container.decode(Date.self, forKey: .lastUpdated)

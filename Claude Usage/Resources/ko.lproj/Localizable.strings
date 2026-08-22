@@ -70,6 +70,7 @@
 "menubar.sonnet_usage" = "Sonnet";
 "menubar.fable_usage" = "Fable";
 "menubar.extra_usage" = "추가 사용량";
+"menubar.extra_usage_organization" = "추가 사용량 · 조직";
 "menubar.api_credits" = "API 크레딧";
 "menubar.5_hour_window" = "5시간 롤링 윈도우";
 "menubar.all_models" = "모든 모델";
@@ -1256,3 +1257,5 @@
 "chrome_assisted.new_claude_profile" = "새 Claude 프로필";
 "personal.session_key_stored" = "세션 키가 저장되었습니다";
 "personal.session_key_validated" = "세션 키가 확인되었습니다";
+"menubar.overage_balance" = "Credit Balance";
+"menubar.overage_balance_organization" = "Credit Balance · Organization";

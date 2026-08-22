@@ -61,6 +61,7 @@
 "menubar.sonnet_usage" = "Sonnet";
 "menubar.fable_usage" = "Fable";
 "menubar.extra_usage" = "Utilisation Supplémentaire";
+"menubar.extra_usage_organization" = "Utilisation Supplémentaire · Organisation";
 "menubar.api_credits" = "Crédits API";
 "menubar.5_hour_window" = "Fenêtre glissante de 5 heures";
 "menubar.all_models" = "Tous les modèles";
@@ -1260,3 +1261,5 @@
 "chrome_assisted.new_claude_profile" = "nouveau profil Claude";
 "personal.session_key_stored" = "Clé de session enregistrée";
 "personal.session_key_validated" = "Clé de session validée";
+"menubar.overage_balance" = "Credit Balance";
+"menubar.overage_balance_organization" = "Credit Balance · Organization";

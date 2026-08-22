@@ -29,6 +29,40 @@ extension ClaudeAPIService {
         let uuid: String
         let name: String
         let capabilities: [String]
+        /// `"team"` / `"enterprise"` for shared organizations, absent for
+        /// individual subscriptions and for console/API-only organizations.
+        /// See `ClaudeOrganizationClassifier` for the observed values.
+        let ravenType: String?
+
+        enum CodingKeys: String, CodingKey {
+            case uuid
+            case name
+            case capabilities
+            case ravenType = "raven_type"
+        }
+
+        init(
+            uuid: String,
+            name: String,
+            capabilities: [String],
+            ravenType: String? = nil
+        ) {
+            self.uuid = uuid
+            self.name = name
+            self.capabilities = capabilities
+            self.ravenType = ravenType
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            uuid = try container.decode(String.self, forKey: .uuid)
+            name = try container.decode(String.self, forKey: .name)
+            capabilities = try container.decodeIfPresent(
+                [String].self,
+                forKey: .capabilities
+            ) ?? []
+            ravenType = try container.decodeIfPresent(String.self, forKey: .ravenType)
+        }
     }
 
     struct OverageSpendLimitResponse: Codable {

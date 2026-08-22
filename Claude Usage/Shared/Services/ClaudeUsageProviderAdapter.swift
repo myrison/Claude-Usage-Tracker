@@ -134,6 +134,7 @@ enum ClaudeUsageProviderAdapter {
             groups.append(
                 try UsageLimitGroup(
                     id: UsageLimitGroupID("extra-usage"),
+                    displayName: extraUsageDisplayName(for: usage.costScope),
                     windows: [
                         try UsageWindow(
                             id: UsageWindowID("current"),
@@ -159,6 +160,7 @@ enum ClaudeUsageProviderAdapter {
             credits.append(
                 try UsageCredit(
                     id: UsageMetricID("overage-balance"),
+                    displayName: overageBalanceDisplayName(for: usage.costScope),
                     balance: balance / 100,
                     unit: .currency,
                     currencyCode: UsageCurrencyCode(rawCurrency)
@@ -176,6 +178,56 @@ enum ClaudeUsageProviderAdapter {
             fetchedAt: context.fetchedAt,
             staleAt: context.staleAt
         )
+    }
+
+    /// Header for the extra-usage group.
+    ///
+    /// The amounts come from an organization-scoped endpoint, so on a Team or
+    /// Enterprise account they are the company's spend and not the viewer's.
+    /// An unclassified organization (`nil`) gets the same wider label: saying
+    /// "organization" about one person is mildly wrong, saying nothing about a
+    /// whole company's spend sitting under someone's personal bars is not.
+    /// The organization's own name is deliberately absent — the popover keeps
+    /// names out of prose and has no width for them.
+    static func extraUsageDisplayName(
+        for scope: ClaudeUsage.ExtraUsageScope?
+    ) -> String {
+        switch scope {
+        case .personal:
+            return ProviderUILocalization.text(
+                "menubar.extra_usage",
+                fallback: "Extra Usage"
+            )
+        case .organization, nil:
+            return ProviderUILocalization.text(
+                "menubar.extra_usage_organization",
+                fallback: "Extra Usage · Organization"
+            )
+        }
+    }
+
+    /// Label for the overage credit balance.
+    ///
+    /// `overage_credit_grant` is organization-scoped for the same reason
+    /// `overage_spend_limit` is, so the remaining balance shown to a member of
+    /// a Team or Enterprise account is the company's pool, not theirs. Scope
+    /// wording is kept identical to the extra-usage group header so the two
+    /// read as one fact rather than two.
+    static func overageBalanceDisplayName(
+        for scope: ClaudeUsage.ExtraUsageScope?
+    ) -> String {
+        switch scope {
+        case .personal:
+            return ProviderUILocalization.text(
+                "menubar.overage_balance",
+                fallback: "Credit Balance"
+            )
+        case .organization, nil:
+            return ProviderUILocalization.text(
+                "menubar.overage_balance_organization",
+                fallback: "Credit Balance · Organization"
+            )
+        }
     }
 
     private static func modelGroup(

@@ -61,6 +61,7 @@
 "menubar.sonnet_usage" = "Sonnet";
 "menubar.fable_usage" = "Fable";
 "menubar.extra_usage" = "Extra Usage";
+"menubar.extra_usage_organization" = "Extra Usage · Organization";
 "menubar.api_credits" = "API Credits";
 "menubar.api_cost" = "API Cost";
 "menubar.this_month" = "This Month";
@@ -1294,3 +1295,5 @@
 "chrome_assisted.new_claude_profile" = "new Claude profile";
 "personal.session_key_stored" = "Session key stored";
 "personal.session_key_validated" = "Session key validated";
+"menubar.overage_balance" = "Credit Balance";
+"menubar.overage_balance_organization" = "Credit Balance · Organization";

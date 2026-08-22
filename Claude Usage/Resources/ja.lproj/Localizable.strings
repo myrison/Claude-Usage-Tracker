@@ -61,6 +61,7 @@
 "menubar.sonnet_usage" = "Sonnet";
 "menubar.fable_usage" = "Fable";
 "menubar.extra_usage" = "追加使用";
+"menubar.extra_usage_organization" = "追加使用 · 組織";
 "menubar.api_credits" = "APIクレジット";
 "menubar.5_hour_window" = "5時間ローリングウィンドウ";
 "menubar.all_models" = "すべてのモデル";
@@ -1280,3 +1281,5 @@
 "chrome_assisted.new_claude_profile" = "新しい Claude プロファイル";
 "personal.session_key_stored" = "セッションキーを保存しました";
 "personal.session_key_validated" = "セッションキーを検証しました";
+"menubar.overage_balance" = "Credit Balance";
+"menubar.overage_balance_organization" = "Credit Balance · Organization";

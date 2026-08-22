@@ -429,16 +429,126 @@ class ClaudeAPIService: APIServiceProtocol {
         LoggingService.shared.logInfo("No stored organization ID - fetching all organizations")
         let organizations = try await fetchAllOrganizations(sessionKey: sessionKey)
 
-        // Auto-select organization (prefer first one for now - user can change later)
-        let selectedOrg = organizations.first!
-        LoggingService.shared.logInfo("Auto-selected organization: \(selectedOrg.name) (ID: \(selectedOrg.uuid))")
+        guard !organizations.isEmpty else {
+            throw AppError(
+                code: .apiParsingFailed,
+                message: "No organizations found",
+                technicalDetails: "Organizations array is empty",
+                isRecoverable: false,
+                recoverySuggestion: "Please ensure your Claude account has access to organizations"
+            )
+        }
+
+        // The list mixes Claude organizations with console/API-only ones that
+        // have no chat, no subscription and no usage to report. Selecting one
+        // of those binds the profile to an organization every usage request
+        // will fail against — and on a real account an API-only organization
+        // was the FIRST entry returned.
+        let usableOrganizations = organizations.filter(
+            ClaudeOrganizationClassifier.isChatCapable
+        )
+
+        guard let selectedOrg = usableOrganizations.first else {
+            throw AppError(
+                code: .apiParsingFailed,
+                message: "No Claude organizations found",
+                technicalDetails:
+                    "None of the \(organizations.count) organization(s) for this session key "
+                    + "have the \"chat\" capability; they appear to be console/API-only "
+                    + "organizations without a Claude subscription",
+                isRecoverable: false,
+                recoverySuggestion:
+                    "Sign in with an account that has a Claude subscription (Pro, Max, Team or Enterprise)"
+            )
+        }
+
+        // TODO: An account belonging to more than one organization needs an
+        // interactive picker here. Auto-selecting silently binds the profile
+        // to whichever organization the API happened to list first.
+        if usableOrganizations.count > 1 {
+            LoggingService.shared.logWarning(
+                "Session key belongs to \(usableOrganizations.count) Claude organizations "
+                + "(\(organizations.count) total including console/API-only); "
+                + "auto-selected \(selectedOrg.name) (ID: \(selectedOrg.uuid)) "
+                + "without asking. Usage and extra-usage figures will describe "
+                + "that organization only."
+            )
+        } else {
+            LoggingService.shared.logInfo(
+                "Auto-selected organization: \(selectedOrg.name) (ID: \(selectedOrg.uuid))"
+            )
+        }
 
         // Store the selected org ID in active profile
         if let profileId = profileManager.activeClaudeProfile?.id {
             profileManager.updateOrganizationId(selectedOrg.uuid, for: profileId)
+            applyOrganizationClassification(selectedOrg, to: profileId)
         }
 
         return selectedOrg.uuid
+    }
+
+    /// Caches the organizations whose classification lookup already ran and
+    /// came back inconclusive, so a refresh tick does not re-request
+    /// `/organizations` on every single poll.
+    private var classificationAttemptedOrganizationIDs: Set<String> = []
+
+    /// Records an organization's name and personal/shared classification on a
+    /// profile so the extra-usage label can be resolved without a network
+    /// request on subsequent refreshes.
+    private func applyOrganizationClassification(
+        _ organization: AccountInfo,
+        to profileId: UUID
+    ) {
+        profileManager.updateOrganizationName(organization.name, for: profileId)
+        if let isPersonal = ClaudeOrganizationClassifier.isPersonal(organization) {
+            profileManager.updateOrganizationIsPersonal(isPersonal, for: profileId)
+        }
+    }
+
+    /// Resolves who the organization-scoped extra-usage figures belong to.
+    ///
+    /// `overage_spend_limit` is organization-scoped with no member parameter,
+    /// so the honest default is `.organization`; `.personal` is returned only
+    /// when the organization is known to have a single member. The
+    /// `/organizations` lookup runs at most once per organization per app run
+    /// and only when the profile has no stored classification — the sequential
+    /// request discipline in `fetchUsageData` exists because extra per-profile
+    /// requests on every tick contributed to 429s.
+    private func resolveExtraUsageScope(
+        organizationId: String,
+        sessionKey: String
+    ) async -> ClaudeUsage.ExtraUsageScope {
+        guard let profile = profileManager.profiles.first(
+            where: { $0.organizationId == organizationId }
+        ) else {
+            return .organization
+        }
+
+        if let isPersonal = profile.organizationIsPersonal {
+            return isPersonal ? .personal : .organization
+        }
+
+        guard !classificationAttemptedOrganizationIDs.contains(organizationId) else {
+            return .organization
+        }
+        classificationAttemptedOrganizationIDs.insert(organizationId)
+
+        guard
+            let organizations = try? await fetchAllOrganizations(sessionKey: sessionKey),
+            let match = organizations.first(where: { $0.uuid == organizationId })
+        else {
+            LoggingService.shared.logWarning(
+                "Could not classify organization \(organizationId) as personal "
+                + "or shared; extra usage will be labelled organization-wide."
+            )
+            return .organization
+        }
+
+        applyOrganizationClassification(match, to: profile.id)
+        return ClaudeOrganizationClassifier.isPersonal(match) == true
+            ? .personal
+            : .organization
     }
 
     /// Fetches usage data for a specific profile using provided credentials
@@ -473,6 +583,12 @@ class ClaudeAPIService: APIServiceProtocol {
             claudeUsage.costUsed = overage.usedCredits
             claudeUsage.costLimit = overage.monthlyCreditLimit
             claudeUsage.costCurrency = overage.currency
+            // The endpoint is organization-scoped: these amounts are the whole
+            // organization's unless that organization has one member.
+            claudeUsage.costScope = await resolveExtraUsageScope(
+                organizationId: organizationId,
+                sessionKey: sessionKey
+            )
         }
 
         if checkOverageLimitEnabled,
@@ -725,6 +841,13 @@ class ClaudeAPIService: APIServiceProtocol {
                 claudeUsage.costUsed = overage.usedCredits
                 claudeUsage.costLimit = overage.monthlyCreditLimit
                 claudeUsage.costCurrency = overage.currency
+                // See the identical block in the credentials-based overload:
+                // this endpoint reports the organization's spend, not the
+                // signed-in member's.
+                claudeUsage.costScope = await resolveExtraUsageScope(
+                    organizationId: orgId,
+                    sessionKey: sessionKey
+                )
             }
 
             if checkOverage,

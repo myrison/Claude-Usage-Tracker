@@ -225,6 +225,97 @@ final class ClaudeUsageProviderAdapterTests: XCTestCase {
         XCTAssertEqual(capabilities[.automaticSessionStart], .available)
     }
 
+    /// The overage endpoint is organization-scoped, so a Team account's whole
+    /// company spend was rendering under one member's own bars with nothing
+    /// saying so. The header has to carry the scope.
+    func testExtraUsageHeaderNamesTheOrganizationScope() throws {
+        let report = try makeReport(
+            usage: makeUsage(
+                costUsed: 259_316,
+                costLimit: 500_000,
+                costCurrency: "USD",
+                costScope: .organization
+            )
+        )
+
+        let extraUsage = try XCTUnwrap(
+            report.limitGroups.first { $0.id.rawValue == "extra-usage" }
+        )
+        XCTAssertEqual(
+            extraUsage.displayName,
+            "menubar.extra_usage_organization".localized
+        )
+    }
+
+    /// An unclassified organization gets the same wider label: silence would
+    /// re-create the bug for every account whose classification is unknown.
+    func testUnclassifiedExtraUsageHeaderStillNamesTheOrganizationScope() throws {
+        let report = try makeReport(
+            usage: makeUsage(
+                costUsed: 259_316,
+                costLimit: 500_000,
+                costCurrency: "USD",
+                costScope: nil
+            )
+        )
+
+        let extraUsage = try XCTUnwrap(
+            report.limitGroups.first { $0.id.rawValue == "extra-usage" }
+        )
+        XCTAssertEqual(
+            extraUsage.displayName,
+            "menubar.extra_usage_organization".localized
+        )
+    }
+
+    /// A personal Max/Pro organization is the signed-in person, so the plain
+    /// header is accurate there and the scope word would only add noise.
+    func testPersonalExtraUsageHeaderOmitsTheScopeWord() throws {
+        let report = try makeReport(
+            usage: makeUsage(
+                costUsed: 259_316,
+                costLimit: 500_000,
+                costCurrency: "USD",
+                costScope: .personal
+            )
+        )
+
+        let extraUsage = try XCTUnwrap(
+            report.limitGroups.first { $0.id.rawValue == "extra-usage" }
+        )
+        XCTAssertEqual(extraUsage.displayName, "menubar.extra_usage".localized)
+        XCTAssertNotEqual(
+            extraUsage.displayName,
+            "menubar.extra_usage_organization".localized
+        )
+    }
+
+    /// The customer's reported figures. Labelling the scope must not disturb
+    /// the minor-to-major currency conversion underneath it.
+    func testCustomerReportedExtraUsageAmountsConvertUnchanged() throws {
+        let report = try makeReport(
+            usage: makeUsage(
+                costUsed: 259_316,
+                costLimit: 500_000,
+                costCurrency: "USD",
+                costScope: .organization
+            )
+        )
+
+        let window = try XCTUnwrap(
+            report.limitGroups
+                .first { $0.id.rawValue == "extra-usage" }?
+                .windows
+                .first
+        )
+        let quantity = try XCTUnwrap(window.quantity)
+        XCTAssertEqual(quantity.used, 2_593.16, accuracy: 0.000_1)
+        XCTAssertEqual(try XCTUnwrap(quantity.limit), 5_000, accuracy: 0.000_1)
+        let percentage = try XCTUnwrap(window.usedPercentage)
+        XCTAssertEqual(percentage, 51.8632, accuracy: 0.000_1)
+        XCTAssertEqual((percentage * 100).rounded() / 100, 51.86)
+    }
+
     private func makeReport(usage: ClaudeUsage) throws -> UsageReport {
         try ClaudeUsageProviderAdapter.makeReport(
             from: usage,
@@ -252,6 +343,7 @@ final class ClaudeUsageProviderAdapterTests: XCTestCase {
         costUsed: Double? = nil,
         costLimit: Double? = nil,
         costCurrency: String? = nil,
+        costScope: ClaudeUsage.ExtraUsageScope? = nil,
         overageBalance: Double? = nil,
         overageBalanceCurrency: String? = nil
     ) -> ClaudeUsage {
@@ -276,6 +368,7 @@ final class ClaudeUsageProviderAdapterTests: XCTestCase {
             costUsed: costUsed,
             costLimit: costLimit,
             costCurrency: costCurrency,
+            costScope: costScope,
             overageBalance: overageBalance,
             overageBalanceCurrency: overageBalanceCurrency,
             lastUpdated: sourceUpdatedAt,

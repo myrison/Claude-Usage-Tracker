@@ -61,6 +61,7 @@
 "menubar.sonnet_usage" = "Sonnet";
 "menubar.fable_usage" = "Fable";
 "menubar.extra_usage" = "额外使用量";
+"menubar.extra_usage_organization" = "额外使用量 · 组织";
 "menubar.api_credits" = "API 积分";
 "menubar.5_hour_window" = "5小时滚动窗口";
 "menubar.all_models" = "所有模型";
@@ -1276,3 +1277,5 @@
 "chrome_assisted.new_claude_profile" = "新的 Claude 配置文件";
 "personal.session_key_stored" = "会话密钥已存储";
 "personal.session_key_validated" = "会话密钥已验证";
+"menubar.overage_balance" = "Credit Balance";
+"menubar.overage_balance_organization" = "Credit Balance · Organization";
