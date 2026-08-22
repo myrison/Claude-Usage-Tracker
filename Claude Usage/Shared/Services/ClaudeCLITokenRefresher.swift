@@ -83,9 +83,21 @@ enum ClaudeCLITokenRefresher {
         guard let http = response as? HTTPURLResponse,
               http.statusCode == 200 else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            // The OAuth error code separates "this login is simply too old,
+            // sign in again" from "our request is malformed", which look
+            // identical as a bare 400 and lead to completely different
+            // remedies. Only the code is logged; the body also carries
+            // tokens.
+            let object = try? JSONSerialization.jsonObject(with: data)
+            let code = (object as? [String: Any])?["error"] as? String
             LoggingService.shared.logWarning(
-                "CLI token refresh returned HTTP \(status). The stored "
-                + "credential is unchanged."
+                "CLI token refresh returned HTTP \(status)"
+                + (code.map { " (\($0))" } ?? "")
+                + ". The stored credential is unchanged."
+                + (code == "invalid_grant"
+                   ? " This login has expired; signing in to that Claude Code"
+                     + " account again will renew it."
+                   : "")
             )
             return nil
         }
