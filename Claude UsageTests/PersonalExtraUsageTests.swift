@@ -477,6 +477,70 @@ final class PersonalExtraUsageTests: XCTestCase {
         )
     }
 
+    // MARK: - One login per account
+
+    /// Claude Code stores one Keychain item per configuration directory,
+    /// named `Claude Code-credentials-<first 8 hex of SHA-256 of the path>`.
+    /// Verified against a machine holding 13 such items, 10 of which mapped
+    /// exactly onto their `~/.claude-accounts/<name>` directories.
+    ///
+    /// Getting this wrong is not a visible failure — it silently resolves to
+    /// some other account's login, which is the shape of the original defect.
+    func testEachAccountResolvesToItsOwnKeychainItem() {
+        XCTAssertEqual(
+            ClaudeCodeSyncService.serviceName(
+                forConfigurationDirectory: "/Users/jason/.claude"
+            ),
+            "Claude Code-credentials-cacce12b"
+        )
+        XCTAssertEqual(
+            ClaudeCodeSyncService.serviceName(
+                forConfigurationDirectory: "/Users/jason/.claude-accounts/jcr"
+            ),
+            "Claude Code-credentials-05bbc126"
+        )
+        XCTAssertEqual(
+            ClaudeCodeSyncService.serviceName(
+                forConfigurationDirectory: "/Users/jason/.claude-accounts/r2"
+            ),
+            "Claude Code-credentials-14546770"
+        )
+
+        // Two accounts must never collide onto one login.
+        let names = [
+            "/Users/jason/.claude",
+            "/Users/jason/.claude-accounts/jcr",
+            "/Users/jason/.claude-accounts/r2",
+            "/Users/jason/.claude-accounts/r3"
+        ].map { ClaudeCodeSyncService.serviceName(forConfigurationDirectory: $0) }
+        XCTAssertEqual(Set(names).count, names.count)
+
+        // A trailing slash is a different path and must not be normalized
+        // away by accident: it would resolve to an item that does not exist.
+        XCTAssertNotEqual(
+            ClaudeCodeSyncService.serviceName(
+                forConfigurationDirectory: "/Users/jason/.claude-accounts/jcr"
+            ),
+            ClaudeCodeSyncService.serviceName(
+                forConfigurationDirectory: "/Users/jason/.claude-accounts/jcr/"
+            )
+        )
+    }
+
+    /// The directory an account's login lives in, which is what the item name
+    /// above is derived from.
+    func testAnAccountsConfigurationDirectory() {
+        XCTAssertEqual(
+            ClaudeCodeSyncService
+                .configurationDirectory(forAccountNamed: "jcr")
+                .path,
+            Constants.ClaudePaths.homeDirectory
+                .appendingPathComponent(".claude-accounts")
+                .appendingPathComponent("jcr")
+                .path
+        )
+    }
+
     // MARK: - Catalog
 
     func testEnglishCatalogCarriesEveryPersonalUsageMessage() throws {

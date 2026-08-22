@@ -5,6 +5,7 @@
 //  Created by Claude Code on 2026-01-07.
 //
 
+import CryptoKit
 import Foundation
 import Security
 
@@ -117,19 +118,23 @@ class ClaudeCodeSyncService {
     /// 1. ~/.claude/.credentials.json (always complete, not subject to keychain truncation)
     /// 2. System Keychain (may be truncated for large payloads >2KB)
     /// 3. Regex extraction of accessToken from truncated keychain data (last resort)
-    func readSystemCredentials() throws -> String? {
+    func readSystemCredentials(
+        forAccountNamed accountName: String? = nil
+    ) throws -> String? {
         if let systemCredentialsReader {
             return try systemCredentialsReader()
         }
 
         // 1. Try credentials file first (most reliable)
-        if let fileJSON = readCredentialsFile() {
+        if let fileJSON = readCredentialsFile(forAccountNamed: accountName) {
             LoggingService.shared.log("Read credentials from .credentials.json file")
             return fileJSON
         }
 
         // 2. Try keychain
-        let keychainData = try readKeychainCredentials()
+        let keychainData = try readKeychainCredentials(
+            forAccountNamed: accountName
+        )
 
         guard let rawJSON = keychainData else {
             // No credentials anywhere
@@ -174,10 +179,18 @@ class ClaudeCodeSyncService {
     }
 
     /// Reads credentials from ~/.claude/.credentials.json or ~/.claude/credentials.json file
-    private func readCredentialsFile() -> String? {
+    private func readCredentialsFile(
+        forAccountNamed accountName: String? = nil
+    ) -> String? {
+        // A linked account keeps its own configuration directory, so its
+        // credentials file is the one that describes it. Only fall back to
+        // the shared directory when no account is named.
+        let directory = accountName.map {
+            Self.configurationDirectory(forAccountNamed: $0)
+        } ?? Constants.ClaudePaths.claudeDirectory
         let paths = [
-            Constants.ClaudePaths.claudeDirectory.appendingPathComponent(".credentials.json"),
-            Constants.ClaudePaths.claudeDirectory.appendingPathComponent("credentials.json")
+            directory.appendingPathComponent(".credentials.json"),
+            directory.appendingPathComponent("credentials.json")
         ]
 
         for fileURL in paths {
@@ -231,8 +244,11 @@ class ClaudeCodeSyncService {
     /// whether `~/.claude/.credentials.json` happens to exist. Tests address
     /// it directly so their coverage of the failure codes does not vary by
     /// machine.
-    func readKeychainCredentials() throws -> String? {
-        let serviceName = resolveServiceName()
+    func readKeychainCredentials(
+        forAccountNamed accountName: String? = nil
+    ) throws -> String? {
+        let serviceName = accountServiceName(forAccountNamed: accountName)
+            ?? resolveServiceName()
         let result = try securityRunner.run([
             "find-generic-password",
             "-s", serviceName,
@@ -294,6 +310,52 @@ class ClaudeCodeSyncService {
     // MARK: - Keychain Service Name Discovery
 
     private static let legacyServiceName = "Claude Code-credentials"
+
+    /// The Keychain item Claude Code writes for one configuration directory.
+    ///
+    /// Claude Code names it `Claude Code-credentials-<hash>`, where the hash
+    /// is the first 8 hex characters of the SHA-256 of the configuration
+    /// directory's absolute path. Confirmed against a machine holding 13 such
+    /// items: 10 mapped exactly onto their `~/.claude-accounts/<name>`
+    /// directories, the rest belonging to directories since deleted.
+    ///
+    /// This exists because every profile was otherwise reading one shared
+    /// login. `resolveServiceName` tries the legacy un-suffixed name first,
+    /// which still exists on any machine that ran an older Claude Code — so
+    /// it matched immediately, was cached for the process, and served every
+    /// profile the same credential regardless of which account the profile
+    /// was linked to.
+    static func serviceName(forConfigurationDirectory path: String) -> String {
+        let digest = SHA256.hash(data: Data(path.utf8))
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return "\(legacyServiceName)-\(hex.prefix(8))"
+    }
+
+    /// The configuration directory a linked CLI account lives in.
+    static func configurationDirectory(forAccountNamed name: String) -> URL {
+        Constants.ClaudePaths.homeDirectory
+            .appendingPathComponent(".claude-accounts")
+            .appendingPathComponent(name)
+    }
+
+    /// The Keychain service holding one linked account's login, when that
+    /// account actually has one. `nil` sends the caller back to the shared
+    /// resolution, which is still correct for the default account.
+    private func accountServiceName(forAccountNamed name: String?) -> String? {
+        guard let name, !name.isEmpty else { return nil }
+        let directory = Self.configurationDirectory(forAccountNamed: name)
+        let candidate = Self.serviceName(
+            forConfigurationDirectory: directory.path
+        )
+        guard keychainItemExists(serviceName: candidate) else {
+            LoggingService.shared.logDebug(
+                "No Claude Code login stored for account '\(name)'; falling "
+                + "back to the default login."
+            )
+            return nil
+        }
+        return candidate
+    }
 
     /// Resolves the correct keychain service name for Claude Code credentials.
     /// Claude Code v2.1.52+ changed from "Claude Code-credentials" to "Claude Code-credentials-HASH".
@@ -465,7 +527,16 @@ class ClaudeCodeSyncService {
 
     /// Syncs credentials from system to profile (one-time copy)
     func syncToProfile(_ profileId: UUID) throws {
-        guard let jsonData = try readSystemCredentials() else {
+        // Read the login of the account THIS profile is linked to. Reading
+        // the shared default gave every profile the same credential, so a
+        // member-scoped figure could never be right for more than one of
+        // them — and was wrong or unusable for the rest.
+        let accountName = profileStore.loadProfiles()
+            .first { $0.id == profileId }?
+            .cliAccountName
+        guard let jsonData = try readSystemCredentials(
+            forAccountNamed: accountName
+        ) else {
             throw ClaudeCodeError.noCredentialsFound
         }
 
@@ -593,8 +664,16 @@ class ClaudeCodeSyncService {
     func resyncBeforeSwitching(for profileId: UUID) throws {
         LoggingService.shared.log("Re-syncing CLI credentials before profile switch: \(profileId)")
 
-        // Read fresh credentials from system (if user is logged in)
-        guard let freshJSON = try readSystemCredentials() else {
+        // Read fresh credentials from the account THIS profile is linked
+        // to. Reading the shared default here is how one login propagated
+        // into every profile: each switch overwrote the profile being left
+        // with whatever the default account happened to hold.
+        let accountName = profileStore.loadProfiles()
+            .first { $0.id == profileId }?
+            .cliAccountName
+        guard let freshJSON = try readSystemCredentials(
+            forAccountNamed: accountName
+        ) else {
             // No credentials in system - user not logged into CLI anymore
             LoggingService.shared.log("No system credentials found - skipping re-sync")
             return
