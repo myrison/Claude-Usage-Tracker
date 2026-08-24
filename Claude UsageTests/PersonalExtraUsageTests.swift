@@ -564,6 +564,561 @@ final class PersonalExtraUsageTests: XCTestCase {
         )
     }
 
+    // MARK: - Adopting the live CLI login
+
+    /// The reported bug: the app's stored copy can no longer be renewed
+    /// because the CLI already rotated its refresh token, but Claude Code
+    /// itself is signed in the whole time. The member's own extra usage
+    /// must resolve without anyone pressing Re-sync, and the adopted login
+    /// must be written back so the next refresh doesn't repeat the recovery.
+    func testAnUnrenewableCredentialAdoptsTheLiveCLILoginAndSucceeds()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            credentialsJSON: Self.credentialsJSON(expiresAt: 1_000),
+            in: store
+        )
+        let manager = ProfileManager(profileStore: store)
+        let profile = try seededProfile(profileID)
+        manager.profiles = [profile]
+        manager.activeProfile = profile
+        retained.append(manager)
+        retained.append(store)
+
+        let renewals = RenewedCredentialRecorder()
+        let live = Self.liveLoginJSON(
+            expiresAt: Date()
+                .addingTimeInterval(8 * 3600)
+                .timeIntervalSince1970 * 1000
+        )
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            systemCredentials: { live },
+            renewals: renewals
+        )
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            tokenRefreshStatusCode: 400
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+
+        XCTAssertEqual(usage.personalCostUsed, 0)
+        XCTAssertEqual(usage.personalCostLimit, 5_000)
+        XCTAssertNil(
+            usage.personalExtraUsageIssue,
+            "the adopted live login must resolve the member's own usage, "
+                + "not merely avoid .signInExpired"
+        )
+        XCTAssertTrue(
+            renewals.writes.contains {
+                $0.json == live && $0.profileID == profileID
+            },
+            "the adopted login must be persisted so the user is not asked "
+                + "to press Re-sync"
+        )
+    }
+
+    /// A genuinely signed-out account must still be reported as expired —
+    /// this fix must not paper over a real expiry.
+    func testAGenuinelySignedOutAccountStillReportsExpired() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            credentialsJSON: Self.credentialsJSON(expiresAt: 1_000),
+            in: store
+        )
+        let manager = ProfileManager(profileStore: store)
+        let profile = try seededProfile(profileID)
+        manager.profiles = [profile]
+        manager.activeProfile = profile
+        retained.append(manager)
+        retained.append(store)
+
+        let renewals = RenewedCredentialRecorder()
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            systemCredentials: { nil },
+            renewals: renewals
+        )
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            tokenRefreshStatusCode: 400
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+
+        XCTAssertEqual(usage.personalExtraUsageIssue, .signInExpired)
+        XCTAssertNil(usage.personalCostUsed)
+        XCTAssertTrue(renewals.writes.isEmpty)
+    }
+
+    /// A dead login must never be swapped for another dead login: the live
+    /// read exists, but is itself expired.
+    func testADeadLiveLoginIsNotAdopted() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            credentialsJSON: Self.credentialsJSON(expiresAt: 1_000),
+            in: store
+        )
+        let manager = ProfileManager(profileStore: store)
+        let profile = try seededProfile(profileID)
+        manager.profiles = [profile]
+        manager.activeProfile = profile
+        retained.append(manager)
+        retained.append(store)
+
+        let renewals = RenewedCredentialRecorder()
+        let expiredLive = Self.liveLoginJSON(expiresAt: 1_000)
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            systemCredentials: { expiredLive },
+            renewals: renewals
+        )
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            tokenRefreshStatusCode: 400
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+
+        XCTAssertEqual(usage.personalExtraUsageIssue, .signInExpired)
+        XCTAssertTrue(
+            renewals.writes.isEmpty,
+            "an expired live login must never be adopted"
+        )
+    }
+
+    /// A live blob with no token must never be adopted: a credential write
+    /// here validates shape only, so a tokenless blob could otherwise
+    /// overwrite a working login and read back as valid.
+    func testATokenlessLiveLoginIsNotAdopted() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            credentialsJSON: Self.credentialsJSON(expiresAt: 1_000),
+            in: store
+        )
+        let manager = ProfileManager(profileStore: store)
+        let profile = try seededProfile(profileID)
+        manager.profiles = [profile]
+        manager.activeProfile = profile
+        retained.append(manager)
+        retained.append(store)
+
+        let renewals = RenewedCredentialRecorder()
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            systemCredentials: { Self.signedOutCredentialsJSON },
+            renewals: renewals
+        )
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            tokenRefreshStatusCode: 400
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+
+        XCTAssertEqual(usage.personalExtraUsageIssue, .signInExpired)
+        XCTAssertTrue(
+            renewals.writes.isEmpty,
+            "a tokenless live blob must never be written over the stored "
+                + "credential"
+        )
+    }
+
+    /// A byte-identical live login is not a recovery: adopting it would
+    /// change nothing and still must be reported as the same failure as
+    /// before.
+    func testAByteIdenticalLiveLoginIsNotTreatedAsRecovery() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        let stored = Self.credentialsJSON(expiresAt: 1_000)
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            credentialsJSON: stored,
+            in: store
+        )
+        let manager = ProfileManager(profileStore: store)
+        let profile = try seededProfile(profileID)
+        manager.profiles = [profile]
+        manager.activeProfile = profile
+        retained.append(manager)
+        retained.append(store)
+
+        let renewals = RenewedCredentialRecorder()
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            systemCredentials: { stored },
+            renewals: renewals
+        )
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            tokenRefreshStatusCode: 400
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+
+        XCTAssertEqual(usage.personalExtraUsageIssue, .signInExpired)
+        XCTAssertTrue(renewals.writes.isEmpty)
+    }
+
+    /// The tokenless-stored path, not the unrenewable one: a stored login
+    /// that carries no token at all must also try the live login before
+    /// reporting `.signInHasNoToken`.
+    func testATokenlessStoredCredentialAdoptsTheLiveCLILogin() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            credentialsJSON: Self.signedOutCredentialsJSON,
+            in: store
+        )
+        let manager = ProfileManager(profileStore: store)
+        let profile = try seededProfile(profileID)
+        manager.profiles = [profile]
+        manager.activeProfile = profile
+        retained.append(manager)
+        retained.append(store)
+
+        let renewals = RenewedCredentialRecorder()
+        let live = Self.liveLoginJSON(
+            expiresAt: Date()
+                .addingTimeInterval(8 * 3600)
+                .timeIntervalSince1970 * 1000
+        )
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            systemCredentials: { live },
+            renewals: renewals
+        )
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+
+        XCTAssertNotEqual(
+            usage.personalExtraUsageIssue,
+            ClaudeUsage.PersonalExtraUsageIssue.signInHasNoToken
+        )
+        XCTAssertEqual(usage.personalCostUsed, 0)
+        XCTAssertEqual(usage.personalCostLimit, 5_000)
+        XCTAssertTrue(
+            renewals.writes.contains {
+                $0.json == live && $0.profileID == profileID
+            }
+        )
+    }
+
+    /// The Keychain read behind adoption must happen once per dead
+    /// credential, not on every refresh tick — `liveCLILoginAdoptionAttempts`
+    /// exists for exactly this.
+    func testTheLiveCLILoginIsReadAtMostOncePerDeadCredential() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            credentialsJSON: Self.credentialsJSON(expiresAt: 1_000),
+            in: store
+        )
+        let manager = ProfileManager(profileStore: store)
+        let profile = try seededProfile(profileID)
+        manager.profiles = [profile]
+        manager.activeProfile = profile
+        retained.append(manager)
+        retained.append(store)
+
+        var readCount = 0
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            systemCredentials: {
+                readCount += 1
+                return nil
+            }
+        )
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            tokenRefreshStatusCode: 400
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        _ = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+        _ = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+
+        XCTAssertEqual(
+            readCount,
+            1,
+            "the live CLI login must be consulted once per dead stored "
+                + "credential, not on every refresh"
+        )
+    }
+
+    /// A profile with a stored, unrenewable credential but no linked account
+    /// name must never fall back to the unscoped Keychain read: on a
+    /// multi-account machine that read returns whichever account happens to
+    /// own the shared item, which is exactly the cross-account confusion
+    /// PR #71 fixed for a different call site. This is the regression guard
+    /// for that reintroduction: `systemCredentialsReader` must not be
+    /// called at all.
+    func testANilAccountNameNeverAdoptsAnUnscopedLiveLogin() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            credentialsJSON: Self.credentialsJSON(expiresAt: 1_000),
+            cliAccountName: nil,
+            in: store
+        )
+        let manager = ProfileManager(profileStore: store)
+        let profile = try seededProfile(profileID)
+        manager.profiles = [profile]
+        manager.activeProfile = profile
+        retained.append(manager)
+        retained.append(store)
+
+        var readCount = 0
+        let renewals = RenewedCredentialRecorder()
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            systemCredentials: {
+                readCount += 1
+                return Self.liveLoginJSON(
+                    expiresAt: Date()
+                        .addingTimeInterval(8 * 3600)
+                        .timeIntervalSince1970 * 1000
+                )
+            },
+            renewals: renewals
+        )
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            tokenRefreshStatusCode: 400
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+
+        XCTAssertEqual(usage.personalExtraUsageIssue, .signInExpired)
+        XCTAssertEqual(
+            readCount,
+            0,
+            "a profile with no linked account name must never trigger the "
+                + "unscoped live Keychain read"
+        )
+        XCTAssertTrue(
+            renewals.writes.isEmpty,
+            "nothing may be written to this profile's credential storage "
+                + "when the account name is unknown"
+        )
+    }
+
+    /// The tokenless-stored path must apply the same nil-account-name guard
+    /// as the unrenewable path above.
+    func testANilAccountNameNeverAdoptsForATokenlessStoredCredential()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            credentialsJSON: Self.signedOutCredentialsJSON,
+            cliAccountName: nil,
+            in: store
+        )
+        let manager = ProfileManager(profileStore: store)
+        let profile = try seededProfile(profileID)
+        manager.profiles = [profile]
+        manager.activeProfile = profile
+        retained.append(manager)
+        retained.append(store)
+
+        var readCount = 0
+        let renewals = RenewedCredentialRecorder()
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            systemCredentials: {
+                readCount += 1
+                return Self.liveLoginJSON(
+                    expiresAt: Date()
+                        .addingTimeInterval(8 * 3600)
+                        .timeIntervalSince1970 * 1000
+                )
+            },
+            renewals: renewals
+        )
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+
+        XCTAssertEqual(
+            usage.personalExtraUsageIssue,
+            ClaudeUsage.PersonalExtraUsageIssue.signInHasNoToken
+        )
+        XCTAssertEqual(
+            readCount,
+            0,
+            "a profile with no linked account name must never trigger the "
+                + "unscoped live Keychain read"
+        )
+        XCTAssertTrue(renewals.writes.isEmpty)
+    }
+
+    /// Proves the notice's promise is actually true: a first refresh that
+    /// finds no live login yet must not permanently forfeit the credential's
+    /// one chance at recovery. Once the user signs in to Claude Code, a
+    /// later refresh over the same dead credential must adopt it.
+    func testSigningInAfterTheNoticeIsAdoptedOnALaterRefresh() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            credentialsJSON: Self.credentialsJSON(expiresAt: 1_000),
+            in: store
+        )
+        let manager = ProfileManager(profileStore: store)
+        let profile = try seededProfile(profileID)
+        manager.profiles = [profile]
+        manager.activeProfile = profile
+        retained.append(manager)
+        retained.append(store)
+
+        var signedIn = false
+        let live = Self.liveLoginJSON(
+            expiresAt: Date()
+                .addingTimeInterval(8 * 3600)
+                .timeIntervalSince1970 * 1000
+        )
+        let renewals = RenewedCredentialRecorder()
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            systemCredentials: { signedIn ? live : nil },
+            renewals: renewals
+        )
+        // Isolates this test from real wall-clock time: the throttle exists
+        // to bound Keychain reads across the seconds-apart ticks of a real
+        // refresh timer, not to stand between two calls made back-to-back
+        // in a test.
+        service.liveCLILoginAdoptionRetryInterval = 0
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            tokenRefreshStatusCode: 400
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let beforeSignIn = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+        XCTAssertEqual(beforeSignIn.personalExtraUsageIssue, .signInExpired)
+        XCTAssertTrue(renewals.writes.isEmpty)
+
+        signedIn = true
+        let afterSignIn = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+
+        XCTAssertNil(
+            afterSignIn.personalExtraUsageIssue,
+            "a refresh after the user signs in must recover automatically, "
+                + "which is the promise the updated notice makes"
+        )
+        XCTAssertTrue(
+            renewals.writes.contains {
+                $0.json == live && $0.profileID == profileID
+            }
+        )
+    }
+
     // MARK: - The credentials file that is not a login
 
     /// The defect behind every profile showing an organization figure with no
@@ -976,24 +1531,29 @@ final class PersonalExtraUsageTests: XCTestCase {
                 + "from Claude Code, which isn't linked to this account yet "
                 + "— add it in Settings → CLI Account."
         )
-        // Signing in again is necessary and NOT sufficient: the app holds
-        // its own copy and re-reads the real login only on a re-sync or a
-        // profile activation. Advice that stops at "sign in again" left
-        // someone pressing re-sync repeatedly against an unchanged number —
-        // observed live, and the whole reason this message says both halves.
+        // Signing in again is now necessary AND sufficient. This message
+        // used to end "then re-sync it in Settings → CLI Account — signing in
+        // alone doesn't reach the app", which was true when the app only ever
+        // re-read the real login on a re-sync or a profile activation. It no
+        // longer is: `adoptLiveCLILogin(for:replacing:)` performs that read
+        // itself when its own copy cannot be renewed, so the next refresh
+        // picks up a fresh sign-in unaided. Asking for the re-sync anyway was
+        // asking for the one step that was not needed — observed live, on a
+        // profile whose CLI login was valid the entire time.
         XCTAssertEqual(
             english.localizedString(
                 forKey: "popover.extra_usage.cli_sign_in_expired",
                 value: nil,
                 table: nil
             ),
-            "This is your organization's total. The Claude Code sign-in "
-                + "stored for this account has expired. Sign in to Claude "
-                + "Code again, then re-sync it in Settings → CLI Account — "
-                + "signing in alone doesn't reach the app."
+            "This is your organization's total. Claude Code's sign-in for "
+                + "this account has expired. Sign in to Claude Code again "
+                + "and your own extra usage will reappear on its own."
         )
-        // A login with no token in it is not a transient read failure, and
-        // must not be given the re-sync advice: re-syncing re-imports it.
+        // Reaching this state now means the app already looked at the login
+        // Claude Code holds and found none usable there either, so the
+        // account really is signed out — and signing in is again the whole
+        // remedy, with no manual re-import to ask for.
         XCTAssertEqual(
             english.localizedString(
                 forKey: "popover.extra_usage.cli_sign_in_has_no_token",
@@ -1002,8 +1562,8 @@ final class PersonalExtraUsageTests: XCTestCase {
             ),
             "This is your organization's total. Claude Code is signed out of "
                 + "the account linked here, so there's no sign-in to read "
-                + "your own extra usage with. Sign in to it, then re-sync in "
-                + "Settings → CLI Account."
+                + "your own extra usage with. Sign in to it and this will "
+                + "fill in on its own."
         )
         XCTAssertEqual(
             english.localizedString(
@@ -1082,10 +1642,28 @@ final class PersonalExtraUsageTests: XCTestCase {
         """
     }
 
+    /// A credential distinct from `credentialsJSON(expiresAt:)`'s, standing
+    /// in for the login Claude Code itself is holding — as read through
+    /// `systemCredentialsReader` rather than the profile's stored copy.
+    private static func liveLoginJSON(expiresAt: Double) -> String {
+        """
+        {"claudeAiOauth":{"accessToken":"live-access-token",\
+        "refreshToken":"live-refresh-token","expiresAt":\(expiresAt),\
+        "scopes":["user:inference"],"subscriptionType":"max"}}
+        """
+    }
+
     private func seedProfile(
         id: UUID,
         organizationID: String,
         credentialsJSON: String? = nil,
+        // Non-nil by default: every recovery test in this file exercises
+        // `adoptLiveCLILogin`'s ordinary path, which requires a linked
+        // account name to scope the Keychain read. The nil case is its own
+        // profile-shaped defect — a legacy decode can leave a stored
+        // credential with no account name — and is exercised explicitly by
+        // tests that pass `cliAccountName: nil`.
+        cliAccountName: String? = "fixture-account",
         in store: ProfileStore
     ) throws {
         let profile = Profile(
@@ -1101,7 +1679,8 @@ final class PersonalExtraUsageTests: XCTestCase {
                         .addingTimeInterval(8 * 3600)
                         .timeIntervalSince1970 * 1000
                 ),
-            hasCliAccount: true
+            hasCliAccount: true,
+            cliAccountName: cliAccountName
         )
         try seedProfilesForTesting([profile], in: store)
         try store.saveCLIProfileCredential(
