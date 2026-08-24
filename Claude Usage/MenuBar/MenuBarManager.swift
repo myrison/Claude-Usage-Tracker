@@ -1136,8 +1136,14 @@ class MenuBarManager: NSObject, ObservableObject {
                 return
             }
             ErrorLogger.shared.log(appError, severity: .error)
+            // The profile is named because this line is the only record of
+            // *which* account failed, and a multi-profile setup emits one per
+            // failing account. Without it, diagnosing a single expired
+            // credential means guessing which of eight profiles it belongs to.
             LoggingService.shared.logError(
-                "MenuBarManager: Claude usage refresh failed (\(event.failure.kind))"
+                "MenuBarManager: Claude usage refresh failed for profile "
+                + "\(event.identity.profileID.uuidString.prefix(8)) "
+                + "(\(event.failure.kind))"
             )
         }
     }
@@ -1958,12 +1964,38 @@ class MenuBarManager: NSObject, ObservableObject {
                 self.openPopoverClaudeAIAccount(
                     target: self.popoverActionTarget()
                 )
+            },
+            onCredentialsBannerTap: { [weak self] profileID in
+                guard let self else { return }
+                self.openPopoverClaudeAIAccount(
+                    target: self.claudeAIAccountTarget(forDisplayedProfile: profileID)
+                )
             }
         )
 
         let hostingController = NSHostingController(rootView: contentView)
         hostingController.preferredContentSize = Constants.WindowSizes.popoverSize
-        hostingController.sizingOptions = .preferredContentSize
+        // No content-derived sizing: this popover's size is dictated by the
+        // app, never by its content. `popover.contentSize` and
+        // `sizePopover(_:relativeTo:)` set it outright, and the root view
+        // fills whatever it is given via
+        // `.frame(maxHeight: .infinity, alignment: .top)`, scrolling
+        // internally when the content is taller.
+        //
+        // `.preferredContentSize` therefore bought nothing and cost a crash.
+        // It makes the hosting view create and update Auto Layout constraints
+        // from the SwiftUI content's ideal size, so a content change
+        // re-invalidates layout from *inside* AppKit's constraint-update pass.
+        // AppKit treats that re-entrancy as fatal: it throws from
+        // `-[NSWindow _postWindowNeedsUpdateConstraints]` and nothing catches
+        // it. Observed as RevvyTach-2026-08-24-060956 — a mouse-down in the
+        // popover entered `-[NSPopover _dragFromScreenLocation:]`'s nested
+        // event loop (the popover is `.semitransient`, so it can be dragged
+        // to detach) while a refresh triggered by a CLI re-sync resized the
+        // profile rows underneath. `animates = false` above is an earlier,
+        // partial workaround for the same interaction; this closes the path
+        // the exception came through.
+        hostingController.sizingOptions = []
         return hostingController
     }
 
@@ -1994,6 +2026,50 @@ class MenuBarManager: NSObject, ObservableObject {
               let profile = profileManager.profiles.first(
                 where: { $0.id == profileID }
               ) else {
+            return nil
+        }
+        return ProviderStatusItemIdentity(
+            profileID: profile.id,
+            providerID: profile.providerID,
+            providerRevision: profile.providerRevision,
+            metricID: nil
+        )
+    }
+
+    /// Resolves the claude.ai account target for the credential banner using
+    /// the profile currently displayed in the popover (which can diverge
+    /// from `popoverActionTarget()` after an in-popover account-chip switch),
+    /// falling back to the standard target resolution only when no specific
+    /// profile id is supplied at all.
+    private func claudeAIAccountTarget(
+        forDisplayedProfile profileID: UUID?
+    ) -> ProviderStatusItemIdentity? {
+        guard let profileID else {
+            return popoverActionTarget()
+        }
+        return Self.claudeAIAccountTarget(
+            forDisplayedProfile: profileID,
+            in: profileManager.profiles
+        )
+    }
+
+    /// Pulled out as a static, non-UI function so the "which profile the
+    /// credential banner targets" logic is testable without a live
+    /// `MenuBarManager`/`ProfileManager`. See the instance method above for
+    /// the `profileID == nil` fallback to `popoverActionTarget()`, which
+    /// stays there since it depends on live popover/click state.
+    static func claudeAIAccountTarget(
+        forDisplayedProfile profileID: UUID,
+        in profiles: [Profile]
+    ) -> ProviderStatusItemIdentity? {
+        guard let profile = profiles.first(
+            where: { $0.id == profileID }
+        ) else {
+            // The chip-selected profile was removed or invalidated while the
+            // popover stayed open. Falling back to a different profile here
+            // would route to a DIFFERENT profile's settings with false
+            // confidence, so decline the navigation instead — matching how
+            // openPopoverClaudeAIAccount(target: nil) already no-ops.
             return nil
         }
         return ProviderStatusItemIdentity(
@@ -4250,6 +4326,14 @@ extension MenuBarManager: NSPopoverDelegate {
                     },
                     onClaudeAIAccount: { [weak self] in
                         self?.openPopoverClaudeAIAccount(target: target)
+                    },
+                    onCredentialsBannerTap: { [weak self] profileID in
+                        guard let self else { return }
+                        self.openPopoverClaudeAIAccount(
+                            target: self.claudeAIAccountTarget(
+                                forDisplayedProfile: profileID
+                            )
+                        )
                     }
                 )
                 let hostingController = NSHostingController(

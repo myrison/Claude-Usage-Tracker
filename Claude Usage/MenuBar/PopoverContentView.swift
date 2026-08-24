@@ -34,6 +34,10 @@ struct PopoverNavigationActions {
 enum LegacyPopoverBanner: Equatable {
     enum Action: Equatable {
         case preferences
+        /// Settings → Claude.ai, where the session key lives. Distinct from
+        /// `preferences` because "open Settings" is not an answer when the
+        /// user has two unrelated credentials and only one of them is broken.
+        case claudeAIAccount
         case refresh
         case retryCredentialSave
     }
@@ -52,7 +56,13 @@ enum LegacyPopoverBanner: Equatable {
         case .credentialsNotSaved:
             return .retryCredentialSave
         case .credentialError:
-            return .preferences
+            // `hasCredentialError` is set only when the usage refresh fails
+            // as `.unauthenticated`, which is reachable only from the
+            // claude.ai session-key error codes — never from the Claude Code
+            // CLI credential. Sending the user to Settings at large let them
+            // re-sync the CLI account instead, which can never clear this
+            // banner no matter how many times it succeeds.
+            return .claudeAIAccount
         case .refreshFailed, .stale:
             return .refresh
         }
@@ -208,6 +218,7 @@ struct PopoverContentView: View {
     @ObservedObject var manager: MenuBarManager
     let onRefresh: () -> Void
     let navigationActions: PopoverNavigationActions
+    let onCredentialsBannerTap: (UUID?) -> Void
 
     @State private var isRefreshing = false
     // Replaces NSPopover's native resize animation, which can recurse indefinitely
@@ -222,7 +233,8 @@ struct PopoverContentView: View {
         onManageProfiles: @escaping () -> Void,
         onPreferences: @escaping () -> Void,
         onCLIAccount: @escaping () -> Void,
-        onClaudeAIAccount: @escaping () -> Void
+        onClaudeAIAccount: @escaping () -> Void,
+        onCredentialsBannerTap: @escaping (UUID?) -> Void
     ) {
         self.manager = manager
         _profileManager = ObservedObject(
@@ -235,6 +247,7 @@ struct PopoverContentView: View {
             cliAccount: onCLIAccount,
             claudeAIAccount: onClaudeAIAccount
         )
+        self.onCredentialsBannerTap = onCredentialsBannerTap
     }
 
     private var displayedProfile: Profile? {
@@ -466,7 +479,7 @@ struct PopoverContentView: View {
                     message:
                         "popover.banner.credentials_expired".localized,
                     color: .orange,
-                    onTap: navigationActions.preferences
+                    onTap: { onCredentialsBannerTap(displayedProfile?.id) }
                 )
             case .refreshFailed:
                 ExpandableStatusBanner(
