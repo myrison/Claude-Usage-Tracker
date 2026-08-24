@@ -69,18 +69,25 @@ enum ClaudeUsageProviderAdapter {
                 windows: [
                     try UsageWindow(
                         id: UsageWindowID("session"),
-                        // Match ClaudeUsage.effectiveSessionPercentage without
-                        // its implicit Date() dependency.
-                        usedPercentage: usage.sessionResetTime < context.fetchedAt
-                            ? 0
-                            : usage.sessionPercentage,
+                        // nil when the response never reported the window, so
+                        // the popover says "Unavailable" instead of drawing a
+                        // reassuring empty bar. When it was reported, match
+                        // ClaudeUsage.effectiveSessionPercentage without its
+                        // implicit Date() dependency.
+                        usedPercentage: usage.sessionPercentageAvailable
+                            ? (usage.sessionResetTime < context.fetchedAt
+                                ? 0
+                                : usage.sessionPercentage)
+                            : nil,
                         quantity: nil,
                         resetsAt: usage.sessionResetTime,
                         duration: Constants.sessionWindow
                     ),
                     try UsageWindow(
                         id: UsageWindowID("weekly"),
-                        usedPercentage: usage.weeklyPercentage,
+                        usedPercentage: usage.weeklyPercentageAvailable
+                            ? usage.weeklyPercentage
+                            : nil,
                         quantity: nil,
                         resetsAt: usage.weeklyResetTime,
                         duration: Constants.weeklyWindow
@@ -171,13 +178,74 @@ enum ClaudeUsageProviderAdapter {
         return try UsageReport(
             providerID: .claude,
             account: context.account,
-            health: context.health,
+            health: accountHealth(from: usage, base: context.health),
             limitGroups: groups,
             credits: credits,
             sourceUpdatedAt: usage.lastUpdated,
             fetchedAt: context.fetchedAt,
             staleAt: context.staleAt
         )
+    }
+
+    /// The account's own health, as the fetched record actually evidences it.
+    ///
+    /// A completed request used to be reported as `.healthy` unconditionally,
+    /// which made the value tautological: it said the fetch had returned, not
+    /// that the account behind it was in good order. A profile whose Claude
+    /// Code sign-in was functionally dead reported perfect health, and the
+    /// header had nothing to show but Anthropic's public service status —
+    /// which is about Anthropic, not about you.
+    ///
+    /// This only ever lowers the caller's verdict. A transport-level failure
+    /// stays a transport-level failure; what is added is the case where the
+    /// request succeeded and still came back missing something.
+    static func accountHealth(
+        from usage: ClaudeUsage,
+        base: ProviderHealth
+    ) -> ProviderHealth {
+        guard base.status == .healthy else { return base }
+
+        func degraded(_ issue: ProviderHealthIssue) -> ProviderHealth {
+            ProviderHealth(
+                status: .degraded,
+                checkedAt: base.checkedAt,
+                issue: issue
+            )
+        }
+
+        // No capacity figure at all. The one thing the app exists to show is
+        // missing, so this is not a partial answer — it is no answer.
+        if !usage.sessionPercentageAvailable,
+           !usage.weeklyPercentageAvailable {
+            return ProviderHealth(
+                status: .unavailable,
+                checkedAt: base.checkedAt,
+                issue: .responseInvalid
+            )
+        }
+        if !usage.sessionPercentageAvailable
+            || !usage.weeklyPercentageAvailable {
+            return degraded(.responseInvalid)
+        }
+
+        // A connection that exists and is broken. `notLinked` and
+        // `differentOrganization` are deliberately absent: nothing is broken
+        // in either — one was never connected, the other is a settled fact
+        // about a separate account — and reporting them as degraded would
+        // leave a permanent complaint on a correctly configured profile.
+        switch usage.personalExtraUsageIssue {
+        case .signInExpired, .signInHasNoToken, .signInUnusable,
+             .claudeAccountUnresolved:
+            return degraded(.authenticationRequired)
+        case .notLinked, .differentOrganization, nil:
+            break
+        }
+
+        if usage.organizationExtraUsageIssue == .lookupFailed {
+            return degraded(.optionalUsageUnavailable)
+        }
+
+        return base
     }
 
     /// Why the popover should explain a missing personal figure, if it should.
@@ -201,6 +269,58 @@ enum ClaudeUsageProviderAdapter {
             && usage.personalCostCurrency != nil
         guard hasOrganizationFigure, !hasPersonalFigure else { return nil }
         return usage.personalExtraUsageIssue
+    }
+
+    /// What the popover should say about extra usage, when there is no figure
+    /// on screen to say it about.
+    ///
+    /// `personalExtraUsageIssueToExplain` above answers a different question:
+    /// it reconciles a company-wide figure the viewer cannot map to
+    /// themselves, and only fires when that figure is present. When no figure
+    /// reaches the screen at all the extra-usage row simply does not render,
+    /// and the app went silent — while holding the exact reason, in six
+    /// finished cases, that it could not display.
+    enum ExtraUsageAbsence: Equatable {
+        /// The viewer's own figure is missing for a known, usually actionable
+        /// reason, and no organization figure is standing in front of it.
+        case unreadablePersonalFigure(ClaudeUsage.PersonalExtraUsageIssue)
+        /// The organization-scoped request did not come back this time. Not
+        /// the same as extra usage being switched off, which stays silent.
+        case unreadableOrganizationFigure
+    }
+
+    static func extraUsageAbsenceToExplain(
+        for usage: ClaudeUsage
+    ) -> ExtraUsageAbsence? {
+        let hasPersonalFigure = usage.personalCostUsed != nil
+            && (usage.personalCostLimit ?? 0) > 0
+            && usage.personalCostCurrency != nil
+        // Their own number is on screen; nothing is missing.
+        if hasPersonalFigure { return nil }
+
+        let hasOrganizationFigure = usage.costUsed != nil
+            && (usage.costLimit ?? 0) > 0
+            && usage.costCurrency != nil
+        // A figure is on screen. Either it is this person's own (a personal
+        // Max/Pro subscription, where the organization *is* them, and the
+        // existing silence there is correct) or it is the company's and
+        // `personalExtraUsageIssueToExplain` already reconciles it. Either
+        // way this statement would be a second, contradictory voice.
+        if hasOrganizationFigure { return nil }
+
+        // Nothing on screen. The member-scoped reason leads when there is
+        // one: it names something the reader can act on.
+        if let issue = usage.personalExtraUsageIssue {
+            return .unreadablePersonalFigure(issue)
+        }
+        switch usage.organizationExtraUsageIssue {
+        case .lookupFailed:
+            return .unreadableOrganizationFigure
+        case .notEnabled, nil:
+            // Switched off, or never asked for. Settled answers with nothing
+            // to fix, and a notice about them would be noise on every refresh.
+            return nil
+        }
     }
 
     /// One extra-usage group, or nil when the figure is absent or unusable.

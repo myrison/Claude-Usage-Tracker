@@ -290,6 +290,12 @@ struct NormalizedUsagePresentation: Equatable {
     let credits: [UsageCredit]
     let notices: [NormalizedUsageNotice]
     let emptyState: NormalizedUsageEmptyState?
+    /// When the figures below were last successfully read, so their age can
+    /// be shown rather than inferred. Nil when nothing has been read.
+    ///
+    /// General insurance rather than a fix for one bug: every future
+    /// staleness defect becomes visible without anyone having predicted it.
+    let readAt: Date?
     let legacyClaudeUsage: ClaudeUsage?
     let legacyClaudeAPIUsage: APIUsage?
 
@@ -428,6 +434,9 @@ enum NormalizedUsagePresentationBuilder {
             credits: credits,
             notices: notices,
             emptyState: emptyState,
+            // The provider's own statement of when its figures were current,
+            // falling back to when this app completed the fetch.
+            readAt: report?.sourceUpdatedAt ?? report?.fetchedAt,
             legacyClaudeUsage: snapshot.providerID == .claude
                 ? snapshot.claudeUsage
                 : nil,
@@ -674,6 +683,7 @@ enum NormalizedUsagePresentationBuilder {
             credits: [],
             notices: [],
             emptyState: .missingSnapshot,
+            readAt: nil,
             legacyClaudeUsage: nil,
             legacyClaudeAPIUsage: nil
         )
@@ -804,10 +814,19 @@ struct ProviderPopoverHeader: View {
         }
     }
 
+    /// The one thing the top meta row says. For Claude it is Anthropic's
+    /// public service status, which is not a statement about this account —
+    /// `accountHealthText` below is, and both are shown.
     private var providerStatusText: String {
         if presentation.providerID == .claude {
             return claudeStatus.description
         }
+        return accountHealthText
+    }
+
+    /// This account's own health, in the same words every other provider's
+    /// header already uses.
+    private var accountHealthText: String {
         switch presentation.healthStatus {
         case .healthy:
             return NormalizedUsageStrings.localized(
@@ -842,6 +861,69 @@ struct ProviderPopoverHeader: View {
         }
     }
 
+    private var accountHealthColor: Color {
+        switch presentation.healthStatus {
+        case .healthy:
+            return .adaptiveGreen
+        case .degraded:
+            return .orange
+        case .unavailable, .unauthenticated:
+            return .red
+        case .unsupported, nil:
+            return .gray
+        }
+    }
+
+    /// This account's health, shown only for Claude — every other provider's
+    /// header already carries it on the row above, and a second copy would
+    /// just be the same sentence twice.
+    ///
+    /// It sits beneath the service-status row rather than replacing it: the
+    /// service status is genuinely useful, it just is not an answer to "is my
+    /// account working". The two are told apart by saying which is which —
+    /// this row is labelled "Account" and carries a person glyph, and the row
+    /// above leads with the provider's name and opens status.claude.com.
+    @ViewBuilder
+    private var accountHealthRow: some View {
+        HStack(spacing: 5) {
+            // The glyph carries both jobs: it says this row is about the
+            // account, and its tint says how the account is doing. A separate
+            // status dot beside it would repeat the colour and cost width
+            // that the longest translated verdicts do not have to spare.
+            Image(systemName: "person.crop.circle")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(accountHealthColor)
+                .accessibilityHidden(true)
+            Text(
+                NormalizedUsageStrings.localized(
+                    "popover.normalized.account_health.label",
+                    default: "Account"
+                )
+            )
+            .font(.system(size: 11, weight: .semibold))
+            Text("·")
+                .font(PopoverDesign.metaFont)
+            Text(accountHealthText)
+                .font(PopoverDesign.metaFont)
+                .lineLimit(1)
+                // Measured, every verdict fits in every shipped locale, with
+                // Japanese "unsupported account" the tightest at roughly 5pt
+                // to spare. A future translation that overruns shrinks by up
+                // to a tenth rather than losing its last word to an ellipsis.
+                .minimumScaleFactor(0.9)
+                .truncationMode(.tail)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            NormalizedUsageStrings.localized(
+                "popover.normalized.account_health.label",
+                default: "Account"
+            )
+            + ": \(accountHealthText)"
+        )
+        .accessibilityIdentifier("popover.provider.account_health")
+    }
+
     @ViewBuilder
     private var statusRow: some View {
         let content = HStack(spacing: 5) {
@@ -867,7 +949,20 @@ struct ProviderPopoverHeader: View {
                 content
             }
             .buttonStyle(.plain)
-            .help("Click to open status.claude.com")
+            .accessibilityLabel(
+                NormalizedUsageStrings.localized(
+                    "popover.normalized.service_status.accessibility",
+                    default: "Anthropic service status"
+                )
+                + ": \(providerStatusText)"
+            )
+            .help(
+                NormalizedUsageStrings.localized(
+                    "popover.normalized.service_status.help",
+                    default: "Anthropic service status — click to open "
+                        + "status.claude.com"
+                )
+            )
         } else {
             content
         }
@@ -1029,6 +1124,11 @@ struct ProviderPopoverHeader: View {
                             .providerHeaderAccessibilityIdentifier
                     )
 
+                if presentation.providerID == .claude {
+                    accountHealthRow
+                        .foregroundColor(.secondary)
+                }
+
                 if showsAccountLine {
                     Text(accountDescription)
                         .font(.system(size: 10))
@@ -1099,17 +1199,26 @@ struct NormalizedUsageView: View {
     /// existing call sites that only wire the CLI action keep working.
     var onConnectClaudeAIAccount: (() -> Void)?
 
-    /// The organization's extra usage is on screen and the viewer's own is
-    /// not, so the popover explains whose number this is and what is missing.
-    /// Claude-specific, and driven by the data rather than by provider
-    /// identity.
-    private var personalExtraUsageIssue: ClaudeUsage.PersonalExtraUsageIssue? {
+    /// What the popover says about extra usage, if anything.
+    ///
+    /// Two mutually exclusive statements: reconciling a company-wide figure
+    /// the reader cannot map to themselves, or reporting that no figure could
+    /// be read at all. Claude-specific, and driven by the data rather than by
+    /// provider identity.
+    private var extraUsageNotice: ExtraUsageNotice? {
         guard onConnectCLIAccount != nil,
               let usage = presentation.legacyClaudeUsage else {
             return nil
         }
-        return ClaudeUsageProviderAdapter
-            .personalExtraUsageIssueToExplain(for: usage)
+        if let issue = ClaudeUsageProviderAdapter
+            .personalExtraUsageIssueToExplain(for: usage) {
+            return .unexplainedOrganizationFigure(issue)
+        }
+        if let absence = ClaudeUsageProviderAdapter
+            .extraUsageAbsenceToExplain(for: usage) {
+            return .absence(absence)
+        }
+        return nil
     }
 
     var body: some View {
@@ -1152,6 +1261,16 @@ struct NormalizedUsageView: View {
                 profileName: presentation.profileName
             )
         } else {
+            if let readAt = presentation.readAt {
+                Text(
+                    NormalizedUsageFormatter.age(readAt, now: now)
+                )
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .accessibilityIdentifier("popover.usage.read_at")
+            }
             ForEach(presentation.groups) { group in
                 UsageLimitGroupView(
                     group: group,
@@ -1160,9 +1279,9 @@ struct NormalizedUsageView: View {
                     now: now
                 )
             }
-            if let personalExtraUsageIssue, let onConnectCLIAccount {
-                PersonalExtraUsageNoticeView(
-                    issue: personalExtraUsageIssue,
+            if let extraUsageNotice, let onConnectCLIAccount {
+                ExtraUsageNoticeView(
+                    notice: extraUsageNotice,
                     cliAccountAction: onConnectCLIAccount,
                     claudeAIAccountAction: onConnectClaudeAIAccount ?? onConnectCLIAccount
                 )
@@ -1185,11 +1304,25 @@ struct NormalizedUsageView: View {
     }
 }
 
-/// Sits directly beneath the organization's extra-usage row, in the same
-/// inline-notice style as the empty states, and opens the screen where a
-/// Claude Code account gets connected.
-private struct PersonalExtraUsageNoticeView: View {
-    let issue: ClaudeUsage.PersonalExtraUsageIssue
+/// What the popover is saying about extra usage, and in which voice.
+///
+/// Two different statements, deliberately kept apart. One reconciles a
+/// company-wide figure that is on screen and cannot be mapped to the reader;
+/// the other says a figure could not be read at all. Sharing one wording made
+/// the second impossible to say — every sentence opened by explaining a
+/// number that, in this case, is not there.
+enum ExtraUsageNotice: Equatable {
+    /// The organization's figure is on screen and the reader's own is not.
+    case unexplainedOrganizationFigure(ClaudeUsage.PersonalExtraUsageIssue)
+    /// No figure reached the screen, and this is why.
+    case absence(ClaudeUsageProviderAdapter.ExtraUsageAbsence)
+}
+
+/// Sits where the extra-usage row would be — beneath it when there is one, in
+/// its place when there is not — in the same inline-notice style as the empty
+/// states, and opens the screen where the missing connection gets fixed.
+private struct ExtraUsageNoticeView: View {
+    let notice: ExtraUsageNotice
     /// Settings → CLI Account, for the cases whose remedy is a Claude Code
     /// sign-in.
     let cliAccountAction: () -> Void
@@ -1206,12 +1339,21 @@ private struct PersonalExtraUsageNoticeView: View {
     /// remove — the point of the notice is that a case nobody decided about
     /// must not quietly look decided.
     private var action: () -> Void {
-        switch issue {
-        case .claudeAccountUnresolved:
+        switch notice {
+        case .absence(.unreadableOrganizationFigure):
+            // Nothing to connect: the claude.ai request itself failed. The
+            // account screen is still the only place with anything to do
+            // about a credential, so it stays the destination.
             return claudeAIAccountAction
-        case .notLinked, .signInExpired, .signInUnusable,
-             .signInHasNoToken, .differentOrganization:
-            return cliAccountAction
+        case .unexplainedOrganizationFigure(let issue),
+             .absence(.unreadablePersonalFigure(let issue)):
+            switch issue {
+            case .claudeAccountUnresolved:
+                return claudeAIAccountAction
+            case .notLinked, .signInExpired, .signInUnusable,
+                 .signInHasNoToken, .differentOrganization:
+                return cliAccountAction
+            }
         }
     }
 
@@ -1221,6 +1363,26 @@ private struct PersonalExtraUsageNoticeView: View {
     /// which is the only source of the member's own. Saying just "connect
     /// your account" left people unable to tell which of the two was meant.
     private var message: String {
+        switch notice {
+        case .unexplainedOrganizationFigure(let issue):
+            return reconciliationMessage(for: issue)
+        case .absence(.unreadablePersonalFigure(let issue)):
+            return absenceMessage(for: issue)
+        case .absence(.unreadableOrganizationFigure):
+            return NormalizedUsageStrings.localized(
+                "popover.extra_usage.organization_lookup_failed",
+                default: "Your extra usage couldn't be read just now. "
+                    + "Refresh to try again."
+            )
+        }
+    }
+
+    /// The reconciliation voice: a company-wide figure is on screen and the
+    /// reader's own is not, so every sentence starts by saying whose number
+    /// they are looking at.
+    private func reconciliationMessage(
+        for issue: ClaudeUsage.PersonalExtraUsageIssue
+    ) -> String {
         switch issue {
         case .notLinked:
             return NormalizedUsageStrings.localized(
@@ -1269,16 +1431,84 @@ private struct PersonalExtraUsageNoticeView: View {
         }
     }
 
-    private var icon: String {
+    /// The absence voice: no figure is on screen, so there is no number to
+    /// explain — only a reading that could not be taken, and its remedy.
+    private func absenceMessage(
+        for issue: ClaudeUsage.PersonalExtraUsageIssue
+    ) -> String {
         switch issue {
         case .notLinked:
-            return "person.crop.circle.badge.plus"
-        case .signInExpired, .signInUnusable, .signInHasNoToken:
-            return "exclamationmark.triangle"
+            return NormalizedUsageStrings.localized(
+                "popover.extra_usage.absent.cli_not_linked",
+                default: "Your extra usage comes from Claude Code, which "
+                    + "isn't linked to this account yet — add it in "
+                    + "Settings → CLI Account."
+            )
+        case .signInExpired:
+            return NormalizedUsageStrings.localized(
+                "popover.extra_usage.absent.cli_sign_in_expired",
+                default: "Your extra usage can't be read: Claude Code's "
+                    + "sign-in for this account has expired. Sign in to "
+                    + "Claude Code again and it will reappear on its own."
+            )
+        case .signInHasNoToken:
+            return NormalizedUsageStrings.localized(
+                "popover.extra_usage.absent.cli_sign_in_has_no_token",
+                default: "Your extra usage can't be read: Claude Code is "
+                    + "signed out of the account linked here. Sign in to it "
+                    + "and this will fill in on its own."
+            )
+        case .signInUnusable:
+            return NormalizedUsageStrings.localized(
+                "popover.extra_usage.absent.cli_sign_in_unusable",
+                default: "Your extra usage couldn't be read just now — "
+                    + "re-sync your Claude Code account in Settings → "
+                    + "CLI Account."
+            )
         case .differentOrganization:
-            return "person.2.slash"
+            return NormalizedUsageStrings.localized(
+                "popover.extra_usage.absent.cli_other_organization",
+                default: "Your extra usage isn't shown: the linked Claude "
+                    + "Code account belongs to a different organization."
+            )
         case .claudeAccountUnresolved:
-            return "person.crop.circle.badge.questionmark"
+            return NormalizedUsageStrings.localized(
+                "popover.extra_usage.absent.claude_account_unresolved",
+                default: "Your extra usage couldn't be matched to this "
+                    + "organization — reconnect your account in "
+                    + "Settings → Claude.ai."
+            )
+        }
+    }
+
+    private var icon: String {
+        switch notice {
+        case .absence(.unreadableOrganizationFigure):
+            return "exclamationmark.triangle"
+        case .unexplainedOrganizationFigure(let issue),
+             .absence(.unreadablePersonalFigure(let issue)):
+            switch issue {
+            case .notLinked:
+                return "person.crop.circle.badge.plus"
+            case .signInExpired, .signInUnusable, .signInHasNoToken:
+                return "exclamationmark.triangle"
+            case .differentOrganization:
+                return "person.2.slash"
+            case .claudeAccountUnresolved:
+                return "person.crop.circle.badge.questionmark"
+            }
+        }
+    }
+
+    /// Distinct identifiers so a UI test can tell which of the two statements
+    /// is on screen — they are mutually exclusive by construction and a
+    /// shared identifier would hide a regression that swapped them.
+    private var accessibilityIdentifier: String {
+        switch notice {
+        case .unexplainedOrganizationFigure:
+            return "popover.extra_usage.personal_notice"
+        case .absence:
+            return "popover.extra_usage.absent_notice"
         }
     }
 
@@ -1298,7 +1528,7 @@ private struct PersonalExtraUsageNoticeView: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("popover.extra_usage.personal_notice")
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
 
@@ -1795,6 +2025,26 @@ enum NormalizedUsageFormatter {
                 arguments: [remaining, absolute]
             )
         }
+    }
+
+    /// "as of 4m ago" — how old the figures on screen are.
+    ///
+    /// Deliberately relative: an absolute timestamp makes the reader do the
+    /// subtraction, and the question being answered is "is this current",
+    /// not "what time was it".
+    static func age(_ date: Date, now: Date) -> String {
+        let interval = now.timeIntervalSince(date)
+        guard interval >= 60 else {
+            return NormalizedUsageStrings.localized(
+                "popover.normalized.age.just_now",
+                default: "as of just now"
+            )
+        }
+        return NormalizedUsageStrings.formatted(
+            "popover.normalized.age.ago",
+            default: "as of %@ ago",
+            arguments: [remainingTime(interval)]
+        )
     }
 
     static func day(

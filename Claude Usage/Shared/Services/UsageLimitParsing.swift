@@ -5,6 +5,43 @@ import Foundation
 /// `seven_day_opus`/`seven_day_sonnet` top-level keys. Shared by ClaudeAPIService and
 /// AutoStartSessionService, which both parse the same response shape independently.
 enum UsageLimitParsing {
+    /// One of the two primary usage windows (`five_hour`, `seven_day`) exactly
+    /// as the response reported it — including the case where it reported
+    /// nothing at all.
+    ///
+    /// `percentage` is optional on purpose. Both callers used to start from a
+    /// local `var percentage = 0.0` and overwrite it only when the window was
+    /// present, so a response missing the window produced a confident zero and
+    /// still returned success. Nothing threw, no empty state engaged, and the
+    /// UI reported "0% used" about a figure nobody had received.
+    struct PrimaryWindow: Equatable {
+        /// Nil when the response carried no utilization for this window. A
+        /// zero here means a measured zero and nothing else.
+        let percentage: Double?
+        /// Nil when the response carried no parseable reset time, leaving the
+        /// caller to fall back to its own estimate.
+        let resetTime: Date?
+
+        /// Whether a figure was actually reported for this window.
+        var isAvailable: Bool { percentage != nil }
+    }
+
+    /// Reads one primary window out of a usage response.
+    /// - Parameter key: `"five_hour"` or `"seven_day"`.
+    static func parsePrimaryWindow(
+        from json: [String: Any],
+        key: String
+    ) -> PrimaryWindow {
+        guard let window = json[key] as? [String: Any] else {
+            return PrimaryWindow(percentage: nil, resetTime: nil)
+        }
+        let percentage = window["utilization"].flatMap(parseUtilizationIfAvailable(_:))
+        return PrimaryWindow(
+            percentage: percentage,
+            resetTime: parseResetTime(window["resets_at"])
+        )
+    }
+
     /// Extracts a model's weekly usage from its legacy top-level entry when available,
     /// otherwise from the generic model-scoped limits array.
     static func parseWeeklyModelUsage(
@@ -76,6 +113,37 @@ enum UsageLimitParsing {
         }
 
         guard raw.isFinite else { return 0.0 }
+        return min(max(raw, 0.0), 100.0)
+    }
+
+    /// Same parsing as `parseUtilization`, but for callers that must tell
+    /// "no usable figure" apart from "measured zero" — `PrimaryWindow` in
+    /// particular. `parseUtilization`'s fallback-to-zero is correct for
+    /// callers with no availability concept of their own, but it is wrong
+    /// here: an explicit JSON `null` (parsed by `JSONSerialization` as
+    /// `NSNull`, not a missing key), a non-numeric string, or a value of the
+    /// wrong type would otherwise report a confident, measured 0% for a
+    /// figure the API never actually sent. A genuine `0` or `"0%"` still
+    /// parses as an available measured zero; only the unparseable path
+    /// changes to nil instead of 0.
+    static func parseUtilizationIfAvailable(_ value: Any) -> Double? {
+        if value is NSNull { return nil }
+
+        let raw: Double
+        if let intValue = value as? Int {
+            raw = Double(intValue)
+        } else if let doubleValue = value as? Double {
+            raw = doubleValue
+        } else if let stringValue = value as? String {
+            let cleaned = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "%", with: "")
+            guard let parsed = Double(cleaned) else { return nil }
+            raw = parsed
+        } else {
+            return nil
+        }
+
+        guard raw.isFinite else { return nil }
         return min(max(raw, 0.0), 100.0)
     }
 

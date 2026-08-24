@@ -7,10 +7,37 @@ struct ClaudeUsage: Codable, Equatable {
     var sessionLimit: Int
     var sessionPercentage: Double
     var sessionResetTime: Date
+    /// Whether the usage response actually reported the 5-hour window.
+    ///
+    /// `sessionPercentage` is a plain `Double`, so a response that omits the
+    /// window used to land in the model as a confident `0` — indistinguishable
+    /// from an account that has genuinely used nothing. Everything downstream
+    /// then reported "0% used" in the safe/green tier about a figure nobody
+    /// ever received. This flag is the difference between "we read zero" and
+    /// "we read nothing", and callers that render a number must consult it.
+    var sessionPercentageAvailable: Bool
 
     /// Returns 0% if the 5-hour session window has expired, otherwise the raw percentage.
     var effectiveSessionPercentage: Double {
         sessionResetTime < Date() ? 0.0 : sessionPercentage
+    }
+
+    /// The session figure, or nil when no session figure was ever received.
+    ///
+    /// Prefer this over the raw `sessionPercentage` anywhere the value is
+    /// shown to a person: nil has to reach the UI as "no reading" rather than
+    /// being flattened into a reassuring zero.
+    ///
+    /// This still goes through `effectiveSessionPercentage`, which checks
+    /// window expiry against `Date()` at call time — fine for a one-off
+    /// read, but not for anything that must stay deterministic against a
+    /// fixed "as of" instant. `ClaudeUsageProviderAdapter.makeReport` is
+    /// exactly that case: it renders against `context.fetchedAt`, so it
+    /// reimplements this expiry check against that timestamp instead of
+    /// calling through here. A caller with the same determinism requirement
+    /// should do the same rather than adopt this property.
+    var readableSessionPercentage: Double? {
+        sessionPercentageAvailable ? effectiveSessionPercentage : nil
     }
 
     // Weekly data (all models)
@@ -18,6 +45,14 @@ struct ClaudeUsage: Codable, Equatable {
     var weeklyLimit: Int
     var weeklyPercentage: Double
     var weeklyResetTime: Date
+    /// Whether the usage response actually reported the 7-day window.
+    /// Same distinction as `sessionPercentageAvailable`, for the same reason.
+    var weeklyPercentageAvailable: Bool
+
+    /// The weekly figure, or nil when no weekly figure was ever received.
+    var readableWeeklyPercentage: Double? {
+        weeklyPercentageAvailable ? weeklyPercentage : nil
+    }
 
     // Weekly data (Opus only)
     var opusWeeklyTokensUsed: Int
@@ -121,6 +156,27 @@ struct ClaudeUsage: Codable, Equatable {
     /// organization figure for it to sit beneath.
     var personalExtraUsageIssue: PersonalExtraUsageIssue?
 
+    /// Why the organization's extra-usage figure is absent, when it is.
+    ///
+    /// The figure comes from a second request that was wrapped in `try?`, so
+    /// a network failure, a 401, and a rate limit all left the amount, the
+    /// limit and the currency nil with no signal — indistinguishable from the
+    /// organization having extra usage switched off. One of those is a settled
+    /// answer with nothing to fix; the other is a figure that exists and could
+    /// not be reached, and only the second is worth telling anyone about.
+    enum OrganizationExtraUsageIssue: String, Codable, Equatable {
+        /// The request did not come back usable — offline, refused, rate
+        /// limited, or a body that would not decode.
+        case lookupFailed
+        /// Extra usage is switched off for this organization. Settled, and
+        /// deliberately silent in the UI.
+        case notEnabled
+    }
+
+    /// Nil when the organization's figure was obtained, or when it was never
+    /// asked for (the per-profile extra-usage preference is off).
+    var organizationExtraUsageIssue: OrganizationExtraUsageIssue?
+
     // Overage credit grant balance
     var overageBalance: Double?
     var overageBalanceCurrency: String?
@@ -134,10 +190,16 @@ struct ClaudeUsage: Codable, Equatable {
         sessionLimit: Int,
         sessionPercentage: Double,
         sessionResetTime: Date,
+        // Defaulted to `true` so the many call sites that build a record from
+        // a reading they actually received keep saying so. The parsers that
+        // can fail to receive a window pass `false` explicitly, and so does
+        // `.empty`, which stands for "nothing has been read yet".
+        sessionPercentageAvailable: Bool = true,
         weeklyTokensUsed: Int,
         weeklyLimit: Int,
         weeklyPercentage: Double,
         weeklyResetTime: Date,
+        weeklyPercentageAvailable: Bool = true,
         opusWeeklyTokensUsed: Int,
         opusWeeklyPercentage: Double,
         sonnetWeeklyTokensUsed: Int,
@@ -155,6 +217,7 @@ struct ClaudeUsage: Codable, Equatable {
         personalCostLimit: Double? = nil,
         personalCostCurrency: String? = nil,
         personalExtraUsageIssue: PersonalExtraUsageIssue? = nil,
+        organizationExtraUsageIssue: OrganizationExtraUsageIssue? = nil,
         overageBalance: Double? = nil,
         overageBalanceCurrency: String? = nil,
         lastUpdated: Date,
@@ -164,10 +227,12 @@ struct ClaudeUsage: Codable, Equatable {
         self.sessionLimit = sessionLimit
         self.sessionPercentage = sessionPercentage
         self.sessionResetTime = sessionResetTime
+        self.sessionPercentageAvailable = sessionPercentageAvailable
         self.weeklyTokensUsed = weeklyTokensUsed
         self.weeklyLimit = weeklyLimit
         self.weeklyPercentage = weeklyPercentage
         self.weeklyResetTime = weeklyResetTime
+        self.weeklyPercentageAvailable = weeklyPercentageAvailable
         self.opusWeeklyTokensUsed = opusWeeklyTokensUsed
         self.opusWeeklyPercentage = opusWeeklyPercentage
         self.sonnetWeeklyTokensUsed = sonnetWeeklyTokensUsed
@@ -185,6 +250,7 @@ struct ClaudeUsage: Codable, Equatable {
         self.personalCostLimit = personalCostLimit
         self.personalCostCurrency = personalCostCurrency
         self.personalExtraUsageIssue = personalExtraUsageIssue
+        self.organizationExtraUsageIssue = organizationExtraUsageIssue
         self.overageBalance = overageBalance
         self.overageBalanceCurrency = overageBalanceCurrency
         self.lastUpdated = lastUpdated
@@ -200,10 +266,23 @@ struct ClaudeUsage: Codable, Equatable {
         sessionLimit = try container.decode(Int.self, forKey: .sessionLimit)
         sessionPercentage = try container.decode(Double.self, forKey: .sessionPercentage)
         sessionResetTime = try container.decode(Date.self, forKey: .sessionResetTime)
+        // A snapshot cached by a version that had no such flag cannot tell us
+        // whether its zero was received or invented, so a zero is treated as
+        // unknown. That direction is deliberate: a dash on a genuinely idle
+        // account clears itself on the next refresh, whereas a fabricated
+        // "0% used" is exactly the reassuring lie this flag exists to stop.
+        sessionPercentageAvailable = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .sessionPercentageAvailable
+        ) ?? (sessionPercentage > 0)
         weeklyTokensUsed = try container.decode(Int.self, forKey: .weeklyTokensUsed)
         weeklyLimit = try container.decode(Int.self, forKey: .weeklyLimit)
         weeklyPercentage = try container.decode(Double.self, forKey: .weeklyPercentage)
         weeklyResetTime = try container.decode(Date.self, forKey: .weeklyResetTime)
+        weeklyPercentageAvailable = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .weeklyPercentageAvailable
+        ) ?? (weeklyPercentage > 0)
         opusWeeklyTokensUsed = try container.decode(Int.self, forKey: .opusWeeklyTokensUsed)
         opusWeeklyPercentage = try container.decode(Double.self, forKey: .opusWeeklyPercentage)
         sonnetWeeklyTokensUsed = try container.decode(Int.self, forKey: .sonnetWeeklyTokensUsed)
@@ -227,6 +306,10 @@ struct ClaudeUsage: Codable, Equatable {
         personalExtraUsageIssue = try container.decodeIfPresent(
             PersonalExtraUsageIssue.self,
             forKey: .personalExtraUsageIssue
+        )
+        organizationExtraUsageIssue = try container.decodeIfPresent(
+            OrganizationExtraUsageIssue.self,
+            forKey: .organizationExtraUsageIssue
         )
         overageBalance = try container.decodeIfPresent(Double.self, forKey: .overageBalance)
         overageBalanceCurrency = try container.decodeIfPresent(String.self, forKey: .overageBalanceCurrency)
@@ -257,17 +340,24 @@ struct ClaudeUsage: Codable, Equatable {
         }
     }
 
-    /// Empty usage data (used when no data is available)
+    /// A record standing in for "nothing has been read yet".
+    ///
+    /// Both availability flags are `false` on purpose. The zeros below are
+    /// placeholders, not measurements — a profile that has never completed a
+    /// fetch used to render through this value as a pristine `0 · 0` in the
+    /// safe/green tier, identical to an account with a real, healthy zero.
     static var empty: ClaudeUsage {
         ClaudeUsage(
             sessionTokensUsed: 0,
             sessionLimit: 0,
             sessionPercentage: 0,
             sessionResetTime: Date().addingTimeInterval(5 * 60 * 60),
+            sessionPercentageAvailable: false,
             weeklyTokensUsed: 0,
             weeklyLimit: 1_000_000,
             weeklyPercentage: 0,
             weeklyResetTime: Date().nextMonday1259pm(),
+            weeklyPercentageAvailable: false,
             opusWeeklyTokensUsed: 0,
             opusWeeklyPercentage: 0,
             sonnetWeeklyTokensUsed: 0,
