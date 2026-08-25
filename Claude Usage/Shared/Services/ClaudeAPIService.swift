@@ -70,7 +70,26 @@ class ClaudeAPIService: APIServiceProtocol {
     /// that reaches the real credential store, so without a seam here a test
     /// that exercises renewal writes to the developer's own Keychain and
     /// triggers a macOS authorization prompt.
-    private let renewedCredentialWriter: (String, UUID) throws -> Void
+    ///
+    private let renewedCredentialWriter: (RenewedCLICredential, UUID) throws -> Void
+
+    /// One renewal on its way to the credential store.
+    ///
+    /// A struct rather than two more closure arguments because both fields are
+    /// credential blobs of the same type, and Swift function types carry no
+    /// enforced argument labels: as adjacent unlabeled parameters, transposing
+    /// them at a call site would compile and quietly ask the store to mirror
+    /// the spent token into Claude Code instead of the rotated one.
+    struct RenewedCLICredential {
+        /// The credential to persist against the profile.
+        let credentialsJSON: String
+
+        /// The credential whose refresh token was spent to obtain it, or `nil`
+        /// when none was — an adopted live login. This is what tells the store
+        /// whether Claude Code's own copy of that refresh token has just been
+        /// rotated away and needs the new one written back.
+        let rotatedFrom: String?
+    }
     let baseURL = Constants.APIEndpoints.claudeBase
     let consoleBaseURL = Constants.APIEndpoints.consoleBase
 
@@ -81,7 +100,7 @@ class ClaudeAPIService: APIServiceProtocol {
         sessionKeyValidator: SessionKeyValidator = SessionKeyValidator(),
         profileManager: ProfileManager? = nil,
         systemCredentialsReader: (() throws -> String?)? = nil,
-        renewedCredentialWriter: ((String, UUID) throws -> Void)? = nil
+        renewedCredentialWriter: ((RenewedCLICredential, UUID) throws -> Void)? = nil
     ) {
         // Default path: ~/.claude-session-key
         self.sessionKeyPath = sessionKeyPath ?? Constants.ClaudePaths.homeDirectory
@@ -99,9 +118,12 @@ class ClaudeAPIService: APIServiceProtocol {
             }
         self.renewedCredentialWriter =
             renewedCredentialWriter
-            ?? {
-                try ClaudeCodeSyncService.shared
-                    .saveRefreshedCredentials($0, for: $1)
+            ?? { renewal, profileID in
+                try ClaudeCodeSyncService.shared.saveRefreshedCredentials(
+                    renewal.credentialsJSON,
+                    for: profileID,
+                    rotatedFrom: renewal.rotatedFrom
+                )
             }
     }
 
@@ -1041,7 +1063,8 @@ class ClaudeAPIService: APIServiceProtocol {
         }
 
         let outcome = await ClaudeCLITokenRefresher.refreshOutcome(
-            from: credentialsJSON
+            from: credentialsJSON,
+            forAccountNamed: profile.cliAccountName
         )
         guard
             case .renewed(let refreshed) = outcome,
@@ -1064,7 +1087,17 @@ class ClaudeAPIService: APIServiceProtocol {
         expiredCLILogins.remove(fingerprint)
 
         do {
-            try renewedCredentialWriter(refreshed, profile.id)
+            // `credentialsJSON` is the credential whose refresh token was
+            // just spent. Claude Code may be relying on that same token, in
+            // which case this renewal has invalidated its login unless the
+            // rotated one is written back into it.
+            try renewedCredentialWriter(
+                RenewedCLICredential(
+                    credentialsJSON: refreshed,
+                    rotatedFrom: credentialsJSON
+                ),
+                profile.id
+            )
         } catch {
             // The stored credential is untouched. The renewed token still
             // works for this run, so use it rather than discarding a
@@ -1131,12 +1164,21 @@ class ClaudeAPIService: APIServiceProtocol {
     ///   never reported as a recovery.
     ///
     /// A live login that is *also* expired is left alone rather than renewed
-    /// here, and deliberately so: these refresh tokens rotate on use, and
-    /// the renewed token would be written only into this app's own storage,
-    /// never back into Claude Code's. Renewing a token Claude Code is still
-    /// relying on would therefore rotate it out from under the CLI and leave
-    /// that account needing a genuine re-login — a worse outcome than the
-    /// notice this recovery exists to avoid.
+    /// here, and deliberately so: these refresh tokens rotate on use, so
+    /// renewing a token Claude Code is still relying on rotates it out from
+    /// under the CLI and leaves that account needing a genuine re-login — a
+    /// worse outcome than the notice this recovery exists to avoid.
+    ///
+    /// The renewal path *does* now repair that collision, by writing the
+    /// rotated token back into Claude Code's own Keychain item
+    /// (`saveRefreshedCredentials(_:for:rotatedFrom:)`). This guard stays
+    /// anyway. Adoption runs on the recovery path, where the app has already
+    /// established it cannot reason about the credential it holds; spending
+    /// the CLI's refresh token there — and then depending on a write-back
+    /// that can itself decline, fail, or be refused by the Keychain — trades
+    /// a certain small loss for an uncertain large one. Nothing is lost by
+    /// waiting: the ordinary renewal path picks the login up on its next
+    /// tick, with the write-back in place.
     ///
     /// What reaches this expiry check is the best candidate available rather
     /// than merely the first one on disk: the read behind it prefers the
@@ -1193,7 +1235,13 @@ class ClaudeAPIService: APIServiceProtocol {
         else { return nil }
 
         do {
-            try renewedCredentialWriter(live, profile.id)
+            // No refresh token was spent here — this credential is Claude
+            // Code's own live login, copied as-is — so there is nothing for
+            // the CLI to be kept in sync with.
+            try renewedCredentialWriter(
+                RenewedCLICredential(credentialsJSON: live, rotatedFrom: nil),
+                profile.id
+            )
         } catch {
             // Same reasoning as the renewal path: the adopted login works for
             // this run, so a persistence failure is not a reason to discard
