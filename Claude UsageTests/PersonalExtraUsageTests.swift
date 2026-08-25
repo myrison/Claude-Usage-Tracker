@@ -330,6 +330,48 @@ final class PersonalExtraUsageTests: XCTestCase {
         )
     }
 
+    /// An organization claude.ai does not offer extra usage to is a settled
+    /// answer, and must be as silent as having it switched off.
+    ///
+    /// It was reaching the popover as `lookupFailed`, which renders the
+    /// degraded header notice "Some usage details are unavailable" on a
+    /// profile where nothing is wrong, nothing failed, and there is nothing
+    /// anyone can do. Both the notice and the health classification are
+    /// asserted, because they are decided in different functions and only one
+    /// of them used to be exhaustive.
+    func testAnOrganizationWithoutExtraUsageIsSilentAndStillHealthy() throws {
+        var notAvailable = Self.fullyReadUsage()
+        notAvailable.organizationExtraUsageIssue = .notAvailableForOrganization
+        XCTAssertNil(
+            ClaudeUsageProviderAdapter
+                .extraUsageAbsenceToExplain(for: notAvailable),
+            "a feature this organization is not offered is settled; a notice "
+                + "about it would be noise on every refresh"
+        )
+
+        XCTAssertEqual(
+            try makeReport(from: notAvailable).health.status,
+            .healthy,
+            "and the account is not degraded for a settled answer"
+        )
+
+        var lookupFailed = Self.fullyReadUsage()
+        lookupFailed.organizationExtraUsageIssue = .lookupFailed
+        XCTAssertEqual(
+            ClaudeUsageProviderAdapter
+                .extraUsageAbsenceToExplain(for: lookupFailed),
+            .unreadableOrganizationFigure,
+            "and a genuine failure must still say so, or this change would "
+                + "have silenced the real case along with the false one"
+        )
+        XCTAssertEqual(
+            try makeReport(from: lookupFailed).health.status,
+            .degraded,
+            "which is the header notice Jason was seeing — it must survive "
+                + "for the organizations that really cannot be read"
+        )
+    }
+
     /// The two statements are mutually exclusive: a reader must never be told
     /// both "this is your organization's total" and "no figure could be read".
     func testTheTwoStatementsNeverAppearTogether() {
@@ -392,6 +434,382 @@ final class PersonalExtraUsageTests: XCTestCase {
             ClaudeUsageProviderAdapter
                 .extraUsageAbsenceToExplain(for: .empty)
         )
+    }
+
+    // MARK: - The organization's own extra-usage answer
+
+    /// A successful answer carrying no extra-usage record is settled, not a
+    /// failure.
+    ///
+    /// This is the measured case, not a hypothetical one. Across 10,421
+    /// logged `overage_spend_limit` responses on the maintainer's machine
+    /// every single reply was HTTP 200 — including the two organizations the
+    /// app was reporting as unreadable. The request never failed; the app
+    /// simply had no name for a 200 whose body is not a record, so a `try?`
+    /// dropped it into `lookupFailed` and the header said "Some usage details
+    /// are unavailable" on two profiles where nothing was wrong.
+    ///
+    /// Both shapes a bodyless 200 can take are pinned, because these two —
+    /// a zero-byte body and a literal `null` — are the only ones the app
+    /// accepts as a settled answer, and either one alone would let the other
+    /// regress into the failure bucket.
+    func testASuccessfulAnswerWithNoExtraUsageRecordIsSettledNotFailed()
+        async throws
+    {
+        for body in ["", "null"] {
+            let profileID = UUID()
+            let store = makeIsolatedProfileStore()
+            try seedProfile(
+                id: profileID,
+                organizationID: teamOrganizationID,
+                in: store
+            )
+            let service = try makeService(profileID: profileID, store: store)
+
+            StubClaudeEndpointsURLProtocol.install(
+                cliOrganizationID: teamOrganizationID,
+                overageSpendLimitBody: body
+            )
+            defer { StubClaudeEndpointsURLProtocol.reset() }
+
+            let usage = try await service.fetchUsageData(
+                sessionKey: "sk-ant-sid01-fixture-session-key-value",
+                organizationId: teamOrganizationID,
+                profile: try seededProfile(profileID)
+            )
+
+            XCTAssertEqual(
+                usage.organizationExtraUsageIssue,
+                .notAvailableForOrganization,
+                "a 200 whose body is \"\(body)\" is an answer, not a failure"
+            )
+            XCTAssertNil(usage.costUsed)
+        }
+    }
+
+    /// An empty object still decodes, and must not be mistaken for the
+    /// bodyless answer above.
+    ///
+    /// Every property of `OverageSpendLimitResponse` is optional, so `{}`
+    /// decodes cleanly to a record with `isEnabled == nil` — which is not
+    /// `true`, so it is extra usage switched off. Pinned because the fix
+    /// hinges on "is the body an object", and an over-eager reading of that
+    /// would sweep `{}` into the new case and lose a distinction the app
+    /// already made correctly.
+    func testAnEmptyObjectIsStillTheSwitchedOffAnswer() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            overageSpendLimitBody: "{}"
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: try seededProfile(profileID)
+        )
+
+        XCTAssertEqual(usage.organizationExtraUsageIssue, .notEnabled)
+    }
+
+    /// The shape classifier itself, which is what keeps a genuine shape
+    /// change out of the settled bucket. Content never reaches it — only the
+    /// top-level kind — so this is also the guard that no response body can
+    /// be logged by way of this path.
+    func testJSONShapeNamesTheTopLevelKindOnly() {
+        XCTAssertEqual(ClaudeAPIService.jsonShape(of: Data()), .empty)
+        XCTAssertEqual(
+            ClaudeAPIService.jsonShape(of: Data("null".utf8)),
+            .null
+        )
+        XCTAssertEqual(ClaudeAPIService.jsonShape(of: Data("[]".utf8)), .array)
+        XCTAssertEqual(ClaudeAPIService.jsonShape(of: Data("{}".utf8)), .object)
+        XCTAssertEqual(ClaudeAPIService.jsonShape(of: Data("7".utf8)), .scalar)
+        XCTAssertEqual(
+            ClaudeAPIService.jsonShape(of: Data("<html>".utf8)),
+            .notJSON
+        )
+    }
+
+    /// A 200 whose body IS an object but no longer decodes is a shape change,
+    /// not an organization with nothing to report. It cannot happen while
+    /// every field is optional, which is exactly why it needs pinning: the
+    /// day someone makes one required, this is the difference between a
+    /// visible failure and silent wrong data.
+    func testAnUndecodableObjectIsAFailureNotASettledAnswer() {
+        XCTAssertEqual(
+            ClaudeAPIService.jsonShape(
+                of: Data(#"{"monthly_credit_limit":"not-a-number"}"#.utf8)
+            ),
+            .object,
+            "an object stays an object, and the object branch reports a "
+                + "failure rather than going quiet"
+        )
+    }
+
+    /// A JSON array is not a record, and is not the server saying there is no
+    /// record either.
+    ///
+    /// The settled answer is narrow on purpose: a zero-byte body or a literal
+    /// `null`. An array is neither, and reading it as "this organization has
+    /// nothing to report" would be permanent — a settled answer is silent, is
+    /// never retried, and leaves no notice for anyone to act on. Whatever an
+    /// array from this endpoint would mean, the honest report is that the
+    /// figure could not be read.
+    func testAJSONArrayFromTheOrganizationEndpointStaysAVisibleFailure()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            overageSpendLimitBody: "[]"
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: try seededProfile(profileID)
+        )
+
+        XCTAssertEqual(
+            usage.organizationExtraUsageIssue,
+            .lookupFailed,
+            "an array is not an extra-usage record and not an absence of "
+                + "one; it stays reported rather than going quiet"
+        )
+    }
+
+    /// The same for a bare scalar. Pinned separately from the array because
+    /// the two arrive by different branches of the shape classifier, and
+    /// because a scalar is the shape most easily mistaken for "nothing" —
+    /// a `0` or a `false` reads like an absence to a human eye and is
+    /// nothing of the sort to this endpoint.
+    func testABareScalarFromTheOrganizationEndpointStaysAVisibleFailure()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            overageSpendLimitBody: "0"
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: try seededProfile(profileID)
+        )
+
+        XCTAssertEqual(
+            usage.organizationExtraUsageIssue,
+            .lookupFailed,
+            "a bare scalar says nothing about this organization, so the app "
+                + "must not claim it said there is nothing here"
+        )
+    }
+
+    /// The case that makes the narrowing worth having: an HTML page served
+    /// under HTTP 200.
+    ///
+    /// This is what a corporate proxy, a WAF challenge, or a hotel captive
+    /// portal returns in claude.ai's place — a 200 that never reached
+    /// Anthropic at all. Every profile behind that network would have gone
+    /// permanently silent about extra usage if any non-object body counted as
+    /// settled, and the app would have looked healthy while reporting nothing.
+    /// It is a reading that did not happen, and it must say so.
+    func testAnHTMLPageServedUnderHTTP200StaysAVisibleFailure() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            overageSpendLimitBody:
+                "<html><body>Access denied by network policy</body></html>"
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: try seededProfile(profileID)
+        )
+
+        XCTAssertEqual(
+            usage.organizationExtraUsageIssue,
+            .lookupFailed,
+            "a proxy answering in claude.ai's place is a failure to read the "
+                + "figure, never a statement that there is no figure"
+        )
+    }
+
+    /// The contrast that keeps the split honest: the far end being broken is
+    /// still a failure and must still be reported. A 5xx is retryable and
+    /// says nothing about whether this organization has extra usage, so it
+    /// must not be mistaken for the settled answer above.
+    func testAServerErrorOnTheOrganizationEndpointIsStillReported()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            overageSpendLimitStatusCode: 503
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: try seededProfile(profileID)
+        )
+
+        XCTAssertEqual(usage.organizationExtraUsageIssue, .lookupFailed)
+    }
+
+    /// A rate-limited answer is a failure too, not a statement about the
+    /// organization. Pinned separately from the 5xx because 429 takes its own
+    /// throwing branch in `performRequest`, and because a future "the server
+    /// declined this organization" category built on status codes would be
+    /// most tempting to write as a `400...499` range — which would swallow
+    /// 429 and make the app go quiet exactly when it is asking too often.
+    func testARateLimitedOrganizationEndpointIsNotMistakenForSettled()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            overageSpendLimitStatusCode: 429
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: try seededProfile(profileID)
+        )
+
+        XCTAssertEqual(usage.organizationExtraUsageIssue, .lookupFailed)
+    }
+
+    /// The organization endpoint gets the same cancellation treatment the
+    /// member endpoint already has.
+    ///
+    /// A refresh superseded mid-flight tore this request down; the app did
+    /// that to itself. `performRequest` wraps the URLSession failure in an
+    /// `AppError`, so the -999 sits one layer down and a direct `as? URLError`
+    /// check would miss it and report a complaint instead.
+    func testACancelledOrganizationExtraUsageRequestRecordsNothing()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            transportErrors: [
+                "https://claude.ai/api/organizations/"
+                    + "665a6475-2eb6-4da8-8379-d5529d283568/overage_spend_limit":
+                    .cancelled
+            ]
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: try seededProfile(profileID)
+        )
+
+        XCTAssertNil(
+            usage.organizationExtraUsageIssue,
+            "the app cancelled this itself; there is no verdict to record"
+        )
+        XCTAssertNil(usage.costUsed)
+    }
+
+    /// And an ordinary transport failure is still a failure — the contrast
+    /// that stops the cancellation branch being widened into "any network
+    /// error is nothing to worry about".
+    func testANonCancellationTransportFailureIsStillReported() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            transportErrors: [
+                "https://claude.ai/api/organizations/"
+                    + "665a6475-2eb6-4da8-8379-d5529d283568/overage_spend_limit":
+                    .networkConnectionLost
+            ]
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: try seededProfile(profileID)
+        )
+
+        XCTAssertEqual(usage.organizationExtraUsageIssue, .lookupFailed)
     }
 
     // MARK: - The organization guard
@@ -2596,6 +3014,21 @@ final class PersonalExtraUsageTests: XCTestCase {
 
     // MARK: - Helpers
 
+    /// A record carrying a real capacity reading.
+    ///
+    /// `ClaudeUsage.empty` reports no session or weekly percentage at all,
+    /// which the adapter classifies as `.unavailable` before it ever looks at
+    /// extra usage — so a health assertion built on `.empty` measures the
+    /// wrong thing and passes or fails for the wrong reason.
+    static func fullyReadUsage() -> ClaudeUsage {
+        var usage = ClaudeUsage.empty
+        usage.sessionPercentage = 20
+        usage.sessionPercentageAvailable = true
+        usage.weeklyPercentage = 31
+        usage.weeklyPercentageAvailable = true
+        return usage
+    }
+
     private func makeReport(from usage: ClaudeUsage) throws -> UsageReport {
         let fetchedAt = Date(timeIntervalSince1970: 1_800_000_000)
         return try ClaudeUsageProviderAdapter.makeReport(
@@ -2719,6 +3152,11 @@ private nonisolated final class StubClaudeEndpointsURLProtocol: URLProtocol {
         oauthProfileStatusCode: Int = 200,
         tokenRefreshErrorCode: String = "invalid_grant",
         memberExtraUsageEnabled: Bool = true,
+        // What claude.ai answers for the organization-scoped extra-usage
+        // endpoint. Two of the maintainer's organizations answer 200 with a
+        // body that is not an extra-usage record, on every refresh.
+        overageSpendLimitStatusCode: Int = 200,
+        overageSpendLimitBody: String? = nil,
         // A response that is complete and simply carries no credit figures,
         // which is what Claude answers for an account that has extra usage
         // switched on with nothing recorded against it.
@@ -2739,11 +3177,14 @@ private nonisolated final class StubClaudeEndpointsURLProtocol: URLProtocol {
             "https://claude.ai/api/organizations/665a6475-2eb6-4da8-8379-d5529d283568/usage":
                 (200, Data("{}".utf8)),
             "https://claude.ai/api/organizations/665a6475-2eb6-4da8-8379-d5529d283568/overage_spend_limit":
-                (200, Data("""
-                {"monthly_credit_limit":100000,"currency":"USD",
-                 "used_credits":26118,"is_enabled":true,
-                 "limit_type":"organization"}
-                """.utf8)),
+                (
+                    overageSpendLimitStatusCode,
+                    Data((overageSpendLimitBody ?? """
+                    {"monthly_credit_limit":100000,"currency":"USD",
+                     "used_credits":26118,"is_enabled":true,
+                     "limit_type":"organization"}
+                    """).utf8)
+                ),
             "https://api.anthropic.com/api/oauth/profile": (
                 oauthProfileStatusCode,
                 Data(
