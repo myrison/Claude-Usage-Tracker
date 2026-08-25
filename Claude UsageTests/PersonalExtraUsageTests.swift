@@ -288,8 +288,8 @@ final class PersonalExtraUsageTests: XCTestCase {
     func testEveryReasonReachesTheAbsenceStatement() {
         let issues: [ClaudeUsage.PersonalExtraUsageIssue] = [
             .notLinked, .signInExpired, .signInHasNoToken,
-            .signInUnusable, .differentOrganization,
-            .claudeAccountUnresolved
+            .signInUnusable, .temporarilyUnavailable,
+            .differentOrganization, .claudeAccountUnresolved
         ]
         for issue in issues {
             var usage = ClaudeUsage.empty
@@ -1573,7 +1573,13 @@ final class PersonalExtraUsageTests: XCTestCase {
             usage.personalCostUsed,
             "no member figure may be attributed on an unverified organization"
         )
-        XCTAssertEqual(usage.personalExtraUsageIssue, .signInUnusable)
+        // A refused request says nothing about the credential — the token
+        // was good enough to be sent — so this reports a reading that did not
+        // arrive, not a sign-in that needs attention.
+        XCTAssertEqual(
+            usage.personalExtraUsageIssue,
+            .temporarilyUnavailable
+        )
         XCTAssertFalse(
             StubClaudeEndpointsURLProtocol.requestedURLs.contains {
                 $0.hasSuffix("/api/oauth/usage")
@@ -1836,6 +1842,12 @@ final class PersonalExtraUsageTests: XCTestCase {
                 + "your own extra usage with. Sign in to it and this will "
                 + "fill in on its own."
         )
+        // No instruction, deliberately. The re-sync this used to name has
+        // already been performed by the app itself before this verdict is
+        // reached, and the Re-sync import validates JSON shape only — so
+        // steering someone toward it asks them to repeat a step that just
+        // failed, on a button that can overwrite a working login with an
+        // empty one.
         XCTAssertEqual(
             english.localizedString(
                 forKey: "popover.extra_usage.cli_sign_in_unusable",
@@ -1843,8 +1855,34 @@ final class PersonalExtraUsageTests: XCTestCase {
                 table: nil
             ),
             "This is your organization's total. Your own extra usage couldn't "
-                + "be read just now — re-sync your Claude Code account in "
-                + "Settings → CLI Account."
+                + "be read with the Claude Code account linked here."
+        )
+        XCTAssertEqual(
+            english.localizedString(
+                forKey: "popover.extra_usage.absent.cli_sign_in_unusable",
+                value: nil,
+                table: nil
+            ),
+            "Your extra usage couldn't be read with the Claude Code account "
+                + "linked here."
+        )
+        XCTAssertEqual(
+            english.localizedString(
+                forKey: "popover.extra_usage.cli_temporarily_unavailable",
+                value: nil,
+                table: nil
+            ),
+            "This is your organization's total. Your own extra usage couldn't "
+                + "be read this time. It will be retried automatically."
+        )
+        XCTAssertEqual(
+            english.localizedString(
+                forKey: "popover.extra_usage.absent.cli_temporarily_unavailable",
+                value: nil,
+                table: nil
+            ),
+            "Your extra usage couldn't be read this time. It will be retried "
+                + "automatically."
         )
         for key in [
             "cli.login_expired_title",
@@ -1887,6 +1925,673 @@ final class PersonalExtraUsageTests: XCTestCase {
                 + "If you're an admin, you'll see your organization's by "
                 + "default."
         )
+    }
+
+    // MARK: - Settled answers must not become user homework
+
+    /// A successful, well-formed response that simply carries no figure.
+    ///
+    /// `is_enabled` is true and the credit fields are absent, which is Claude
+    /// saying "there is nothing here" — the same class of answer as extra
+    /// usage being switched off, which has always been silent. It used to be
+    /// recorded as `.signInUnusable`, so a request that had just succeeded
+    /// produced a notice telling the reader to re-sync a working sign-in.
+    /// That branch also logged nothing at all, which is why the notice
+    /// appeared on nearly every profile while the log showed almost no
+    /// warnings.
+    func testAnEnabledExtraUsageWithNoCreditFiguresStaysSilent() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            memberExtraUsageCarriesCreditFigures: false
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: try seededProfile(profileID)
+        )
+
+        XCTAssertNil(
+            usage.personalExtraUsageIssue,
+            "a complete answer carrying no figure is settled, and settled "
+                + "answers say nothing"
+        )
+        XCTAssertNil(usage.personalCostUsed)
+        XCTAssertNil(usage.personalCostLimit)
+        // The request really did go out and really did succeed: this is not
+        // silence from having skipped the endpoint.
+        XCTAssertTrue(
+            StubClaudeEndpointsURLProtocol.requestedURLs.contains {
+                $0.hasSuffix("/api/oauth/usage")
+            }
+        )
+        XCTAssertEqual(usage.costUsed, 26_118)
+    }
+
+    /// Provably distinct from the settled answer above: a credential that
+    /// cannot be made usable still reports itself. The two states share a
+    /// code path up to the last guard, and collapsing them is exactly the
+    /// defect this pair exists to prevent recurring.
+    func testARejectedCredentialIsStillDistinguishableFromNoFigure()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            credentialsJSON: Self.credentialsJSON(expiresAt: 1_000),
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            tokenRefreshStatusCode: 400
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let usage = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: try seededProfile(profileID)
+        )
+
+        XCTAssertEqual(usage.personalExtraUsageIssue, .signInExpired)
+    }
+
+    /// An account with no organization behind it — a personal Max/Pro
+    /// subscription — is a settled fact, not a broken credential.
+    ///
+    /// Three unrelated outcomes used to collapse into one nil here: the
+    /// request failed, the body did not decode, and the body parsed perfectly
+    /// and carried no `organization`. The caller could only read that nil as
+    /// "the sign-in is unusable", which is why the notice appeared on every
+    /// one of the maintainer's profiles except the single team account — the
+    /// only one with an organization to report.
+    ///
+    /// Two fetches, because the settled answer has to hold across refreshes
+    /// rather than merely be right once. What proves it is not being treated
+    /// as a *failure* is the silence: a latched failure short-circuits too,
+    /// but goes on reporting `.temporarilyUnavailable` to the reader every
+    /// time — see
+    /// `testAFailedProfileRequestIsRetriedUnlikeAMissingOrganization`, which
+    /// is the same shape with the opposite verdict.
+    func testAnAccountWithNoOrganizationStaysSilentAndIsNotLatched()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            oauthProfileCarriesOrganization: false
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let profile = try seededProfile(profileID)
+        for _ in 0..<2 {
+            let usage = try await service.fetchUsageData(
+                sessionKey: "sk-ant-sid01-fixture-session-key-value",
+                organizationId: teamOrganizationID,
+                profile: profile
+            )
+            XCTAssertNil(
+                usage.personalExtraUsageIssue,
+                "there is no organization-scoped figure to attribute and "
+                    + "nothing anyone can do about it, so nothing is said"
+            )
+            XCTAssertNil(usage.personalCostUsed)
+            XCTAssertEqual(usage.costUsed, 26_118)
+        }
+
+        XCTAssertEqual(
+            StubClaudeEndpointsURLProtocol.requestedURLs.filter {
+                $0.hasSuffix("/api/oauth/profile")
+            }.count,
+            1,
+            "the answer cannot change while the credential does not, so it "
+                + "is asked once rather than on every refresh"
+        )
+        XCTAssertFalse(
+            StubClaudeEndpointsURLProtocol.requestedURLs.contains {
+                $0.hasSuffix("/api/oauth/usage")
+            },
+            "with no organization there is nothing to scope a member figure "
+                + "to, so the member endpoint must never be asked"
+        )
+    }
+
+    /// The settled answer is remembered against the credential that gave it,
+    /// and only against that one.
+    ///
+    /// Both halves are load-bearing, and each guards a different way of
+    /// "simplifying" this back into a defect. Dropping the memory returns one
+    /// profile GET per personal profile per refresh tick — and on a machine
+    /// holding mostly personal subscriptions that is most of them, against an
+    /// API whose 429 responses this file already blames on exactly that kind
+    /// of per-tick per-profile traffic. Keying it on the profile alone
+    /// instead of the credential would make a profile re-linked to a
+    /// different Claude Code account keep answering with the old account's
+    /// verdict, so a member who moved onto a team would never see their own
+    /// figure again until the app restarted.
+    func testASettledNoOrganizationAnswerIsRememberedPerCredential()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            oauthProfileCarriesOrganization: false
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let profile = try seededProfile(profileID)
+        for _ in 0..<2 {
+            _ = try await service.fetchUsageData(
+                sessionKey: "sk-ant-sid01-fixture-session-key-value",
+                organizationId: teamOrganizationID,
+                profile: profile
+            )
+        }
+
+        XCTAssertEqual(
+            profileLookupCount(),
+            1,
+            "two refreshes over one unchanged credential must ask once"
+        )
+
+        // The profile is re-linked: a different Claude Code login is now
+        // presented. The remembered answer belonged to the old credential and
+        // says nothing about this one.
+        var relinked = profile
+        relinked.cliCredentialsJSON = Self.liveLoginJSON(
+            expiresAt: Date()
+                .addingTimeInterval(8 * 3600)
+                .timeIntervalSince1970 * 1000
+        )
+
+        let afterRelink = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: relinked
+        )
+
+        XCTAssertEqual(
+            profileLookupCount(),
+            2,
+            "a different credential has not been asked yet, so it must be"
+        )
+        XCTAssertNil(
+            afterRelink.personalExtraUsageIssue,
+            "this account still reports no organization; remembering that "
+                + "must never turn into reporting a problem"
+        )
+    }
+
+    /// A rotated token must not throw the settled answer away.
+    ///
+    /// The answer is keyed on the credential fingerprint, and Anthropic's
+    /// OAuth rotates the refresh token on use — so without rolling the entry
+    /// forward onto the refreshed credential, the cache misses on essentially
+    /// every refresh that follows a rotation and the lookup runs anyway. It
+    /// would look present and do nothing, restoring the per-tick request
+    /// volume it was added to remove. Its sibling
+    /// `cliOrganizationCredentialHashes` has always been rolled forward for
+    /// the same reason; this asserts the symmetry.
+    ///
+    /// The credential is seeded valid and expires between the two readings,
+    /// which is the only way to get a rotation to land *after* the answer was
+    /// recorded. Both renewal assertions are load-bearing against a slow
+    /// machine: if the first reading were to rotate the token itself the
+    /// second would trivially hit the cache, so this would pass without
+    /// testing anything — asserting that the first reading renewed nothing
+    /// and the second one did turns that timing slip into a failure instead.
+    func testASettledNoOrganizationAnswerSurvivesATokenRotation()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            credentialsJSON: Self.credentialsJSON(
+                expiresAt: Date()
+                    .addingTimeInterval(2.5)
+                    .timeIntervalSince1970 * 1000
+            ),
+            in: store
+        )
+        let renewals = RenewedCredentialRecorder()
+        let service = try makeService(
+            profileID: profileID,
+            store: store,
+            renewals: renewals
+        )
+        let profile = try seededProfile(profileID)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            oauthProfileCarriesOrganization: false
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let first = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+        XCTAssertNil(first.personalExtraUsageIssue)
+        XCTAssertEqual(profileLookupCount(), 1)
+        XCTAssertTrue(
+            renewals.writes.isEmpty,
+            "the first reading must run on the unrotated credential, or this "
+                + "test proves nothing about rolling the answer forward"
+        )
+
+        // The token expires; the next reading renews it, and the answer was
+        // recorded against the credential being replaced.
+        try await Task.sleep(nanoseconds: 2_800_000_000)
+
+        let afterRotation = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+
+        XCTAssertTrue(
+            renewals.carriesAccessToken("renewed-access", for: profileID),
+            "the second reading must actually rotate the token"
+        )
+        XCTAssertEqual(
+            profileLookupCount(),
+            1,
+            "a rotated token is the same account, so the settled answer moves "
+                + "onto it rather than being asked for again"
+        )
+        XCTAssertNil(afterRotation.personalExtraUsageIssue)
+    }
+
+    /// A remembered "no organization" must stay incapable of satisfying the
+    /// organization-match guard.
+    ///
+    /// The guard is what stops one account's member figure being read with
+    /// another account's token, and the cache is the obvious place for
+    /// someone to reintroduce that by answering a hit with
+    /// `profile.cliOrganizationId` — a value resolved from a *different*
+    /// credential. Here the profile carries exactly that: a cached id
+    /// matching the organization on screen, which would pass the guard if it
+    /// were ever returned.
+    func testARememberedNoOrganizationNeverSatisfiesTheOrganizationGuard()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        ProfileManager(profileStore: store)
+            .updateCliOrganizationId(teamOrganizationID, for: profileID)
+        var profile = try seededProfile(profileID)
+        profile.cliOrganizationId = teamOrganizationID
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            oauthProfileCarriesOrganization: false
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        for _ in 0..<2 {
+            let usage = try await service.fetchUsageData(
+                sessionKey: "sk-ant-sid01-fixture-session-key-value",
+                organizationId: teamOrganizationID,
+                profile: profile
+            )
+            XCTAssertNil(usage.personalCostUsed)
+            XCTAssertNil(usage.personalExtraUsageIssue)
+        }
+
+        XCTAssertFalse(
+            StubClaudeEndpointsURLProtocol.requestedURLs.contains {
+                $0.hasSuffix("/api/oauth/usage")
+            },
+            "no member figure may be attributed on an organization this "
+                + "credential never reported — cached or fresh"
+        )
+    }
+
+    /// How many times the CLI profile endpoint has been asked since the stub
+    /// was installed. The whole point of the cache is that this stops
+    /// growing, so it is counted rather than described.
+    private func profileLookupCount() -> Int {
+        StubClaudeEndpointsURLProtocol.requestedURLs.filter {
+            $0.hasSuffix("/api/oauth/profile")
+        }.count
+    }
+
+    /// The contrast that makes the test above mean something.
+    ///
+    /// A settled "no organization" is remembered and never asked again while
+    /// the credential holds; a failure is asked again on the very next
+    /// reading, because the notice it produces promises exactly that. Both
+    /// short-circuit — the difference is how long for, and what the reader is
+    /// told in the meantime.
+    ///
+    /// This used to assert the opposite: one request across two refreshes,
+    /// on the strength of a latch that lasted the whole app run. That was
+    /// consistent with the wording this branch replaced, which promised
+    /// nothing, and is not consistent with "It will be retried
+    /// automatically".
+    func testAFailedProfileRequestIsRetriedUnlikeAMissingOrganization()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            oauthProfileStatusCode: 500
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        let profile = try seededProfile(profileID)
+        for _ in 0..<2 {
+            let usage = try await service.fetchUsageData(
+                sessionKey: "sk-ant-sid01-fixture-session-key-value",
+                organizationId: teamOrganizationID,
+                profile: profile
+            )
+            XCTAssertEqual(
+                usage.personalExtraUsageIssue,
+                .temporarilyUnavailable
+            )
+        }
+
+        XCTAssertEqual(
+            profileLookupCount(),
+            2,
+            "each refresh is the retry the notice promises; suppressing the "
+                + "second one makes the message a lie"
+        )
+    }
+
+    /// A transient failure must actually recover, because the app says it
+    /// will.
+    ///
+    /// `.temporarilyUnavailable` renders as "It will be retried
+    /// automatically". The failure record used to last the whole app run, so
+    /// the member's figure could not come back until the credential changed
+    /// or the app was restarted — and this app runs for days. One moment of
+    /// 5xx and a permanently unreadable figure were the same outcome, under a
+    /// sentence promising the opposite.
+    ///
+    /// The credential is untouched between the two readings here; only the
+    /// endpoint's answer differs. That is what makes the second request the
+    /// retry rather than a re-link being picked up.
+    func testATransientOrganizationLookupFailureRecoversOnTheNextRefresh()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+        let profile = try seededProfile(profileID)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            oauthProfileStatusCode: 503
+        )
+        let unavailable = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+        XCTAssertEqual(
+            unavailable.personalExtraUsageIssue,
+            .temporarilyUnavailable
+        )
+        StubClaudeEndpointsURLProtocol.reset()
+
+        // Same stored credential, the endpoint is back. `install` clears the
+        // recorded URLs, so the count below is the second reading's own
+        // traffic — a short-circuit would leave it at zero.
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+        let recovered = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+
+        XCTAssertEqual(
+            profileLookupCount(),
+            1,
+            "the next refresh must ask again; that request is the automatic "
+                + "retry the notice names"
+        )
+        XCTAssertEqual(
+            recovered.personalCostUsed,
+            0,
+            "and the member's figure must actually come back"
+        )
+        XCTAssertEqual(recovered.personalCostLimit, 5_000)
+        XCTAssertNil(recovered.personalExtraUsageIssue)
+    }
+
+    /// The other half: within one reading, the lookup is not repeated.
+    ///
+    /// Retrying on the next refresh must not become retrying twice inside the
+    /// same one. Asserted through `applyPersonalExtraUsage`, which is one
+    /// reading, called twice — the second call is a second reading and asks
+    /// again, so the count separates "per reading" from "per call".
+    func testAFailedLookupIsNotRepeatedWithinOneReading() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            oauthProfileStatusCode: 500
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        var usage = ClaudeUsage.empty
+        await service.applyPersonalExtraUsage(
+            to: &usage,
+            profile: try seededProfile(profileID),
+            organizationId: teamOrganizationID
+        )
+        XCTAssertEqual(
+            profileLookupCount(),
+            1,
+            "one reading asks once"
+        )
+        XCTAssertEqual(usage.personalExtraUsageIssue, .temporarilyUnavailable)
+
+        await service.applyPersonalExtraUsage(
+            to: &usage,
+            profile: try seededProfile(profileID),
+            organizationId: teamOrganizationID
+        )
+        XCTAssertEqual(
+            profileLookupCount(),
+            2,
+            "and the next reading asks again rather than reusing the verdict"
+        )
+    }
+
+    // MARK: - A request the app cancelled itself
+
+    /// The refresh engine cancels an earlier batch's in-flight work whenever
+    /// a later refresh supersedes it. That teardown used to be indistinguish-
+    /// able from a rejected credential, so the app reported its own
+    /// housekeeping as a problem with the user's sign-in.
+    ///
+    /// Asserted through `applyPersonalExtraUsage` rather than a whole fetch
+    /// because the property is that *nothing is written*: every path through
+    /// `fetchUsageData` builds a fresh record, where "wrote nothing" and
+    /// "wrote nil" are the same picture.
+    func testACancelledRequestLeavesTheHeldFigureAndIssueUntouched()
+        async throws
+    {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            transportErrors: [
+                "https://api.anthropic.com/api/oauth/usage": .cancelled
+            ]
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        var usage = ClaudeUsage.empty
+        usage.personalCostUsed = 12
+        usage.personalCostLimit = 5_000
+        usage.personalCostCurrency = "USD"
+
+        await service.applyPersonalExtraUsage(
+            to: &usage,
+            profile: try seededProfile(profileID),
+            organizationId: teamOrganizationID
+        )
+
+        XCTAssertEqual(
+            usage.personalCostUsed,
+            12,
+            "a superseded request must not replace a figure that is already "
+                + "on screen"
+        )
+        XCTAssertEqual(usage.personalCostLimit, 5_000)
+        XCTAssertEqual(usage.personalCostCurrency, "USD")
+        XCTAssertNil(
+            usage.personalExtraUsageIssue,
+            "the app cancelled this itself; there is no verdict to record"
+        )
+    }
+
+    /// The same request failing for any other reason is a different state,
+    /// and must be treated as one: a reading that did not arrive, reported as
+    /// transient. Run against the identical fixture as the test above so the
+    /// only difference is which error came back.
+    func testANonCancellationFailureIsReportedAsTransient() async throws {
+        let profileID = UUID()
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            in: store
+        )
+        let service = try makeService(profileID: profileID, store: store)
+
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            transportErrors: [
+                "https://api.anthropic.com/api/oauth/usage": .timedOut
+            ]
+        )
+        defer { StubClaudeEndpointsURLProtocol.reset() }
+
+        var usage = ClaudeUsage.empty
+        await service.applyPersonalExtraUsage(
+            to: &usage,
+            profile: try seededProfile(profileID),
+            organizationId: teamOrganizationID
+        )
+
+        XCTAssertEqual(
+            usage.personalExtraUsageIssue,
+            .temporarilyUnavailable,
+            "a timeout is a reading that did not arrive, not a credential "
+                + "that was refused"
+        )
+    }
+
+    /// The transient notice must never instruct anyone. The app performs the
+    /// retry itself, so there is nothing for a person to do — and the two
+    /// steps the old wording named, a re-sync and a trip to Settings, are
+    /// precisely the ones that cannot help and, in the re-sync's case, can
+    /// destroy a working login. Asserted on the absence of that wording so a
+    /// future edit cannot quietly put it back.
+    func testTheTransientNoticeCarriesNoInstruction() throws {
+        let path = try XCTUnwrap(
+            Bundle.main.path(forResource: "en", ofType: "lproj")
+        )
+        let english = try XCTUnwrap(Bundle(path: path))
+
+        for key in [
+            "popover.extra_usage.cli_temporarily_unavailable",
+            "popover.extra_usage.absent.cli_temporarily_unavailable",
+            // The genuine unusable-credential case is held to the same rule:
+            // the app has already performed the equivalent of a re-sync by
+            // the time it is reached.
+            "popover.extra_usage.cli_sign_in_unusable",
+            "popover.extra_usage.absent.cli_sign_in_unusable"
+        ] {
+            let message = english.localizedString(
+                forKey: key,
+                value: nil,
+                table: nil
+            )
+            XCTAssertNotEqual(message, key, "\(key) is missing.")
+            for forbidden in ["re-sync", "Re-sync", "Settings", "→"] {
+                XCTAssertFalse(
+                    message.contains(forbidden),
+                    "\(key) tells the reader to \"\(forbidden)\", which is "
+                        + "either something the app already does itself or "
+                        + "something that cannot help here."
+                )
+            }
+        }
     }
 
     // MARK: - Helpers
@@ -2002,14 +2707,29 @@ private nonisolated final class StubClaudeEndpointsURLProtocol: URLProtocol {
     nonisolated(unsafe) private static var isActive = false
     nonisolated(unsafe) private(set) static var requestedURLs: [String] = []
 
+    /// URLs answered with a transport error instead of a response, keyed by
+    /// absolute URL. `URLError.cancelled` is the app superseding its own
+    /// refresh; anything else stands for the ordinary transport failures.
+    nonisolated(unsafe) private static var transportErrors:
+        [String: URLError.Code] = [:]
+
     static func install(
         cliOrganizationID: String,
         tokenRefreshStatusCode: Int = 200,
         oauthProfileStatusCode: Int = 200,
         tokenRefreshErrorCode: String = "invalid_grant",
-        memberExtraUsageEnabled: Bool = true
+        memberExtraUsageEnabled: Bool = true,
+        // A response that is complete and simply carries no credit figures,
+        // which is what Claude answers for an account that has extra usage
+        // switched on with nothing recorded against it.
+        memberExtraUsageCarriesCreditFigures: Bool = true,
+        // A profile response with no `organization` key at all: what a
+        // personal Max/Pro account looks like, as opposed to a team one.
+        oauthProfileCarriesOrganization: Bool = true,
+        transportErrors: [String: URLError.Code] = [:]
     ) {
         requestedURLs = []
+        Self.transportErrors = transportErrors
         responses = [
             "https://claude.ai/api/organizations": (200, Data("""
             [{"uuid":"665a6475-2eb6-4da8-8379-d5529d283568",
@@ -2026,16 +2746,36 @@ private nonisolated final class StubClaudeEndpointsURLProtocol: URLProtocol {
                 """.utf8)),
             "https://api.anthropic.com/api/oauth/profile": (
                 oauthProfileStatusCode,
-                Data("""
-                {"organization":{"uuid":"\(cliOrganizationID)"},
-                 "account":{"email_address":"fixture@example.com"}}
-                """.utf8)
+                Data(
+                    oauthProfileCarriesOrganization
+                        ? """
+                          {"organization":{"uuid":"\(cliOrganizationID)"},
+                           "account":{"email_address":"fixture@example.com"}}
+                          """.utf8
+                        : """
+                          {"account":{"email_address":"fixture@example.com"}}
+                          """.utf8
+                )
             ),
-            "https://api.anthropic.com/api/oauth/usage": (200, Data("""
-            {"extra_usage":{"is_enabled":\(memberExtraUsageEnabled),
-             "monthly_limit":5000,
-             "used_credits":0.0,"utilization":null,"currency":"USD"}}
-            """.utf8)),
+            "https://api.anthropic.com/api/oauth/usage": (
+                200,
+                Data(
+                    memberExtraUsageCarriesCreditFigures
+                        ? """
+                          {"extra_usage":{
+                           "is_enabled":\(memberExtraUsageEnabled),
+                           "monthly_limit":5000,
+                           "used_credits":0.0,"utilization":null,
+                           "currency":"USD"}}
+                          """.utf8
+                        : """
+                          {"extra_usage":{
+                           "is_enabled":\(memberExtraUsageEnabled),
+                           "utilization":null,"currency":"USD",
+                           "decimal_places":2,"user_disabled":false}}
+                          """.utf8
+                )
+            ),
             "https://platform.claude.com/v1/oauth/token": (
                 tokenRefreshStatusCode,
                 Data(
@@ -2069,6 +2809,7 @@ private nonisolated final class StubClaudeEndpointsURLProtocol: URLProtocol {
         URLProtocol.unregisterClass(StubClaudeEndpointsURLProtocol.self)
         isActive = false
         responses = [:]
+        transportErrors = [:]
     }
 
     override class func canInit(with request: URLRequest) -> Bool {
@@ -2093,6 +2834,10 @@ private nonisolated final class StubClaudeEndpointsURLProtocol: URLProtocol {
             return
         }
         Self.requestedURLs.append(url.absoluteString)
+        if let code = Self.transportErrors[url.absoluteString] {
+            client?.urlProtocol(self, didFailWithError: URLError(code))
+            return
+        }
         let canned = Self.responses[url.absoluteString]
             ?? (404, Data("{}".utf8))
         guard let response = HTTPURLResponse(
