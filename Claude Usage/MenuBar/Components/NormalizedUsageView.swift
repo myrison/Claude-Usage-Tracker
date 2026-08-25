@@ -285,6 +285,11 @@ struct NormalizedUsagePresentation: Equatable {
     let planName: String?
     let organizationName: String?
     let healthStatus: ProviderHealthStatus?
+    /// What the provider said was wrong, alongside how wrong. The status
+    /// alone collapses every degraded cause into one word, and "Partial
+    /// data" was the entire on-screen account verdict for a profile whose
+    /// Claude Code account was signed out. Nil when nothing was reported.
+    let healthIssue: ProviderHealthIssue?
     let groups: [NormalizedUsageGroupPresentation]
     let summary: NormalizedUsageSummaryPresentation?
     let credits: [UsageCredit]
@@ -429,6 +434,7 @@ enum NormalizedUsagePresentationBuilder {
             healthStatus:
                 report?.health.status
                 ?? headerHealthStatus(for: emptyState),
+            healthIssue: report?.health.issue,
             groups: groups,
             summary: summary,
             credits: credits,
@@ -678,6 +684,7 @@ enum NormalizedUsagePresentationBuilder {
             planName: nil,
             organizationName: nil,
             healthStatus: nil,
+            healthIssue: nil,
             groups: [],
             summary: nil,
             credits: [],
@@ -827,23 +834,139 @@ struct ProviderPopoverHeader: View {
     /// This account's own health, in the same words every other provider's
     /// header already uses.
     private var accountHealthText: String {
-        switch presentation.healthStatus {
+        Self.accountHealthText(
+            status: presentation.healthStatus,
+            issue: presentation.healthIssue,
+            credential: attentionCredential
+        )
+    }
+
+    /// Which of a Claude profile's two credentials the verdict above is
+    /// about, or `nil` when the answer is not knowable here.
+    ///
+    /// Decided by `MenuBarAttentionSignal` rather than by a second rule, so
+    /// the menu-bar marker and this line can never name different
+    /// credentials for the same profile. Two consequences follow from
+    /// reusing it, both deliberate:
+    ///
+    /// - Non-Claude providers get `nil` and keep the generic wording. They
+    ///   have one credential, so "Claude.ai" would be a lie and "which one"
+    ///   is not a question their users have.
+    /// - `claudeAccountUnresolved` also gets `nil`. It degrades the account
+    ///   to `.authenticationRequired` but raises no marker, and this line
+    ///   would rather stay generic than attribute a failure it was not
+    ///   given enough to attribute.
+    ///
+    /// `hasCredentialError` is `false` because the header has no separate
+    /// claude.ai rejection signal — that one is the top-of-popover banner's.
+    /// Nothing is lost: a rejected session key arrives here as health
+    /// `.unauthenticated`, which the signal already reads as claude.ai.
+    private var attentionCredential: MenuBarAttentionSignal.Credential? {
+        Self.attentionCredential(
+            providerID: presentation.providerID,
+            claudeUsage: presentation.legacyClaudeUsage,
+            healthStatus: presentation.healthStatus
+        )
+    }
+
+    /// Split out as a static resolver, like `accountHealthText` below, so the
+    /// wiring itself is testable: which field the Claude Code verdict is read
+    /// from, and the provider gate, are both places a mistake would show up
+    /// only as a wrong word on screen.
+    static func attentionCredential(
+        providerID: ProviderID,
+        claudeUsage: ClaudeUsage?,
+        healthStatus: ProviderHealthStatus?
+    ) -> MenuBarAttentionSignal.Credential? {
+        guard providerID == .claude else { return nil }
+        return MenuBarAttentionSignal.attention(
+            cliSignInIssue: claudeUsage?.personalExtraUsageIssue,
+            hasCredentialError: false,
+            healthStatus: healthStatus
+        )
+    }
+
+    /// A pure resolver, in the style of `LegacyPopoverBannerDetail`, so
+    /// "which verdict does this account get" is answerable in a unit test
+    /// without driving SwiftUI.
+    ///
+    /// `credential` names which of a Claude profile's two independent
+    /// credentials failed. A profile can have a working claude.ai session
+    /// key and a dead Claude Code sign-in, or the reverse; they are repaired
+    /// on different Settings screens, so a verdict that says only "sign-in"
+    /// sends half the people who read it to the wrong one. `nil` keeps the
+    /// generic wording, for providers with a single credential and for the
+    /// cases the app cannot attribute.
+    static func accountHealthText(
+        status: ProviderHealthStatus?,
+        issue: ProviderHealthIssue?,
+        credential: MenuBarAttentionSignal.Credential? = nil
+    ) -> String {
+        switch status {
         case .healthy:
             return NormalizedUsageStrings.localized(
                 "popover.normalized.health.healthy",
                 default: "Available"
             )
         case .degraded:
-            return NormalizedUsageStrings.localized(
-                "popover.normalized.health.degraded",
-                default: "Partial data"
-            )
+            // "Partial data" used to be the whole verdict for every degraded
+            // cause, including a profile whose Claude Code account was signed
+            // out — which reads as a data hiccup rather than as a credential
+            // that stopped working. Name the one cause a person can act on.
+            //
+            // Exhaustive on purpose, with no `default:`, following
+            // `ClaudeUsageProviderAdapter.accountHealth`: a newly added issue
+            // must not inherit either verdict by accident.
+            switch issue {
+            case .authenticationRequired:
+                switch credential {
+                case .claudeAI:
+                    return NormalizedUsageStrings.localized(
+                        "popover.normalized.health.claude_ai_sign_in_problem",
+                        default: "Claude.ai sign-in needs attention"
+                    )
+                case .claudeCode:
+                    return NormalizedUsageStrings.localized(
+                        "popover.normalized.health.claude_code_sign_in_problem",
+                        default: "Claude Code sign-in needs attention"
+                    )
+                case nil:
+                    return NormalizedUsageStrings.localized(
+                        "popover.normalized.health.sign_in_problem",
+                        default: "Sign-in needs attention"
+                    )
+                }
+            case .dependencyMissing, .configurationInvalid,
+                 .accountUnsupported, .transportUnavailable,
+                 .protocolMismatch, .responseInvalid,
+                 .optionalUsageUnavailable, .unknown, nil:
+                // Every other degraded cause really is partial data: a figure
+                // that did not arrive, or arrived malformed. Saying "sign-in"
+                // about any of them would put a credential complaint on a
+                // profile whose credentials are fine.
+                return NormalizedUsageStrings.localized(
+                    "popover.normalized.health.degraded",
+                    default: "Partial data"
+                )
+            }
         case .unavailable:
             return NormalizedUsageStrings.localized(
                 "popover.normalized.health.unavailable",
                 default: "Unavailable"
             )
         case .unauthenticated:
+            // Named too, not just the degraded case above. This is the more
+            // severe of the two claude.ai verdicts — the session key was
+            // rejected outright, so every figure below is gone rather than
+            // one row of it — and leaving the worse failure as the vaguer
+            // sentence would be exactly backwards. `nil` still means a
+            // single-credential provider, where there is nothing to name.
+            if credential == .claudeAI {
+                return NormalizedUsageStrings.localized(
+                    "popover.normalized.health.claude_ai_sign_in",
+                    default: "Claude.ai sign-in required"
+                )
+            }
             return NormalizedUsageStrings.localized(
                 "popover.normalized.health.sign_in",
                 default: "Sign-in required"

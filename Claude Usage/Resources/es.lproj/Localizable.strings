@@ -876,6 +876,9 @@
 
 // MARK: - Status Banners
 "popover.banner.credentials_expired" = "claude.ai rechazó la clave de sesión. Ajustes → Claude.ai.";
+"popover.banner.cli_sign_in_expired" = "El inicio de sesión de Claude Code ha caducado. Vuelve a iniciar sesión.";
+"popover.banner.cli_signed_out" = "Claude Code tiene la sesión cerrada en la cuenta vinculada aquí.";
+"popover.banner.cli_sign_in_unusable" = "El inicio de sesión de Claude Code de esta cuenta no funciona.";
 "popover.banner.refresh_failed" = "Actualización fallida %d veces";
 "popover.banner.updated_ago" = "Actualizado hace %dm";
 "popover.banner.last_success" = "Última actualización correcta: %@";
@@ -1105,9 +1108,13 @@
 "popover.normalized.credits.title" = "Créditos";
 "popover.normalized.group.empty" = "No se reportaron límites para este grupo.";
 "popover.normalized.health.checking" = "Comprobando uso";
+"popover.normalized.health.claude_ai_sign_in" = "Requiere acceso a Claude.ai";
+"popover.normalized.health.claude_ai_sign_in_problem" = "Revisa el acceso a Claude.ai";
+"popover.normalized.health.claude_code_sign_in_problem" = "Revisa el acceso a Claude Code";
 "popover.normalized.health.degraded" = "Datos parciales";
 "popover.normalized.health.healthy" = "Disponible";
 "popover.normalized.health.sign_in" = "Se requiere iniciar sesión";
+"popover.normalized.health.sign_in_problem" = "Revisa el inicio de sesión";
 "popover.normalized.health.unavailable" = "No disponible";
 "popover.normalized.health.unsupported" = "Cuenta no compatible";
 "popover.normalized.notice.configuration" = "Este perfil necesita atención antes de poder actualizarse.";
@@ -1231,6 +1238,8 @@
 "menubar.accessibility.state.no_data" = "Sin datos de uso";
 "menubar.accessibility.profile.active" = "%@, perfil activo";
 "menubar.accessibility.profile.inactive" = "%@, perfil inactivo";
+"menubar.accessibility.state.claude_ai_sign_in_attention" = "el inicio de sesión de Claude.ai necesita atención";
+"menubar.accessibility.state.claude_code_sign_in_attention" = "el inicio de sesión de Claude Code necesita atención";
 "menubar.overflow.header" = "Más Perfiles";
 "menubar.overflow.accessibility_label" = "%@ perfiles más";
 "menu.provider.open_profile" = "Abrir %@";

@@ -2902,7 +2902,8 @@ class MenuBarManager: NSObject, ObservableObject {
                 profiles: profileManager.profiles,
                 config: config,
                 activeClaudeProfileID: profileManager.activeClaudeProfileID,
-                isActive: profileManager.isActive
+                isActive: profileManager.isActive,
+                attention: attention(among: visible)
             )
             scheduleFreshnessDeadline(for: presentations, now: now)
         } else {
@@ -2921,7 +2922,8 @@ class MenuBarManager: NSObject, ObservableObject {
             if profile.providerID == .claude {
                 statusBarUIManager?.updateAllButtons(
                     usage: usage,
-                    apiUsage: apiUsage
+                    apiUsage: apiUsage,
+                    attention: attention(for: profile)
                 )
                 statusBarUIManager?.bindLegacySingleProfile(profile)
             } else {
@@ -2937,6 +2939,41 @@ class MenuBarManager: NSObject, ObservableObject {
                 now: now
             )
         }
+    }
+
+    /// Which of these profiles' menu-bar icons should carry the attention
+    /// marker, and which credential each one names. Only Claude profiles are
+    /// considered: the marker is drawn by the Claude render path, and the
+    /// provider-neutral path already carries its own
+    /// `ProviderMetricDisplayState`. Profiles with nothing wrong are absent
+    /// rather than present-and-false, so the render path cannot accidentally
+    /// mark one.
+    private func attention(
+        among profiles: [Profile]
+    ) -> [UUID: MenuBarAttentionSignal.Credential] {
+        var result: [UUID: MenuBarAttentionSignal.Credential] = [:]
+        for profile in profiles where profile.providerID == .claude {
+            result[profile.id] = attention(for: profile)
+        }
+        return result
+    }
+
+    /// The marker decision for one profile, read from that profile's own
+    /// snapshot rather than from the popover's projection.
+    /// `hasCredentialError` describes whichever profile the popover is
+    /// currently showing, so using it here would put a dot on every Claude
+    /// icon whenever one account's session key was rejected.
+    private func attention(
+        for profile: Profile
+    ) -> MenuBarAttentionSignal.Credential? {
+        let snapshot = profileUsagePresentations[profile.id]
+        return MenuBarAttentionSignal.attention(
+            cliSignInIssue: (snapshot?.claudeUsage ?? profile.claudeUsage)?
+                .personalExtraUsageIssue,
+            hasCredentialError:
+                snapshot?.currentFailure?.isCredentialFailure ?? false,
+            healthStatus: snapshot?.report?.health.status
+        )
     }
 
     private func scheduleFreshnessDeadline(
@@ -2968,7 +3005,9 @@ class MenuBarManager: NSObject, ObservableObject {
         statusBarUIManager?.updateButton(
             for: metricType,
             usage: usage,
-            apiUsage: apiUsage
+            apiUsage: apiUsage,
+            attention: profileManager.activeClaudeProfile
+                .flatMap { attention(for: $0) }
         )
     }
 

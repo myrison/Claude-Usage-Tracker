@@ -873,6 +873,9 @@
 
 // MARK: - Status Banners
 "popover.banner.credentials_expired" = "claude.ai a refusé la clé de session. Réglages → Claude.ai.";
+"popover.banner.cli_sign_in_expired" = "La connexion Claude Code de ce compte a expiré. Reconnectez-vous.";
+"popover.banner.cli_signed_out" = "Claude Code est déconnecté du compte lié ici.";
+"popover.banner.cli_sign_in_unusable" = "La connexion Claude Code de ce compte ne fonctionne pas.";
 "popover.banner.refresh_failed" = "Échec de l'actualisation %d fois";
 "popover.banner.updated_ago" = "Mis à jour il y a %dm";
 "popover.banner.last_success" = "Dernière actualisation réussie : %@";
@@ -1102,9 +1105,13 @@
 "popover.normalized.credits.title" = "Crédits";
 "popover.normalized.group.empty" = "Aucune limite n'a été signalée pour ce groupe.";
 "popover.normalized.health.checking" = "Vérification de l'utilisation";
+"popover.normalized.health.claude_ai_sign_in" = "Connexion Claude.ai requise";
+"popover.normalized.health.claude_ai_sign_in_problem" = "Vérifier connexion Claude.ai";
+"popover.normalized.health.claude_code_sign_in_problem" = "Vérifier connexion Claude Code";
 "popover.normalized.health.degraded" = "Données partielles";
 "popover.normalized.health.healthy" = "Disponible";
 "popover.normalized.health.sign_in" = "Connexion requise";
+"popover.normalized.health.sign_in_problem" = "Connexion à vérifier";
 "popover.normalized.health.unavailable" = "Indisponible";
 "popover.normalized.health.unsupported" = "Compte non pris en charge";
 "popover.normalized.notice.configuration" = "Ce profil nécessite une action avant de pouvoir être actualisé.";
@@ -1228,6 +1235,8 @@
 "menubar.accessibility.state.no_data" = "Aucune donnée d’utilisation";
 "menubar.accessibility.profile.active" = "%@, profil actif";
 "menubar.accessibility.profile.inactive" = "%@, profil inactif";
+"menubar.accessibility.state.claude_ai_sign_in_attention" = "connexion Claude.ai à vérifier";
+"menubar.accessibility.state.claude_code_sign_in_attention" = "connexion Claude Code à vérifier";
 "menubar.overflow.header" = "Autres Profils";
 "menubar.overflow.accessibility_label" = "%@ profils supplémentaires";
 "menu.provider.open_profile" = "Ouvrir %@";

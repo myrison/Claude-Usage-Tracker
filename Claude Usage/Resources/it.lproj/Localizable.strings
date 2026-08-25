@@ -891,6 +891,9 @@
 
 // MARK: - Status Banners
 "popover.banner.credentials_expired" = "claude.ai ha rifiutato la chiave di sessione. Impostazioni → Claude.ai.";
+"popover.banner.cli_sign_in_expired" = "L'accesso a Claude Code di questo account è scaduto. Accedi di nuovo.";
+"popover.banner.cli_signed_out" = "Claude Code è disconnesso dall'account collegato qui.";
+"popover.banner.cli_sign_in_unusable" = "L'accesso a Claude Code di questo account non funziona.";
 "popover.banner.refresh_failed" = "Aggiornamento fallito %d volte";
 "popover.banner.updated_ago" = "Aggiornato %dm fa";
 "popover.banner.last_success" = "Ultimo aggiornamento riuscito: %@";
@@ -1120,9 +1123,13 @@
 "popover.normalized.credits.title" = "Crediti";
 "popover.normalized.group.empty" = "Nessun limite segnalato per questo gruppo.";
 "popover.normalized.health.checking" = "Verifica dell'utilizzo in corso";
+"popover.normalized.health.claude_ai_sign_in" = "Accesso a Claude.ai richiesto";
+"popover.normalized.health.claude_ai_sign_in_problem" = "Verifica accesso a Claude.ai";
+"popover.normalized.health.claude_code_sign_in_problem" = "Verifica accesso a Claude Code";
 "popover.normalized.health.degraded" = "Dati parziali";
 "popover.normalized.health.healthy" = "Disponibile";
 "popover.normalized.health.sign_in" = "Accesso richiesto";
+"popover.normalized.health.sign_in_problem" = "Accesso da verificare";
 "popover.normalized.health.unavailable" = "Non disponibile";
 "popover.normalized.health.unsupported" = "Account non supportato";
 "popover.normalized.notice.configuration" = "Questo profilo richiede attenzione prima di poter essere aggiornato.";
@@ -1248,6 +1255,8 @@
 "menubar.accessibility.state.no_data" = "Nessun dato di utilizzo";
 "menubar.accessibility.profile.active" = "%@, profilo attivo";
 "menubar.accessibility.profile.inactive" = "%@, profilo inattivo";
+"menubar.accessibility.state.claude_ai_sign_in_attention" = "accesso a Claude.ai da verificare";
+"menubar.accessibility.state.claude_code_sign_in_attention" = "accesso a Claude Code da verificare";
 "menubar.overflow.header" = "Altri Profili";
 "menubar.overflow.accessibility_label" = "%@ altri profili";
 "menu.provider.open_profile" = "Apri %@";
