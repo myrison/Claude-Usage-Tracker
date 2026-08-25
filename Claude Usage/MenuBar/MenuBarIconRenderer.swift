@@ -1929,6 +1929,7 @@ struct MenuBarIconRenderer {
         // an attributes dictionary — the image still renders (minus the
         // percentage text) instead of crashing the app.
         let attributed = NSMutableAttributedString()
+        var criticalRanges: [NSRange] = []
         if let font {
             // Session number, or a dimmed dash when there is no reading
             // behind it. Dimmed rather than recoloured: the three status
@@ -1937,10 +1938,18 @@ struct MenuBarIconRenderer {
             let sessionText = sessionUnknown
                 ? MenuBarUnknownWindows.dashGlyph
                 : "\(Int(sessionPercentage ?? 0))"
+            let sessionStart = attributed.length
             attributed.append(NSAttributedString(string: sessionText, attributes: [
                 .font: font,
-                .foregroundColor: sessionUnknown ? unknownColor : sessionColor
+                .foregroundColor: sessionUnknown || sessionStatus != .critical
+                    ? (sessionUnknown ? unknownColor : sessionColor)
+                    : foregroundColor
             ]))
+            if !sessionUnknown, sessionStatus == .critical {
+                criticalRanges.append(
+                    NSRange(location: sessionStart, length: sessionText.count)
+                )
+            }
 
             // Separator and week number (if shown)
             if let weekPct = weekPercentage {
@@ -1951,10 +1960,18 @@ struct MenuBarIconRenderer {
                 let weekText = weekUnknown
                     ? MenuBarUnknownWindows.dashGlyph
                     : "\(Int(weekPct))"
+                let weekStart = attributed.length
                 attributed.append(NSAttributedString(string: weekText, attributes: [
                     .font: font,
-                    .foregroundColor: weekUnknown ? unknownColor : weekColor
+                    .foregroundColor: weekUnknown || weekStatus != .critical
+                        ? (weekUnknown ? unknownColor : weekColor)
+                        : foregroundColor
                 ]))
+                if !weekUnknown, weekStatus == .critical {
+                    criticalRanges.append(
+                        NSRange(location: weekStart, length: weekText.count)
+                    )
+                }
             }
         }
 
@@ -1977,6 +1994,34 @@ struct MenuBarIconRenderer {
         let textX = (totalWidth - textSize.width - paceDotExtra) / 2
         let textY = totalHeight - textSize.height
         attributed.draw(at: NSPoint(x: textX, y: textY))
+
+        // Critical digits stay in the menu-bar foreground colour for
+        // readability. The red underline preserves the existing problem
+        // signal without changing the image's width or height.
+        if !criticalRanges.isEmpty {
+            NSColor.systemRed.setStroke()
+            for range in criticalRanges {
+                let prefixWidth = attributed.attributedSubstring(
+                    from: NSRange(location: 0, length: range.location)
+                ).size().width
+                let rangeWidth = attributed.attributedSubstring(
+                    from: range
+                ).size().width
+                let underline = NSBezierPath()
+                underline.move(
+                    to: NSPoint(x: textX + prefixWidth, y: textY - 1)
+                )
+                underline.line(
+                    to: NSPoint(
+                        x: textX + prefixWidth + rangeWidth,
+                        y: textY - 1
+                    )
+                )
+                underline.lineWidth = 1.5
+                underline.lineCapStyle = .round
+                underline.stroke()
+            }
+        }
 
         // Pace dot after the percentage text
         if !sessionUnknown, showPaceMarker, let pace = sessionPaceStatus {

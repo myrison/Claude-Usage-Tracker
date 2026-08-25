@@ -1534,6 +1534,38 @@ final class ProviderMenuPresentationTests: HostedAppTestCase {
         )
     }
 
+    func testCriticalCompactPercentageKeepsDimensionsAndChangesUnderlineOnly()
+        throws
+    {
+        let renderer = MenuBarIconRenderer()
+        let common: (UsageStatusLevel, UsageStatusLevel) -> (NSSize, Data) = {
+            sessionStatus,
+            weekStatus in
+            let image = renderer.createMultiProfilePercentage(
+                sessionPercentage: 3,
+                weekPercentage: 85,
+                sessionStatus: sessionStatus,
+                weekStatus: weekStatus,
+                profileName: "j@",
+                monochromeMode: false,
+                isDarkMode: true
+            )
+            return (
+                image.size,
+                StatusBarUIManager.imageFingerprint(image) ?? Data()
+            )
+        }
+
+        let healthy = common(.safe, .safe)
+        let criticalWeek = common(.safe, .critical)
+        let criticalSession = common(.critical, .safe)
+
+        XCTAssertEqual(criticalWeek.0, healthy.0)
+        XCTAssertEqual(criticalSession.0, healthy.0)
+        XCTAssertNotEqual(criticalWeek.1, healthy.1)
+        XCTAssertNotEqual(criticalSession.1, healthy.1)
+    }
+
     /// `updateProviderMultiProfileButtons` chooses between the compact
     /// two-window percentage label and the legacy single-metric label via a
     /// ternary on `config.iconStyle`. `compactPercentageAccessibilityLabel`
