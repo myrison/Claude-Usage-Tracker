@@ -2532,6 +2532,146 @@ final class PersonalExtraUsageTests: XCTestCase {
         XCTAssertEqual(renewals.writes.count, 1)
     }
 
+    func testSharedTerminalCredentialRefreshRotatesEveryJoinedProfile()
+        async throws
+    {
+        let expired = Self.credentialsJSON(expiresAt: 1_000)
+        let firstProfile = terminalOnlyProfile(credentialsJSON: expired)
+        var joiningProfile = terminalOnlyProfile(credentialsJSON: expired)
+        joiningProfile.name = "Joined terminal-only fixture"
+        let store = makeIsolatedProfileStore()
+        try seedProfilesForTesting([firstProfile, joiningProfile], in: store)
+        try store.saveCLIProfileCredential(expired, for: firstProfile.id)
+        try store.saveCLIProfileCredential(expired, for: joiningProfile.id)
+        let manager = ProfileManager(profileStore: store)
+        manager.profiles = [firstProfile, joiningProfile]
+        let renewals = RenewedCredentialRecorder()
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            renewals: renewals
+        )
+        let refreshStarted = expectation(description: "token refresh started")
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            holdTokenRefreshResponse: true,
+            onTokenRefreshStarted: { refreshStarted.fulfill() }
+        )
+
+        let first = Task { @MainActor in
+            try await service.captureUsageRequestPreparingTerminalSignIn(
+                for: firstProfile
+            )
+        }
+        await fulfillment(of: [refreshStarted], timeout: 2)
+        let joined = Task { @MainActor in
+            try await service.captureUsageRequestPreparingTerminalSignIn(
+                for: joiningProfile
+            )
+        }
+        await Task.yield()
+        StubClaudeEndpointsURLProtocol.releaseTokenRefreshResponse()
+
+        let firstRequest = try await first.value
+        let joinedRequest = try await joined.value
+        XCTAssertTrue(firstRequest.capturesOAuthToken("renewed-access"))
+        XCTAssertTrue(joinedRequest.capturesOAuthToken("renewed-access"))
+        XCTAssertEqual(
+            StubClaudeEndpointsURLProtocol.requestedURLs.filter {
+                $0 == ClaudeCLITokenRefresher.tokenEndpoint
+            }.count,
+            1
+        )
+        XCTAssertEqual(renewals.writes.count, 2)
+        XCTAssertEqual(
+            Set(renewals.writes.map(\.profileID)),
+            Set([firstProfile.id, joiningProfile.id])
+        )
+
+        let laterFirst = try await service
+            .captureUsageRequestPreparingTerminalSignIn(for: firstProfile)
+        let laterJoiner = try await service
+            .captureUsageRequestPreparingTerminalSignIn(for: joiningProfile)
+        XCTAssertTrue(laterFirst.capturesOAuthToken("renewed-access"))
+        XCTAssertTrue(laterJoiner.capturesOAuthToken("renewed-access"))
+        XCTAssertEqual(
+            StubClaudeEndpointsURLProtocol.requestedURLs.filter {
+                $0 == ClaudeCLITokenRefresher.tokenEndpoint
+            }.count,
+            1
+        )
+    }
+
+    func testCancelledSharedTerminalCredentialRefreshStillRotatesJoiner()
+        async throws
+    {
+        let expired = Self.credentialsJSON(expiresAt: 1_000)
+        let firstProfile = terminalOnlyProfile(credentialsJSON: expired)
+        var joiningProfile = terminalOnlyProfile(credentialsJSON: expired)
+        joiningProfile.name = "Joined terminal-only fixture"
+        let store = makeIsolatedProfileStore()
+        try seedProfilesForTesting([firstProfile, joiningProfile], in: store)
+        try store.saveCLIProfileCredential(expired, for: firstProfile.id)
+        try store.saveCLIProfileCredential(expired, for: joiningProfile.id)
+        let manager = ProfileManager(profileStore: store)
+        manager.profiles = [firstProfile, joiningProfile]
+        let renewals = RenewedCredentialRecorder()
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            renewals: renewals
+        )
+        let refreshStarted = expectation(description: "token refresh started")
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            holdTokenRefreshResponse: true,
+            onTokenRefreshStarted: { refreshStarted.fulfill() }
+        )
+
+        let cancelledWaitEnded = expectation(
+            description: "cancelled preparation stopped waiting"
+        )
+        let first = Task { @MainActor in
+            defer { cancelledWaitEnded.fulfill() }
+            return try await service.captureUsageRequestPreparingTerminalSignIn(
+                for: firstProfile
+            )
+        }
+        await fulfillment(of: [refreshStarted], timeout: 2)
+        first.cancel()
+        await fulfillment(of: [cancelledWaitEnded], timeout: 2)
+        _ = try? await first.value
+
+        let joined = Task { @MainActor in
+            try await service.captureUsageRequestPreparingTerminalSignIn(
+                for: joiningProfile
+            )
+        }
+        await Task.yield()
+        StubClaudeEndpointsURLProtocol.releaseTokenRefreshResponse()
+
+        let joinedRequest = try await joined.value
+        XCTAssertTrue(joinedRequest.capturesOAuthToken("renewed-access"))
+        XCTAssertEqual(
+            StubClaudeEndpointsURLProtocol.requestedURLs.filter {
+                $0 == ClaudeCLITokenRefresher.tokenEndpoint
+            }.count,
+            1
+        )
+        XCTAssertEqual(renewals.writes.count, 2)
+        XCTAssertEqual(
+            Set(renewals.writes.map(\.profileID)),
+            Set([firstProfile.id, joiningProfile.id])
+        )
+        for profileID in [firstProfile.id, joiningProfile.id] {
+            XCTAssertTrue(
+                try XCTUnwrap(
+                    store.loadProfileCredentials(profileID).cliCredentialsJSON
+                ).contains(#""accessToken":"renewed-access""#)
+            )
+        }
+    }
+
     func testCancelledPersonalExtraUsageWaitStillPersistsTokenRotation()
         async throws
     {

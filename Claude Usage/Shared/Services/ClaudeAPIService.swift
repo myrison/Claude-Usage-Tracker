@@ -799,9 +799,21 @@ class ClaudeAPIService: APIServiceProtocol {
         case failed(ClaudeCLITokenRefresher.RefreshFailure)
     }
 
+    /// One stored profile credential participating in a shared exchange.
+    ///
+    /// Profiles can legitimately share a linked Claude Code account and its
+    /// credential snapshot. The exchange spends that snapshot's refresh token
+    /// once, but every profile that supplied the snapshot needs the rotated
+    /// copy persisted before another refresh can present the spent token.
+    private struct CLIRefreshParticipant {
+        let profile: Profile
+        let baseCredentialFingerprint: Int
+    }
+
     private struct InFlightCLIRefresh {
         let task: Task<ShieldedCLIRefreshResult, Never>
         let observation: CLIRefreshObservation
+        var participants: [CLIRefreshParticipant]
     }
 
     private var inFlightCLIRefreshes: [CLIRefreshKey: InFlightCLIRefresh] = [:]
@@ -1218,9 +1230,20 @@ class ClaudeAPIService: APIServiceProtocol {
             account: accountIdentity,
             credentialFingerprint: credentialsJSON.hashValue
         )
+        let participant = CLIRefreshParticipant(
+            profile: profile,
+            baseCredentialFingerprint: profile.cliCredentialsJSON?.hashValue
+                ?? credentialsJSON.hashValue
+        )
 
         let refresh: InFlightCLIRefresh
-        if let existing = inFlightCLIRefreshes[key] {
+        if var existing = inFlightCLIRefreshes[key] {
+            if !existing.participants.contains(where: {
+                $0.profile.id == profile.id
+            }) {
+                existing.participants.append(participant)
+                inFlightCLIRefreshes[key] = existing
+            }
             refresh = existing
         } else {
             let observation = CLIRefreshObservation()
@@ -1239,7 +1262,8 @@ class ClaudeAPIService: APIServiceProtocol {
             }
             refresh = InFlightCLIRefresh(
                 task: task,
-                observation: observation
+                observation: observation,
+                participants: [participant]
             )
             inFlightCLIRefreshes[key] = refresh
         }
@@ -1276,6 +1300,13 @@ class ClaudeAPIService: APIServiceProtocol {
     ) -> ShieldedCLIRefreshResult {
         defer { inFlightCLIRefreshes.removeValue(forKey: key) }
         let fingerprint = credentialsJSON.hashValue
+        let participants = inFlightCLIRefreshes[key]?.participants
+            ?? [
+                CLIRefreshParticipant(
+                    profile: profile,
+                    baseCredentialFingerprint: fingerprint
+                )
+            ]
         guard
             case .renewed(let refreshed) = outcome,
             let accessToken = ClaudeCodeSyncService.shared.extractAccessToken(
@@ -1290,57 +1321,60 @@ class ClaudeAPIService: APIServiceProtocol {
 
         expiredCLILogins.remove(fingerprint)
         indeterminateCLILogins.remove(fingerprint)
-        var persisted = false
-        do {
-            // `credentialsJSON` is the credential whose refresh token was
-            // just spent. The writer stores it on the profile and mirrors it
-            // into Claude Code's account-scoped Keychain item.
-            try renewedCredentialWriter(
-                RenewedCLICredential(
-                    credentialsJSON: refreshed,
-                    rotatedFrom: credentialsJSON
-                ),
-                profile.id
-            )
-            persisted = true
-            // Keep the manager's copy in step with the durable write. A later
-            // metadata-only update saves this in-memory profile wholesale;
-            // leaving the spent credential here could otherwise overwrite the
-            // rotation that was just persisted.
-            if let index = profileManager.profiles.firstIndex(where: {
-                $0.id == profile.id
-            }) {
-                profileManager.profiles[index].cliCredentialsJSON = refreshed
-                if profileManager.activeProfile?.id == profile.id {
-                    profileManager.activeProfile = profileManager.profiles[index]
+        var persistedAny = false
+        for (index, participant) in participants.enumerated() {
+            do {
+                // Only the originating profile carries `rotatedFrom`: that
+                // makes the account-scoped Claude Code Keychain mirror run
+                // once while every profile gets its own durable store write.
+                try renewedCredentialWriter(
+                    RenewedCLICredential(
+                        credentialsJSON: refreshed,
+                        rotatedFrom: index == 0 ? credentialsJSON : nil
+                    ),
+                    participant.profile.id
+                )
+                persistedAny = true
+                // Keep the manager's copy in step with the durable write. A
+                // later metadata-only update saves this in-memory profile
+                // wholesale; leaving the spent credential here could
+                // otherwise overwrite the rotation that was just persisted.
+                if let profileIndex = profileManager.profiles.firstIndex(where: {
+                    $0.id == participant.profile.id
+                }) {
+                    profileManager.profiles[profileIndex].cliCredentialsJSON = refreshed
+                    if profileManager.activeProfile?.id == participant.profile.id {
+                        profileManager.activeProfile = profileManager.profiles[profileIndex]
+                    }
                 }
+            } catch {
+                // The renewed token still works for this run, so one profile's
+                // persistence failure must not stop the other shared copies
+                // from receiving the rotation.
+                LoggingService.shared.logWarning(
+                    "Could not store the renewed Claude Code token for profile "
+                    + "'\(participant.profile.name)': "
+                    + "\(error.localizedDescription). The saved credential is "
+                    + "unchanged."
+                )
             }
-        } catch {
-            // The renewed token still works for this run, so a persistence
-            // failure is not a reason to discard the successful exchange.
-            LoggingService.shared.logWarning(
-                "Could not store the renewed Claude Code token: "
-                + "\(error.localizedDescription). The saved credential is "
-                + "unchanged."
-            )
-        }
 
-        // Keyed on the profile's durable credential, not the argument, which
-        // may already be a renewal cached earlier in this run.
-        renewedCLICredentials[profile.id] = (
-            base: profile.cliCredentialsJSON?.hashValue
-                ?? credentialsJSON.hashValue,
-            credentialsJSON: refreshed
-        )
-        if cliOrganizationCredentialHashes[profile.id] == fingerprint {
-            cliOrganizationCredentialHashes[profile.id] = refreshed.hashValue
-        }
-        if cliLoginsWithoutOrganization[profile.id] == fingerprint {
-            cliLoginsWithoutOrganization[profile.id] = refreshed.hashValue
+            renewedCLICredentials[participant.profile.id] = (
+                base: participant.baseCredentialFingerprint,
+                credentialsJSON: refreshed
+            )
+            if cliOrganizationCredentialHashes[participant.profile.id]
+                == participant.baseCredentialFingerprint {
+                cliOrganizationCredentialHashes[participant.profile.id] = refreshed.hashValue
+            }
+            if cliLoginsWithoutOrganization[participant.profile.id]
+                == participant.baseCredentialFingerprint {
+                cliLoginsWithoutOrganization[participant.profile.id] = refreshed.hashValue
+            }
         }
 
         let observed = observation.snapshot()
-        if observed.cancelled, persisted {
+        if observed.cancelled, persistedAny {
             let accountName = profile.cliAccountName ?? profile.name
             loggingService.log(
                 "Finished renewing the terminal sign-in for Claude Code "
