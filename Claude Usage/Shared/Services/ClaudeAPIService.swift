@@ -73,6 +73,10 @@ class ClaudeAPIService: APIServiceProtocol {
     ///
     private let renewedCredentialWriter: (RenewedCLICredential, UUID) throws -> Void
 
+    /// Destination for lifecycle messages. Injectable so terminal-only
+    /// renewal tests can prove a failed refresh never announces success.
+    private let loggingService: LoggingService
+
     /// One renewal on its way to the credential store.
     ///
     /// A struct rather than two more closure arguments because both fields are
@@ -100,7 +104,8 @@ class ClaudeAPIService: APIServiceProtocol {
         sessionKeyValidator: SessionKeyValidator = SessionKeyValidator(),
         profileManager: ProfileManager? = nil,
         systemCredentialsReader: (() throws -> String?)? = nil,
-        renewedCredentialWriter: ((RenewedCLICredential, UUID) throws -> Void)? = nil
+        renewedCredentialWriter: ((RenewedCLICredential, UUID) throws -> Void)? = nil,
+        loggingService: LoggingService = .shared
     ) {
         // Default path: ~/.claude-session-key
         self.sessionKeyPath = sessionKeyPath ?? Constants.ClaudePaths.homeDirectory
@@ -125,6 +130,7 @@ class ClaudeAPIService: APIServiceProtocol {
                     rotatedFrom: renewal.rotatedFrom
                 )
             }
+        self.loggingService = loggingService
     }
 
     // MARK: - Session Key Management
@@ -1060,7 +1066,11 @@ class ClaudeAPIService: APIServiceProtocol {
         // signing back in was enough was false for exactly the credentials
         // it was shown for.
         guard !expiredCLILogins.contains(fingerprint) else {
-            return await adoptLiveCLILogin(for: profile, replacing: credentialsJSON)
+            return await adoptLiveCLILogin(
+                for: profile,
+                replacing: credentialsJSON,
+                logNoBrowserRenewal: logNoBrowserRenewal
+            )
         }
 
         let outcome = await ClaudeCLITokenRefresher.refreshOutcome(
@@ -1076,7 +1086,8 @@ class ClaudeAPIService: APIServiceProtocol {
             // holding — the remedy the message used to ask for by hand.
             if let adopted = await adoptLiveCLILogin(
                 for: profile,
-                replacing: credentialsJSON
+                replacing: credentialsJSON,
+                logNoBrowserRenewal: logNoBrowserRenewal
             ) {
                 return adopted
             }
@@ -1086,13 +1097,6 @@ class ClaudeAPIService: APIServiceProtocol {
             return nil
         }
         expiredCLILogins.remove(fingerprint)
-
-        if logNoBrowserRenewal {
-            LoggingService.shared.log(
-                "Renewed the terminal sign-in for profile "
-                + "'\(profile.name)' without a browser sign-in."
-            )
-        }
 
         do {
             // `credentialsJSON` is the credential whose refresh token was
@@ -1141,6 +1145,12 @@ class ClaudeAPIService: APIServiceProtocol {
         // is never touched.
         if cliLoginsWithoutOrganization[profile.id] == fingerprint {
             cliLoginsWithoutOrganization[profile.id] = refreshed.hashValue
+        }
+        if logNoBrowserRenewal {
+            loggingService.log(
+                "Renewed the terminal sign-in for profile "
+                + "'\(profile.name)' without a browser sign-in."
+            )
         }
         return (refreshed, accessToken)
     }
@@ -1208,7 +1218,8 @@ class ClaudeAPIService: APIServiceProtocol {
     /// back to the unscoped read.
     private func adoptLiveCLILogin(
         for profile: Profile,
-        replacing stale: String
+        replacing stale: String,
+        logNoBrowserRenewal: Bool = false
     ) async -> (credentialsJSON: String, accessToken: String)? {
         guard let accountName = profile.cliAccountName else { return nil }
 
@@ -1266,6 +1277,12 @@ class ClaudeAPIService: APIServiceProtocol {
             + "'\(profile.name)' by adopting the login Claude Code is "
             + "currently holding; the stored copy could no longer be renewed."
         )
+        if logNoBrowserRenewal {
+            loggingService.log(
+                "Adopted Claude Code's live login for profile "
+                + "'\(profile.name)' without a browser sign-in."
+            )
+        }
 
         renewedCLICredentials[profile.id] = (
             base: profile.cliCredentialsJSON?.hashValue ?? stale.hashValue,

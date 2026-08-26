@@ -2326,6 +2326,10 @@ final class PersonalExtraUsageTests: XCTestCase {
         let manager = ProfileManager(profileStore: store)
         manager.profiles = [profile]
         let renewals = RenewedCredentialRecorder()
+        var logMessages: [String] = []
+        let loggingService = LoggingService {
+            logMessages.append($0)
+        }
         let keychain = TerminalRenewalSecurityRunner(holding: expired)
         let cliSync = ClaudeCodeSyncService(
             profileStore: store,
@@ -2346,7 +2350,8 @@ final class PersonalExtraUsageTests: XCTestCase {
                     for: profileID,
                     rotatedFrom: renewal.rotatedFrom
                 )
-            }
+            },
+            loggingService: loggingService
         )
         StubClaudeEndpointsURLProtocol.install(
             cliOrganizationID: teamOrganizationID
@@ -2377,6 +2382,17 @@ final class PersonalExtraUsageTests: XCTestCase {
         XCTAssertTrue(
             keychainWrite.contains { $0.contains("renewed-access") }
         )
+        XCTAssertTrue(
+            logMessages.contains(
+                "Renewed the terminal sign-in for profile "
+                    + "'Terminal-only fixture' without a browser sign-in."
+            )
+        )
+        XCTAssertFalse(
+            logMessages.contains {
+                $0.contains("Adopted Claude Code's live login")
+            }
+        )
         XCTAssertEqual(usage.sessionPercentage, 0)
     }
 
@@ -2395,12 +2411,16 @@ final class PersonalExtraUsageTests: XCTestCase {
         let manager = ProfileManager(profileStore: store)
         manager.profiles = [profile]
         var liveReads = 0
+        var logMessages: [String] = []
         let service = makeIsolatedClaudeAPIService(
             profileManager: manager,
             store: store,
             systemCredentials: {
                 liveReads += 1
                 return live
+            },
+            loggingService: LoggingService {
+                logMessages.append($0)
             }
         )
         StubClaudeEndpointsURLProtocol.install(
@@ -2422,6 +2442,15 @@ final class PersonalExtraUsageTests: XCTestCase {
             try XCTUnwrap(
                 store.loadProfileCredentials(profile.id).cliCredentialsJSON
             ).contains(#""accessToken":"live-access-token""#)
+        )
+        XCTAssertTrue(
+            logMessages.contains(
+                "Adopted Claude Code's live login for profile "
+                    + "'Terminal-only fixture' without a browser sign-in."
+            )
+        )
+        XCTAssertFalse(
+            logMessages.contains { $0.contains("Renewed the terminal sign-in") }
         )
     }
 
@@ -2494,12 +2523,16 @@ final class PersonalExtraUsageTests: XCTestCase {
         let manager = ProfileManager(profileStore: store)
         manager.profiles = [profile]
         var liveReads = 0
+        var logMessages: [String] = []
         let service = makeIsolatedClaudeAPIService(
             profileManager: manager,
             store: store,
             systemCredentials: {
                 liveReads += 1
                 return nil
+            },
+            loggingService: LoggingService {
+                logMessages.append($0)
             }
         )
         StubClaudeEndpointsURLProtocol.install(
@@ -2524,6 +2557,12 @@ final class PersonalExtraUsageTests: XCTestCase {
             1
         )
         XCTAssertEqual(liveReads, 1)
+        XCTAssertFalse(
+            logMessages.contains { message in
+                message.contains("Renewed the terminal sign-in")
+                    || message.contains("Adopted Claude Code's live login")
+            }
+        )
     }
 
     func testBrowserBackedRefreshDoesNotEnterTerminalRenewalPath()
