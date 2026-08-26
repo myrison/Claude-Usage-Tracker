@@ -177,6 +177,112 @@ final class ClaudeCodeSyncServiceTests: HostedAppTestCase {
     // MARK: - Reads
 
     @MainActor
+    func testKeychainOnlyImportWinsOverDifferentFallbackChainCredential() throws {
+        let profile = Profile(
+            name: "Frozen Link Target",
+            hasCliAccount: false,
+            cliAccountName: "target-account"
+        )
+        let store = retain(makeIsolatedProfileStore())
+        try seedProfilesForTesting([profile], in: store)
+        let fileCredential =
+            #"{"claudeAiOauth":{"accessToken":"FILE"}}"#
+        let keychainCredential =
+            #"{"claudeAiOauth":{"accessToken":"KEYCHAIN"}}"#
+        let service = retain(
+            ClaudeCodeSyncService(
+                profileStore: store,
+                systemCredentialsReader: { fileCredential },
+                keychainCredentialsReader: { accountName in
+                    XCTAssertEqual(accountName, "target-account")
+                    return keychainCredential
+                }
+            )
+        )
+
+        try service.syncKeychainToProfile(profile.id)
+
+        XCTAssertEqual(
+            try store.loadProfileCredentials(profile.id).cliCredentialsJSON,
+            keychainCredential
+        )
+    }
+
+    @MainActor
+    func testKeychainOnlyImportDistinguishesAbsentFromPresentInvalidItem() throws {
+        let profile = Profile(
+            name: "Keychain State",
+            cliAccountName: "target-account"
+        )
+        let store = retain(makeIsolatedProfileStore())
+        try seedProfilesForTesting([profile], in: store)
+
+        let absent = retain(
+            ClaudeCodeSyncService(
+                profileStore: store,
+                keychainCredentialsReader: { _ in nil }
+            )
+        )
+        XCTAssertThrowsError(try absent.syncKeychainToProfile(profile.id)) {
+            guard case ClaudeCodeError.noCredentialsFound = $0 else {
+                return XCTFail("Expected absence, got \($0)")
+            }
+        }
+
+        for invalid in [
+            #"{"claudeAiOauth":{"accessToken":""}}"#,
+            "not-json"
+        ] {
+            let present = retain(
+                ClaudeCodeSyncService(
+                    profileStore: store,
+                    keychainCredentialsReader: { _ in invalid }
+                )
+            )
+            XCTAssertThrowsError(
+                try present.syncKeychainToProfile(profile.id)
+            ) {
+                guard case ClaudeCodeError.invalidJSON = $0 else {
+                    return XCTFail("Expected invalid item, got \($0)")
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testKeychainOnlyImportRejectsPresentUnreadableItem() throws {
+        let profile = Profile(
+            name: "Unreadable Keychain",
+            cliAccountName: "target-account"
+        )
+        let store = retain(makeIsolatedProfileStore())
+        try seedProfilesForTesting([profile], in: store)
+        let runner = RecordingSecurityRunner()
+        runner.results = [
+            SecurityCommandResult(
+                exitCode: 0,
+                standardOutput: nil,
+                standardError: ""
+            )
+        ]
+        let service = retain(
+            ClaudeCodeSyncService(
+                profileStore: store,
+                securityRunner: runner
+            )
+        )
+
+        XCTAssertThrowsError(
+            try service.syncKeychainToProfile(profile.id)
+        ) {
+            guard case ClaudeCodeError.invalidJSON = $0 else {
+                return XCTFail("Expected invalid item, got \($0)")
+            }
+        }
+        XCTAssertEqual(runner.verbs, ["find-generic-password"])
+    }
+
+    @MainActor
     func testReadReturnsTrimmedKeychainValue() throws {
         let runner = RecordingSecurityRunner()
         runner.results = [

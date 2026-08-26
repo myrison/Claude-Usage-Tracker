@@ -1290,6 +1290,8 @@ final class NormalizedUsagePresentationTests: HostedAppTestCase {
 
     func testPopoverNavigationActionsKeepManageAndPreferencesDistinct() {
         var routed: [String] = []
+        let displayedProfileID = UUID()
+        var routedClaudeProfileID: UUID?
         let actions = PopoverNavigationActions(
             manageProfiles: {
                 routed.append("profiles")
@@ -1297,19 +1299,21 @@ final class NormalizedUsagePresentationTests: HostedAppTestCase {
             preferences: {
                 routed.append("preferences")
             },
-            claudeAccount: {
+            claudeAccount: { profileID in
                 routed.append("claude-account")
+                routedClaudeProfileID = profileID
             }
         )
 
         actions.manageProfiles()
         actions.preferences()
-        actions.claudeAccount()
+        actions.claudeAccount(displayedProfileID)
 
         XCTAssertEqual(
             routed,
             ["profiles", "preferences", "claude-account"]
         )
+        XCTAssertEqual(routedClaudeProfileID, displayedProfileID)
     }
 
     func testClaudeAdapterKeepsLegacyCardsAndAPIBillingSeparate()

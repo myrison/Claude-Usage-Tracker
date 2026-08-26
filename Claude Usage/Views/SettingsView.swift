@@ -428,7 +428,7 @@ struct TrafficLightButtons: View {
     @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             TrafficLightButton(type: .close)
             TrafficLightButton(type: .miniaturize)
         }
@@ -1221,9 +1221,9 @@ struct CredentialMiniCard: View {
 
             if let badgeText {
                 Text(badgeText)
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.system(size: 7, weight: .semibold))
                     .foregroundStyle(.red)
-                    .padding(.horizontal, 5)
+                    .padding(.horizontal, 4)
                     .padding(.vertical, 2)
                     .background(Color.red.opacity(0.12), in: Capsule())
             }
@@ -1235,7 +1235,7 @@ struct CredentialMiniCard: View {
                     .frame(width: 5, height: 5)
             }
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 6)
         .padding(.vertical, 4)
         .background(
             RoundedRectangle(cornerRadius: 4)

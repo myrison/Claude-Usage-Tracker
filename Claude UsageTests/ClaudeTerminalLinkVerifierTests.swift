@@ -11,7 +11,7 @@ final class ClaudeTerminalLinkVerifierTests: XCTestCase {
     func testKeychainSuccessWinsWithoutReadingLinkedFile() throws {
         var calls: [String] = []
         let verifier = ClaudeTerminalLinkVerifier(
-            syncToProfile: { _ in calls.append("keychain") },
+            syncKeychainToProfile: { _ in calls.append("keychain") },
             readLinkedAccountCredential: { _ in
                 calls.append("file")
                 return self.valid
@@ -34,7 +34,7 @@ final class ClaudeTerminalLinkVerifierTests: XCTestCase {
     func testAbsentKeychainFallsBackToValidLinkedFile() throws {
         var calls: [String] = []
         let verifier = ClaudeTerminalLinkVerifier(
-            syncToProfile: { _ in
+            syncKeychainToProfile: { _ in
                 calls.append("keychain")
                 throw ClaudeCodeError.noCredentialsFound
             },
@@ -61,7 +61,7 @@ final class ClaudeTerminalLinkVerifierTests: XCTestCase {
     func testTokenlessLinkedFileIsRejectedAfterAbsentKeychain() {
         var persisted = false
         let verifier = ClaudeTerminalLinkVerifier(
-            syncToProfile: { _ in
+            syncKeychainToProfile: { _ in
                 throw ClaudeCodeError.noCredentialsFound
             },
             readLinkedAccountCredential: { _ in self.tokenless },
@@ -84,7 +84,7 @@ final class ClaudeTerminalLinkVerifierTests: XCTestCase {
     func testKeychainFailureDoesNotSilentlyFallBack() {
         var readFile = false
         let verifier = ClaudeTerminalLinkVerifier(
-            syncToProfile: { _ in
+            syncKeychainToProfile: { _ in
                 throw ClaudeCodeError.keychainReadFailed(
                     exitCode: 1,
                     message: "denied"
@@ -104,5 +104,74 @@ final class ClaudeTerminalLinkVerifierTests: XCTestCase {
             )
         )
         XCTAssertFalse(readFile)
+    }
+
+    func testPresentButTokenlessKeychainDoesNotFallBackToFile() {
+        var readFile = false
+        let verifier = ClaudeTerminalLinkVerifier(
+            syncKeychainToProfile: { _ in
+                throw ClaudeCodeError.invalidJSON
+            },
+            readLinkedAccountCredential: { _ in
+                readFile = true
+                return self.valid
+            },
+            persistLinkedAccountCredential: { _, _ in }
+        )
+
+        XCTAssertThrowsError(
+            try verifier.verify(
+                profileID: profileID,
+                accountName: "account"
+            )
+        ) { error in
+            guard case ClaudeCodeError.invalidJSON = error else {
+                return XCTFail("Expected invalidJSON, got \(error)")
+            }
+        }
+        XCTAssertFalse(readFile)
+    }
+}
+
+final class ClaudeAccountFrozenTargetTests: XCTestCase {
+    func testTerminalSheetKeepsPresentedProfileAfterAnotherProfileIsShown() {
+        let presented = Profile(name: "Presented")
+        let newlyActive = Profile(name: "Newly active")
+        let target = ClaudeAccountSheetTarget(id: presented.id)
+
+        // Reordering models a profile-chip switch. Resolution remains by the
+        // ID captured when the sheet was presented, never by list position or
+        // whichever profile the surrounding page now displays.
+        XCTAssertEqual(
+            target.profile(in: [newlyActive, presented])?.id,
+            presented.id
+        )
+    }
+
+    func testBrowserAttemptAcceptsFrozenTargetAfterOtherProfileSwitch() {
+        let presented = Profile(name: "Presented")
+        let newlyActive = Profile(name: "Newly active")
+        var state = WizardState(targetProfileID: presented.id)
+        state.sessionKey = "captured-key"
+        let generation = state.attempt.generation
+
+        XCTAssertTrue(
+            PersonalUsageAttemptGate.acceptsCompletion(
+                wizardState: state,
+                targetID: presented.id,
+                generation: generation,
+                key: "captured-key",
+                profiles: [newlyActive, presented]
+            )
+        )
+        XCTAssertFalse(
+            PersonalUsageAttemptGate.acceptsCompletion(
+                wizardState: state,
+                targetID: newlyActive.id,
+                generation: generation,
+                key: "captured-key",
+                profiles: [newlyActive, presented]
+            )
+        )
     }
 }

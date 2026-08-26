@@ -1291,6 +1291,7 @@
 "claude_account.summary.browser.title" = "Inicio de sesión del navegador (claude.ai)";
 "claude_account.summary.terminal.title" = "Inicio de sesión de terminal (Claude Code)";
 "claude_account.summary.status.working" = "Funciona";
+"claude_account.summary.status.needs_attention" = "Requiere atención";
 "claude_account.summary.status.not_linked" = "No vinculado";
 "claude_account.summary.status.missing" = "Falta";
 
@@ -1329,6 +1330,7 @@
 "claude_account.browser.sign_in" = "Iniciar en Claude.ai…";
 "claude_account.browser.missing_detail" = "Sin vincular — Añade el inicio del navegador para informar del uso.";
 "claude_account.browser.detail" = "claude.ai · %@ · clave de sesión guardada %@";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@";
 "claude_account.terminal.resync" = "Volver a sincronizar";
 "claude_account.terminal.link" = "Vincular Claude Code…";
 "claude_account.terminal.not_linked_detail" = "Sin vincular — Vincula la cuenta de Claude Code de esta organización.";
@@ -1348,3 +1350,5 @@
 "claude_account.why_both.renewal" = "Solo el navegador permite renovar el terminal y escribirlo en Claude Code.";
 "popover.banner.setup_incomplete" = "Configuración incompleta — el perfil dejará de informar cuando caduque Claude Code. Termínala en Ajustes → Cuenta de Claude.";
 "menubar.accessibility.state.setup_incomplete" = "Configuración incompleta: añade el inicio del navegador";
+"personal.connected_not_saved" = "Conectado: no guardado";
+"personal.retry_save" = "Reintentar guardado";

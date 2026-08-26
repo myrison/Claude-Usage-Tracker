@@ -40,17 +40,15 @@ struct WizardState {
     var hasConfirmedChromeContext = false
 }
 
-@MainActor
-private enum PersonalUsageAttemptGate {
-    static func targetIsStillCurrent(
+enum PersonalUsageAttemptGate {
+    static func targetIsAvailable(
         wizardState: WizardState,
-        profileManager: ProfileManager
+        profiles: [Profile]
     ) -> Bool {
         guard let targetID = wizardState.targetProfileID else { return false }
-        return profileManager.activeClaudeProfile?.id == targetID
-            && profileManager.profiles.contains(where: {
-                $0.id == targetID && $0.providerID == .claude
-            })
+        return profiles.contains(where: {
+            $0.id == targetID && $0.providerID == .claude
+        })
     }
 
     static func acceptsCompletion(
@@ -58,16 +56,16 @@ private enum PersonalUsageAttemptGate {
         targetID: UUID,
         generation: UUID,
         key: String,
-        profileManager: ProfileManager
+        profiles: [Profile]
     ) -> Bool {
         SessionKeyAttemptPolicy.acceptsCompletion(
             generation: generation,
             currentGeneration: wizardState.attempt.generation,
             keyMatches: wizardState.sessionKey == key,
             targetMatches: wizardState.targetProfileID == targetID
-                && targetIsStillCurrent(
+                && targetIsAvailable(
                     wizardState: wizardState,
-                    profileManager: profileManager
+                    profiles: profiles
                 )
         )
     }
@@ -76,10 +74,18 @@ private enum PersonalUsageAttemptGate {
 /// Reusable browser sign-in flow for one Claude profile.
 struct ClaudeBrowserSignInSheet: View {
     @StateObject private var profileManager = ProfileManager.shared
-    @State private var wizardState = WizardState()
+    @State private var wizardState: WizardState
     let targetProfileID: UUID
     let onCompletion: () -> Void
     private let apiService = ClaudeAPIService()
+
+    init(targetProfileID: UUID, onCompletion: @escaping () -> Void) {
+        self.targetProfileID = targetProfileID
+        self.onCompletion = onCompletion
+        _wizardState = State(
+            initialValue: WizardState(targetProfileID: targetProfileID)
+        )
+    }
 
     var body: some View {
         ScrollView {
@@ -188,6 +194,8 @@ struct ClaudeBrowserSignInSheet: View {
         guard let profile = profileManager.profiles.first(where: {
             $0.id == targetProfileID && $0.providerID == .claude
         }) else { return }
+        wizardState.targetProfileID = profile.id
+        wizardState.targetProfileName = profile.name
 
         // Load existing credentials for comparison
         if let creds = try? ProfileStore.shared.loadProfileCredentials(profile.id) {
@@ -247,10 +255,7 @@ struct EnterKeyStep: View {
                     cookieDomain: "claude.ai",
                     onSuccess: { result in
                         wizardState.showingAuthSheet = false
-                        replaceSessionKey(
-                            result.sessionKey,
-                            preserveCapturedTarget: true
-                        )
+                        replaceSessionKey(result.sessionKey)
                         wizardState.sessionKeyExpiryDate = result.expiryDate
                         testConnection()
                     },
@@ -304,8 +309,7 @@ struct EnterKeyStep: View {
 
         retireAttempt(
             clearKey: false,
-            clearChromeContext: false,
-            clearTarget: false
+            clearChromeContext: false
         )
         guard let target = capturedTargetIfStillCurrent() else { return }
         let generation = wizardState.attempt.generation
@@ -323,7 +327,7 @@ struct EnterKeyStep: View {
                         targetID: target.id,
                         generation: generation,
                         key: key,
-                        profileManager: .shared
+                        profiles: ProfileManager.shared.profiles
                     ) else { return }
                     guard SessionKeyAttemptPolicy.hasSelectableOrganization(
                         organizations.count
@@ -363,7 +367,7 @@ struct EnterKeyStep: View {
                         targetID: target.id,
                         generation: generation,
                         key: key,
-                        profileManager: .shared
+                        profiles: ProfileManager.shared.profiles
                     ) else { return }
                     let errorMessage = SetupErrorMessage.text(for: appError)
                     wizardState.validationState = .error(errorMessage)
@@ -373,11 +377,7 @@ struct EnterKeyStep: View {
     }
 
     private func beginChromeLaunch() -> UUID {
-        guard let target = ProfileManager.shared.activeClaudeProfile else {
-            retireAttempt(clearKey: false)
-            wizardState.validationState = .error(
-                "chrome_assisted.no_active_profile".localized
-            )
+        guard let target = capturedTargetIfAvailable() else {
             return wizardState.attempt.generation
         }
         retireAttempt(clearKey: false)
@@ -391,38 +391,26 @@ struct EnterKeyStep: View {
         wizardState.showingAuthSheet = true
     }
 
-    private func replaceSessionKey(
-        _ key: String,
-        preserveCapturedTarget: Bool = false
-    ) {
+    private func replaceSessionKey(_ key: String) {
         wizardState.sessionKey = key
-        retireAttempt(
-            clearKey: false,
-            clearTarget: !preserveCapturedTarget
-        )
+        retireAttempt(clearKey: false)
     }
 
     private func retireAttemptForKeyEdit() {
         retireAttempt(
             clearKey: false,
-            clearChromeContext: false,
-            clearTarget: false
+            clearChromeContext: false
         )
     }
 
     private func retireAttempt(
         clearKey: Bool,
-        clearChromeContext: Bool = true,
-        clearTarget: Bool = true
+        clearChromeContext: Bool = true
     ) {
         wizardState.attempt.invalidate()
         wizardState.validationState = .idle
         wizardState.testedOrganizations = []
         wizardState.selectedOrgId = nil
-        if clearTarget {
-            wizardState.targetProfileID = nil
-            wizardState.targetProfileName = nil
-        }
         if clearChromeContext {
             wizardState.launchedChromeProfileLabel = nil
             wizardState.hasConfirmedChromeContext = false
@@ -431,28 +419,19 @@ struct EnterKeyStep: View {
     }
 
     private func capturedTargetIfStillCurrent() -> Profile? {
-        if let targetID = wizardState.targetProfileID {
-            guard PersonalUsageAttemptGate.targetIsStillCurrent(
-                wizardState: wizardState,
-                profileManager: .shared
-            ), let target = ProfileManager.shared.profiles.first(where: {
-                $0.id == targetID && $0.providerID == .claude
-            }) else {
-                wizardState.validationState = .error(
-                    "chrome_assisted.profile_changed".localized
-                )
-                return nil
-            }
-            return target
-        }
-        guard let target = ProfileManager.shared.activeClaudeProfile else {
+        capturedTargetIfAvailable()
+    }
+
+    private func capturedTargetIfAvailable() -> Profile? {
+        guard let targetID = wizardState.targetProfileID,
+              let target = ProfileManager.shared.profiles.first(where: {
+                  $0.id == targetID && $0.providerID == .claude
+              }) else {
             wizardState.validationState = .error(
-                "chrome_assisted.no_active_profile".localized
+                "chrome_assisted.profile_changed".localized
             )
             return nil
         }
-        wizardState.targetProfileID = target.id
-        wizardState.targetProfileName = target.name
         return target
     }
 }
@@ -793,8 +772,7 @@ struct ConfirmStep: View {
               let profileId = wizardState.targetProfileID,
               let target = ProfileManager.shared.profiles.first(where: {
                   $0.id == profileId && $0.providerID == .claude
-              }),
-              ProfileManager.shared.activeClaudeProfile?.id == profileId else {
+              }) else {
             wizardState.validationState = .error(
                 "chrome_assisted.profile_changed".localized
             )
@@ -823,7 +801,7 @@ struct ConfirmStep: View {
                         targetID: target.id,
                         generation: generation,
                         key: key,
-                        profileManager: .shared
+                        profiles: ProfileManager.shared.profiles
                     )
                 }) else {
                     await MainActor.run { isSaving = false }
@@ -836,14 +814,14 @@ struct ConfirmStep: View {
                 try ProfileManager.shared.saveCredentials(
                     for: target.id,
                     credentials: creds,
-                    acceptingSessionOnly: acceptSessionOnly
+                    acceptingSessionOnly: acceptSessionOnly,
+                    browserCredentialSave: true
                 )
 
                 await MainActor.run {
                     guard wizardState.attempt.matches(generation),
                           wizardState.targetProfileID == target.id,
-                          wizardState.sessionKey == key,
-                          ProfileManager.shared.activeClaudeProfile?.id == target.id
+                          wizardState.sessionKey == key
                     else {
                         isSaving = false
                         return
@@ -919,9 +897,9 @@ struct ConfirmStep: View {
             selectedOrganizationID: wizardState.selectedOrgId,
             chromeProfileLabel: wizardState.launchedChromeProfileLabel,
             chromeContextConfirmed: wizardState.hasConfirmedChromeContext,
-            targetMatches: PersonalUsageAttemptGate.targetIsStillCurrent(
+            targetMatches: PersonalUsageAttemptGate.targetIsAvailable(
                 wizardState: wizardState,
-                profileManager: .shared
+                profiles: ProfileManager.shared.profiles
             )
         )
     }

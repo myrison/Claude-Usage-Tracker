@@ -135,6 +135,20 @@ class ProfileStore {
         Set(sessionOnlySecrets.keys.map(\.profileID))
     }
 
+    /// Profiles specifically holding a claude.ai session key in memory.
+    /// Used to stamp durable-save metadata only after Retry Save actually
+    /// clears that browser credential, not when an unrelated API/CLI secret
+    /// happened to be held for the same profile.
+    var profilesWithSessionOnlyClaudeAICredentials: Set<UUID> {
+        Set(
+            sessionOnlySecrets.keys.compactMap { locator in
+                locator.field == .claudeSessionKey
+                    ? locator.profileID
+                    : nil
+            }
+        )
+    }
+
     /// Called whenever the session-only set changes, so an observable layer
     /// can republish it. A direct callback rather than a notification: this
     /// file posts nothing today and the coupling is one-to-one.
@@ -2084,6 +2098,7 @@ class ProfileStore {
                 unlinkedCredentials.claudeSessionKey
             profiles[index].organizationId =
                 unlinkedCredentials.organizationId
+            profiles[index].claudeBrowserCredentialSavedAt = nil
         } else {
             profiles[index].apiSessionKey =
                 unlinkedCredentials.apiSessionKey
@@ -2329,6 +2344,7 @@ class ProfileStore {
             profiles[index].setSecretValue(nil, for: field)
             if marker.component == .claude {
                 profiles[index].organizationId = nil
+                profiles[index].claudeBrowserCredentialSavedAt = nil
             } else {
                 profiles[index].apiOrganizationId = nil
                 profiles[index].apiSessionKeyExpiry = nil

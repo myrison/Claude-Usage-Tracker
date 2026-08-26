@@ -100,15 +100,18 @@ class ClaudeCodeSyncService {
     private var resolvedServiceName: String?
     private let profileStore: ProfileStore
     private let systemCredentialsReader: (() throws -> String?)?
+    private let keychainCredentialsReader: ((String?) throws -> String?)?
     private let securityRunner: SecurityCommandRunning
 
     init(
         profileStore: ProfileStore = .shared,
         systemCredentialsReader: (() throws -> String?)? = nil,
+        keychainCredentialsReader: ((String?) throws -> String?)? = nil,
         securityRunner: SecurityCommandRunning = SecurityCLIRunner()
     ) {
         self.profileStore = profileStore
         self.systemCredentialsReader = systemCredentialsReader
+        self.keychainCredentialsReader = keychainCredentialsReader
         self.securityRunner = securityRunner
     }
 
@@ -367,6 +370,9 @@ class ClaudeCodeSyncService {
     func readKeychainCredentials(
         forAccountNamed accountName: String? = nil
     ) throws -> String? {
+        if let keychainCredentialsReader {
+            return try keychainCredentialsReader(accountName)
+        }
         let serviceName: String
         if let accountName, !accountName.isEmpty {
             // A named account's Keychain item is that account's login, full
@@ -395,7 +401,10 @@ class ClaudeCodeSyncService {
     /// itself. Resolving the name a second way there would let the item that
     /// was checked and the item that gets written drift apart — the one
     /// mistake that would turn this repair into a way to destroy a login.
-    private func readKeychainSecret(serviceName: String) throws -> String? {
+    private func readKeychainSecret(
+        serviceName: String,
+        invalidUTF8IsError: Bool = false
+    ) throws -> String? {
         let result = try securityRunner.run([
             "find-generic-password",
             "-s", serviceName,
@@ -409,6 +418,9 @@ class ClaudeCodeSyncService {
             // tell the user their credentials are corrupt, when the actionable
             // answer is that there is nothing here to read.
             guard let value = result.standardOutput else {
+                if invalidUTF8IsError {
+                    throw ClaudeCodeError.invalidJSON
+                }
                 LoggingService.shared.log(
                     "Keychain item is not valid UTF-8; treating as absent"
                 )
@@ -715,6 +727,57 @@ class ClaudeCodeSyncService {
     }
 
     // MARK: - Profile Sync Operations
+
+    /// Imports only the linked account's Claude Code Keychain item.
+    ///
+    /// Unlike `syncToProfile`, this deliberately does not consult an account
+    /// credentials file. The Link Claude Code sheet uses the distinction:
+    /// only a genuinely absent Keychain item permits its separate file
+    /// fallback; an item that exists but is malformed or has no token must be
+    /// surfaced instead of turning a different file login into a false green.
+    func syncKeychainToProfile(_ profileId: UUID) throws {
+        let accountName = profileStore.loadProfiles()
+            .first { $0.id == profileId }?
+            .cliAccountName
+        let keychainJSON: String?
+        if let keychainCredentialsReader {
+            keychainJSON = try keychainCredentialsReader(accountName)
+        } else {
+            let serviceName = accountServiceNameForWriting(
+                forAccountNamed: accountName
+            ) ?? resolveServiceName()
+            // Read the exact item directly. `readKeychainCredentials` first
+            // performs discovery that intentionally collapses some unreadable
+            // states to absence for legacy callers; Link Claude Code needs the
+            // stricter present-vs-absent distinction.
+            keychainJSON = try readKeychainSecret(
+                serviceName: serviceName,
+                invalidUTF8IsError: true
+            )
+        }
+        guard let jsonData = keychainJSON else {
+            throw ClaudeCodeError.noCredentialsFound
+        }
+        guard let data = jsonData.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: data))
+                is [String: Any],
+              Self.carriesLogin(jsonData) else {
+            // The item was present. Keep this distinct from absence so the
+            // caller cannot fall back to a file and hide the broken item.
+            throw ClaudeCodeError.invalidJSON
+        }
+
+        let previous = try profileStore
+            .loadProfileCredentials(profileId)
+            .cliCredentialsJSON
+        try profileStore.saveCLIProfileCredential(jsonData, for: profileId)
+        if previous != jsonData {
+            postCLIChange(profileID: profileId)
+        }
+        LoggingService.shared.log(
+            "Synced Keychain-only CLI credentials to profile: \(profileId)"
+        )
+    }
 
     /// Syncs credentials from system to profile (one-time copy)
     func syncToProfile(_ profileId: UUID) throws {

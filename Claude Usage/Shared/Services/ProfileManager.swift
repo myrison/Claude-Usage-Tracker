@@ -255,11 +255,19 @@ class ProfileManager: ObservableObject {
     /// nothing is left being held for the requested scope.
     @discardableResult
     func retrySessionOnlyCredentialSave(profileID: UUID? = nil) -> Bool {
+        let browserTargets =
+            profileStore.profilesWithSessionOnlyClaudeAICredentials
+                .filter { profileID == nil || $0 == profileID }
         let cleared = profileStore.retrySessionOnlyPersistence(
             profileID: profileID
         )
         sessionOnlyCredentialProfileIDs =
             profileStore.profilesWithSessionOnlyCredentials
+        let remainingBrowserTargets =
+            profileStore.profilesWithSessionOnlyClaudeAICredentials
+        for id in browserTargets where !remainingBrowserTargets.contains(id) {
+            stampBrowserCredentialSavedAt(for: id)
+        }
         return cleared
     }
 
@@ -1230,7 +1238,8 @@ class ProfileManager: ObservableObject {
     func saveCredentials(
         for profileId: UUID,
         credentials: ProfileCredentials,
-        acceptingSessionOnly: Bool = false
+        acceptingSessionOnly: Bool = false,
+        browserCredentialSave: Bool = false
     ) throws {
         guard let index = profiles.firstIndex(where: { $0.id == profileId }) else {
             throw ProfileStoreError.profileNotFound(profileId)
@@ -1243,7 +1252,20 @@ class ProfileManager: ObservableObject {
             || previous.apiOrganizationId != credentials.apiOrganizationId
             || previous.cliCredentialsJSON != credentials.cliCredentialsJSON
 
-        if acceptingSessionOnly {
+        let savedAt = browserCredentialSave && !acceptingSessionOnly
+            ? now()
+            : nil
+        if let savedAt {
+            var updated = profiles[index]
+            updated.claudeSessionKey = credentials.claudeSessionKey
+            updated.organizationId = credentials.organizationId
+            updated.apiSessionKey = credentials.apiSessionKey
+            updated.apiOrganizationId = credentials.apiOrganizationId
+            updated.apiSessionKeyExpiry = credentials.apiSessionKeyExpiry
+            updated.cliCredentialsJSON = credentials.cliCredentialsJSON
+            updated.claudeBrowserCredentialSavedAt = savedAt
+            try profileStore.saveProfileUpdate(updated)
+        } else if acceptingSessionOnly {
             try profileStore.saveProfileCredentialsAcceptingSessionOnly(
                 profileId,
                 credentials: credentials
@@ -1263,6 +1285,9 @@ class ProfileManager: ObservableObject {
         profiles[index].apiOrganizationId = credentials.apiOrganizationId
         profiles[index].apiSessionKeyExpiry = credentials.apiSessionKeyExpiry
         profiles[index].cliCredentialsJSON = credentials.cliCredentialsJSON
+        if let savedAt {
+            profiles[index].claudeBrowserCredentialSavedAt = savedAt
+        }
 
         if activeProfile?.id == profileId {
             activeProfile = profiles[index]
@@ -1270,6 +1295,16 @@ class ProfileManager: ObservableObject {
         if requestInputsChanged {
             postCredentialChange(profileID: profileId, component: .all)
         }
+    }
+
+    private func stampBrowserCredentialSavedAt(for profileId: UUID) {
+        guard let index = profiles.firstIndex(where: { $0.id == profileId })
+        else { return }
+        profiles[index].claudeBrowserCredentialSavedAt = now()
+        if activeProfile?.id == profileId {
+            activeProfile = profiles[index]
+        }
+        profileStore.saveProfiles(profiles)
     }
 
     /// Removes Claude.ai credentials for a profile
@@ -1371,6 +1406,7 @@ class ProfileManager: ObservableObject {
         if component == .claude {
             profiles[index].claudeSessionKey = nil
             profiles[index].organizationId = nil
+            profiles[index].claudeBrowserCredentialSavedAt = nil
             profiles[index].claudeUsage = nil
         } else {
             profiles[index].apiSessionKey = nil

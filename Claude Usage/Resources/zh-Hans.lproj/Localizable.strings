@@ -1305,6 +1305,7 @@
 "claude_account.summary.browser.title" = "浏览器登录（claude.ai）";
 "claude_account.summary.terminal.title" = "终端登录（Claude Code）";
 "claude_account.summary.status.working" = "正常";
+"claude_account.summary.status.needs_attention" = "需要处理";
 "claude_account.summary.status.not_linked" = "未关联";
 "claude_account.summary.status.missing" = "缺失";
 
@@ -1343,6 +1344,7 @@
 "claude_account.browser.sign_in" = "登录 Claude.ai…";
 "claude_account.browser.missing_detail" = "未关联 — 添加用于使用量报告的浏览器登录。";
 "claude_account.browser.detail" = "claude.ai · %@ · 会话密钥已于 %@ 存储";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@";
 "claude_account.terminal.resync" = "重新同步";
 "claude_account.terminal.link" = "关联 Claude Code…";
 "claude_account.terminal.not_linked_detail" = "未关联 — 关联此组织使用的 Claude Code 帐户。";
@@ -1362,3 +1364,5 @@
 "claude_account.why_both.renewal" = "只有浏览器登录允许 RevvyTach 续期终端登录并写回 Claude Code。";
 "popover.banner.setup_incomplete" = "设置未完成 — Claude Code 登录过期后此配置文件将停止报告。请在设置 → Claude 帐户中完成。";
 "menubar.accessibility.state.setup_incomplete" = "设置未完成：添加浏览器登录";
+"personal.connected_not_saved" = "已连接 — 未保存";
+"personal.retry_save" = "重试保存";

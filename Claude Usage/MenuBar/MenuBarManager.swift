@@ -2098,10 +2098,12 @@ class MenuBarManager: NSObject, ObservableObject {
                     target: self.popoverActionTarget()
                 )
             },
-            onCLIAccount: { [weak self] in
+            onCLIAccount: { [weak self] profileID in
                 guard let self else { return }
-                self.openPopoverCLIAccount(
-                    target: self.popoverActionTarget()
+                self.openPopoverClaudeAIAccount(
+                    target: self.claudeAIAccountTarget(
+                        forDisplayedProfile: profileID
+                    )
                 )
             },
             onCredentialsBannerTap: { [weak self] profileID in
@@ -4521,8 +4523,13 @@ extension MenuBarManager: NSPopoverDelegate {
                     onPreferences: { [weak self] in
                         self?.openPopoverSettings(target: target)
                     },
-                    onCLIAccount: { [weak self] in
-                        self?.openPopoverCLIAccount(target: target)
+                    onCLIAccount: { [weak self] profileID in
+                        guard let self else { return }
+                        self.openPopoverClaudeAIAccount(
+                            target: self.claudeAIAccountTarget(
+                                forDisplayedProfile: profileID
+                            )
+                        )
                     },
                     onCredentialsBannerTap: { [weak self] profileID in
                         guard let self else { return }

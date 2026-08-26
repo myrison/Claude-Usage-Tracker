@@ -1323,6 +1323,7 @@
 "claude_account.summary.browser.title" = "Browser sign-in (claude.ai)";
 "claude_account.summary.terminal.title" = "Terminal sign-in (Claude Code)";
 "claude_account.summary.status.working" = "Working";
+"claude_account.summary.status.needs_attention" = "Needs attention";
 "claude_account.summary.status.not_linked" = "Not linked";
 "claude_account.summary.status.missing" = "Missing";
 
@@ -1361,6 +1362,7 @@
 "claude_account.browser.sign_in" = "Sign in to Claude.ai…";
 "claude_account.browser.missing_detail" = "Not linked — Add the browser sign-in that powers usage reporting.";
 "claude_account.browser.detail" = "claude.ai · %@ · session key stored %@";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@";
 "claude_account.terminal.resync" = "Re-sync";
 "claude_account.terminal.link" = "Link Claude Code…";
 "claude_account.terminal.not_linked_detail" = "Not linked — Link the Claude Code account you use for this organization.";
@@ -1380,3 +1382,5 @@
 "claude_account.why_both.renewal" = "Only the browser sign-in lets RevvyTach renew the terminal sign-in and write it back to Claude Code.";
 "popover.banner.setup_incomplete" = "Setup incomplete — this profile will stop reporting when Claude Code's sign-in lapses. Finish it in Settings → Claude Account.";
 "menubar.accessibility.state.setup_incomplete" = "Setup incomplete: add the browser sign-in";
+"personal.connected_not_saved" = "Connected — not saved";
+"personal.retry_save" = "Retry Save";

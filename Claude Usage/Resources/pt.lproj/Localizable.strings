@@ -1308,6 +1308,7 @@
 "claude_account.summary.browser.title" = "Início de sessão do navegador (claude.ai)";
 "claude_account.summary.terminal.title" = "Início de sessão do terminal (Claude Code)";
 "claude_account.summary.status.working" = "A funcionar";
+"claude_account.summary.status.needs_attention" = "Requer atenção";
 "claude_account.summary.status.not_linked" = "Não vinculado";
 "claude_account.summary.status.missing" = "Em falta";
 
@@ -1346,6 +1347,7 @@
 "claude_account.browser.sign_in" = "Entrar no Claude.ai…";
 "claude_account.browser.missing_detail" = "Não associado — Adicione o navegador que fornece os relatórios.";
 "claude_account.browser.detail" = "claude.ai · %@ · chave de sessão salva %@";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@";
 "claude_account.terminal.resync" = "Ressincronizar";
 "claude_account.terminal.link" = "Associar Claude Code…";
 "claude_account.terminal.not_linked_detail" = "Não associado — Associe a conta Claude Code usada nesta organização.";
@@ -1365,3 +1367,5 @@
 "claude_account.why_both.renewal" = "Só o navegador permite renovar o terminal e gravá-lo no Claude Code.";
 "popover.banner.setup_incomplete" = "Configuração incompleta — o perfil deixará de informar quando Claude Code expirar. Conclua em Ajustes → Conta Claude.";
 "menubar.accessibility.state.setup_incomplete" = "Configuração incompleta: adicione o início no navegador";
+"personal.connected_not_saved" = "Conectado — não salvo";
+"personal.retry_save" = "Tentar salvar novamente";

@@ -1288,6 +1288,7 @@
 "claude_account.summary.browser.title" = "Connexion au navigateur (claude.ai)";
 "claude_account.summary.terminal.title" = "Connexion au terminal (Claude Code)";
 "claude_account.summary.status.working" = "Opérationnelle";
+"claude_account.summary.status.needs_attention" = "Action requise";
 "claude_account.summary.status.not_linked" = "Non liée";
 "claude_account.summary.status.missing" = "Manquante";
 
@@ -1326,6 +1327,7 @@
 "claude_account.browser.sign_in" = "Se connecter à Claude.ai…";
 "claude_account.browser.missing_detail" = "Non liée — Ajoutez la connexion navigateur qui alimente les rapports.";
 "claude_account.browser.detail" = "claude.ai · %@ · clé de session stockée %@";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@";
 "claude_account.terminal.resync" = "Resynchroniser";
 "claude_account.terminal.link" = "Lier Claude Code…";
 "claude_account.terminal.not_linked_detail" = "Non liée — Liez le compte Claude Code utilisé pour cette organisation.";
@@ -1345,3 +1347,5 @@
 "claude_account.why_both.renewal" = "Seule la connexion navigateur permet de renouveler celle du terminal et de la réécrire dans Claude Code.";
 "popover.banner.setup_incomplete" = "Configuration incomplète — le profil cessera ses rapports à l'expiration de Claude Code. Terminez dans Réglages → Compte Claude.";
 "menubar.accessibility.state.setup_incomplete" = "Configuration incomplète : ajoutez la connexion navigateur";
+"personal.connected_not_saved" = "Connecté — non enregistré";
+"personal.retry_save" = "Réessayer l’enregistrement";

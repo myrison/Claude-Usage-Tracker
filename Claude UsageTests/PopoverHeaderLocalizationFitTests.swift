@@ -171,18 +171,27 @@ final class PopoverHeaderLocalizationFitTests: XCTestCase {
     }
 
     func testClaudeAccountSidebarBadgeFitsInEveryLocale() throws {
-        // 190pt sidebar less the outer/card insets. Reserve the leading icon,
-        // the trailing status dot, the capsule's padding, and row gaps.
-        let textBudget: CGFloat = 142
+        // Exact `CredentialMiniCard` geometry: 190pt sidebar, 4pt outer and
+        // 6pt inner padding on both sides, a 12pt icon, three 6pt HStack gaps,
+        // and 4pt capsule padding on each side. What remains is the title and
+        // badge glyph budget; omitting any of this chrome hid real clipping.
+        let sidebarWidth: CGFloat = 190
+        let outerInsets: CGFloat = 2 * 4
+        let innerInsets: CGFloat = 2 * 6
+        let iconWidth: CGFloat = 12
+        let gaps: CGFloat = 3 * 6
+        let badgeInsets: CGFloat = 2 * 4
+        let textBudget = sidebarWidth - outerInsets - innerInsets
+            - iconWidth - gaps - badgeInsets
         for locale in Self.locales {
             let title = try string("section.claude_account_title", locale)
             let badge = try string(
                 "claude_account.incomplete_badge",
                 locale
             )
-            let measured = width(title, size: 11)
-                + width(badge, size: 8, weight: .semibold)
-                + 10
+            // Selected rows use `.medium`, which is the wider real state.
+            let measured = width(title, size: 11, weight: .medium)
+                + width(badge, size: 7, weight: .semibold)
             XCTAssertLessThanOrEqual(
                 measured,
                 textBudget,

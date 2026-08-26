@@ -25,7 +25,7 @@ struct PopoverNavigationActions {
     let manageProfiles: () -> Void
     let preferences: () -> Void
     /// Settings → Claude Account for either sign-in remedy.
-    let claudeAccount: () -> Void
+    let claudeAccount: (UUID?) -> Void
 }
 
 enum LegacyPopoverBanner: Equatable {
@@ -181,11 +181,11 @@ enum LegacyPopoverBanner: Equatable {
                 count: sessionOnlyCredentialCount
             )
         }
-        if hasCredentialError {
-            return .credentialError
-        }
         if setupState == .terminalOnly {
             return .setupIncomplete
+        }
+        if hasCredentialError {
+            return .credentialError
         }
         if let problem = CLISignInProblem(cliSignInIssue) {
             return .cliSignInBroken(problem)
@@ -317,7 +317,7 @@ struct PopoverContentView: View {
         onRefresh: @escaping () -> Void,
         onManageProfiles: @escaping () -> Void,
         onPreferences: @escaping () -> Void,
-        onCLIAccount: @escaping () -> Void,
+        onCLIAccount: @escaping (UUID?) -> Void,
         onCredentialsBannerTap: @escaping (UUID?) -> Void
     ) {
         self.manager = manager
@@ -502,8 +502,12 @@ struct PopoverContentView: View {
                     // notice from an already-linked profile would bury a
                     // broken sign-in rather than surface it. Which of the
                     // three explanations appears is decided from the data.
-                    onConnectCLIAccount: navigationActions.claudeAccount,
-                    onConnectClaudeAIAccount: navigationActions.claudeAccount
+                    onConnectCLIAccount: {
+                        navigationActions.claudeAccount(displayedProfile?.id)
+                    },
+                    onConnectClaudeAIAccount: {
+                        navigationActions.claudeAccount(displayedProfile?.id)
+                    }
                 )
             }
         }
@@ -585,7 +589,9 @@ struct PopoverContentView: View {
                     // claude.ai banner above was fixed for: the user arrives
                     // at a screen with nothing on it that can clear what they
                     // just read.
-                    onTap: navigationActions.claudeAccount
+                    onTap: {
+                        navigationActions.claudeAccount(displayedProfile?.id)
+                    }
                 )
             case .refreshFailed:
                 ExpandableStatusBanner(

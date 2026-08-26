@@ -1308,6 +1308,7 @@
 "claude_account.summary.browser.title" = "Browser-Anmeldung (claude.ai)";
 "claude_account.summary.terminal.title" = "Terminal-Anmeldung (Claude Code)";
 "claude_account.summary.status.working" = "Funktioniert";
+"claude_account.summary.status.needs_attention" = "Handlungsbedarf";
 "claude_account.summary.status.not_linked" = "Nicht verknüpft";
 "claude_account.summary.status.missing" = "Fehlt";
 
@@ -1346,6 +1347,7 @@
 "claude_account.browser.sign_in" = "Bei Claude.ai anmelden…";
 "claude_account.browser.missing_detail" = "Nicht verknüpft — Browser-Anmeldung für Nutzungsberichte hinzufügen.";
 "claude_account.browser.detail" = "claude.ai · %@ · Sitzungsschlüssel %@ gespeichert";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@";
 "claude_account.terminal.resync" = "Neu synchronisieren";
 "claude_account.terminal.link" = "Claude Code verknüpfen…";
 "claude_account.terminal.not_linked_detail" = "Nicht verknüpft — Claude-Code-Konto dieser Organisation verknüpfen.";
@@ -1365,3 +1367,5 @@
 "claude_account.why_both.renewal" = "Nur die Browser-Anmeldung kann die Terminal-Anmeldung erneuern und an Claude Code schreiben.";
 "popover.banner.setup_incomplete" = "Einrichtung unvollständig — dieses Profil stoppt nach Ablauf der Claude-Code-Anmeldung. In Einstellungen → Claude-Konto abschließen.";
 "menubar.accessibility.state.setup_incomplete" = "Einrichtung unvollständig: Browser-Anmeldung hinzufügen";
+"personal.connected_not_saved" = "Verbunden — nicht gespeichert";
+"personal.retry_save" = "Erneut speichern";

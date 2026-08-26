@@ -126,7 +126,7 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
                 lastSuccessfulRefreshTime: now,
                 now: now
             ),
-            .credentialError
+            .setupIncomplete
         )
         for state: ClaudeSetupState in [.browserOnly, .complete] {
             XCTAssertNil(
@@ -177,6 +177,17 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
             ),
             "Legacy profile · "
                 + "menubar.accessibility.state.setup_incomplete".localized
+        )
+        XCTAssertEqual(
+            MenuBarAttentionSignal.attention(
+                cliSignInIssue: .signInExpired,
+                hasCredentialError: true,
+                healthStatus: .unauthenticated,
+                setupState: .terminalOnly
+            ),
+            .setupIncomplete,
+            "terminal-only must stay classified as incomplete even when the "
+                + "generic health surface also reports unauthenticated"
         )
     }
 
@@ -1376,9 +1387,6 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
     /// announced as nothing at all and this is the item a person meets
     /// before the app has any data.
     ///
-    /// It never carries the attention wording, and takes no credential to
-    /// carry: that branch returns before the marker is stamped, so a spoken
-    /// complaint there would be a claim the icon does not make.
     func testDefaultLogoItemIsNamedAndBlamesNoCredential() {
         let label = StatusBarUIManager.legacyDefaultLogoAccessibilityLabel(
             profileName: "Work"
@@ -1399,6 +1407,39 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
                 "the unmarked default logo blamed \(credential): " + label
             )
         }
+    }
+
+    func testDefaultLogoCarriesSetupIncompleteAccessibilityState() {
+        let label = StatusBarUIManager.legacyDefaultLogoAccessibilityLabel(
+            profileName: "Terminal only",
+            attention: .setupIncomplete
+        )
+
+        XCTAssertTrue(
+            label.contains(
+                StatusBarUIManager.attentionStateText(.setupIncomplete)
+            ),
+            label
+        )
+    }
+
+    func testDefaultLogoDrawsSetupIncompleteMarker() {
+        let manager = retain(StatusBarUIManager())
+        defer { manager.cleanup() }
+        let plain = manager.defaultLogoImage(
+            isDarkMode: false,
+            attention: nil
+        )
+        let marked = manager.defaultLogoImage(
+            isDarkMode: false,
+            attention: .setupIncomplete
+        )
+
+        XCTAssertNotEqual(
+            marked.tiffRepresentation,
+            plain.tiffRepresentation
+        )
+        XCTAssertFalse(marked.isTemplate)
     }
 
     /// A profile that has not loaded yet degrades to "Claude, …" rather than

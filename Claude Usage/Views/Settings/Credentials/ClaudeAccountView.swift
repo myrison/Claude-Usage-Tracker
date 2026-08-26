@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AppKit
+import UsageCore
 
 /// Keychain-first verification for the link sheet. The injected operations
 /// keep source ordering and token validation testable without touching the
@@ -17,7 +18,7 @@ struct ClaudeTerminalLinkVerifier {
         case linkedAccountFile
     }
 
-    let syncToProfile: (UUID) throws -> Void
+    let syncKeychainToProfile: (UUID) throws -> Void
     let readLinkedAccountCredential: (String) -> String?
     let persistLinkedAccountCredential: (UUID, String) throws -> Void
 
@@ -26,7 +27,7 @@ struct ClaudeTerminalLinkVerifier {
         accountName: String
     ) throws -> Source {
         do {
-            try syncToProfile(profileID)
+            try syncKeychainToProfile(profileID)
             return .keychain
         } catch let error as ClaudeCodeError {
             switch error {
@@ -47,6 +48,25 @@ struct ClaudeTerminalLinkVerifier {
     }
 }
 
+struct ClaudeAccountSheetTarget: Identifiable, Equatable {
+    let id: UUID
+
+    func profile(in profiles: [Profile]) -> Profile? {
+        profiles.first { $0.id == id && $0.providerID == .claude }
+    }
+}
+
+struct ClaudeBrowserCredentialDetail: Equatable {
+    let organization: String
+    let savedAt: Date?
+
+    init(profile: Profile) {
+        organization =
+            profile.organizationName ?? profile.organizationId ?? "—"
+        savedAt = profile.claudeBrowserCredentialSavedAt
+    }
+}
+
 struct ClaudeAccountView: View {
     @StateObject private var profileManager = ProfileManager.shared
     @State private var isSyncing = false
@@ -62,8 +82,10 @@ struct ClaudeAccountView: View {
     @State private var showSetupGuide = false
     @State private var copiedToClipboard = false
     @State private var copiedShellSnippet = false
-    @State private var showBrowserSignIn = false
-    @State private var showTerminalLink = false
+    @State private var browserSheetTarget: ClaudeAccountSheetTarget?
+    @State private var terminalSheetTarget: ClaudeAccountSheetTarget?
+    @State private var linkConfirmationTargetID: UUID?
+    @State private var unlinkConfirmationTargetID: UUID?
     @State private var showWhyBoth = false
 
     // MCP sync state
@@ -100,7 +122,9 @@ struct ClaudeAccountView: View {
                             style: ClaudeSetupState.of(profile) == .terminalOnly
                                 ? .destructive
                                 : .standard,
-                            action: { showBrowserSignIn = true }
+                            action: {
+                                browserSheetTarget = .init(id: profile.id)
+                            }
                         ),
                         terminalAction: ClaudeSignInSummaryAction(
                             profile.hasCliAccount
@@ -108,16 +132,22 @@ struct ClaudeAccountView: View {
                                 : "claude_account.terminal.link".localized,
                             action: {
                                 if profile.hasCliAccount {
-                                    syncFromCLI()
+                                    syncFromCLI(profileID: profile.id)
                                 } else {
-                                    showTerminalLink = true
+                                    terminalSheetTarget = .init(id: profile.id)
                                 }
                             }
                         ),
-                        terminalWorkingButNotRenewable:
-                            ClaudeSetupState.of(profile) == .terminalOnly
-                                && !terminalSignInIsExpired(profile)
+                        terminalHealth: terminalSummaryHealth(profile)
                     )
+
+                    if Self.showsBrowserCredentialNotSavedWarning(
+                        profileID: profile.id,
+                        sessionOnlyProfileIDs:
+                            profileManager.sessionOnlyCredentialProfileIDs
+                    ) {
+                        browserCredentialNotSavedCard(profileID: profile.id)
+                    }
 
                     HStack(spacing: DesignTokens.Spacing.small) {
                         if profile.hasClaudeAI {
@@ -129,6 +159,7 @@ struct ClaudeAccountView: View {
                         }
                         if profile.hasCliAccount {
                             Button("cli.unlink".localized) {
+                                unlinkConfirmationTargetID = profile.id
                                 showUnlinkConfirmation = true
                             }
                             .buttonStyle(.bordered)
@@ -182,6 +213,10 @@ struct ClaudeAccountView: View {
             }
         }
         .onChange(of: profileManager.activeClaudeProfile?.id) { _, _ in
+            if let terminalTarget = terminalSheetTarget {
+                loadCLIAccountInfo(profileID: terminalTarget.id)
+                return
+            }
             loadCLIAccountInfo()
             syncError = nil
             if let accountName = profileManager.activeClaudeProfile?.cliAccountName {
@@ -190,20 +225,20 @@ struct ClaudeAccountView: View {
                 credentialCheckResult = .notFound
             }
         }
-        .sheet(isPresented: $showBrowserSignIn) {
-            if let profile = profileManager.activeClaudeProfile {
+        .sheet(item: $browserSheetTarget) { target in
+            if target.profile(in: profileManager.profiles) != nil {
                 ClaudeBrowserSignInSheet(
-                    targetProfileID: profile.id,
+                    targetProfileID: target.id,
                     onCompletion: {
-                        showBrowserSignIn = false
+                        browserSheetTarget = nil
                         profileManager.loadProfiles()
                     }
                 )
                 .frame(width: 560, height: 650)
             }
         }
-        .sheet(isPresented: $showTerminalLink) {
-            if let profile = profileManager.activeClaudeProfile {
+        .sheet(item: $terminalSheetTarget) { target in
+            if let profile = target.profile(in: profileManager.profiles) {
                 ScrollView {
                     VStack(
                         alignment: .leading,
@@ -228,19 +263,31 @@ struct ClaudeAccountView: View {
         .alert("cli.link_confirm_title".localized, isPresented: $showLinkConfirmation) {
             Button("common.cancel".localized, role: .cancel) {}
             Button("cli.link_confirm_action".localized) {
-                performLinkAccount()
+                if let profileID = linkConfirmationTargetID {
+                    performLinkAccount(profileID: profileID)
+                }
             }
         } message: {
-            Text(String(format: "cli.link_confirm_message".localized, sanitizedName))
+            Text(
+                String(
+                    format: "cli.link_confirm_message".localized,
+                    sanitizedName(for: linkConfirmationTargetID)
+                )
+            )
         }
         // Unlink confirmation alert
         .alert("cli.unlink_title".localized, isPresented: $showUnlinkConfirmation) {
             Button("common.cancel".localized, role: .cancel) {}
             Button("cli.unlink_action".localized, role: .destructive) {
-                performUnlinkAccount()
+                if let profileID = unlinkConfirmationTargetID {
+                    performUnlinkAccount(profileID: profileID)
+                }
             }
         } message: {
-            if let name = profileManager.activeClaudeProfile?.cliAccountName {
+            if let profileID = unlinkConfirmationTargetID,
+               let name = profileManager.profiles.first(where: {
+                   $0.id == profileID
+               })?.cliAccountName {
                 Text(String(format: "cli.unlink_confirm".localized, name))
             }
         }
@@ -258,7 +305,9 @@ struct ClaudeAccountView: View {
                 }
                 HStack {
                     Button("claude_account.browser.sign_in".localized) {
-                        showBrowserSignIn = true
+                        if let id = profileManager.activeClaudeProfile?.id {
+                            browserSheetTarget = .init(id: id)
+                        }
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
@@ -313,11 +362,19 @@ struct ClaudeAccountView: View {
         guard profile.hasClaudeAI else {
             return "claude_account.browser.missing_detail".localized
         }
+        let detail = ClaudeBrowserCredentialDetail(profile: profile)
+        guard let savedAt = detail.savedAt else {
+            return String(
+                format: "claude_account.browser.detail_without_saved_time"
+                    .localized,
+                detail.organization
+            )
+        }
         return String(
             format: "claude_account.browser.detail".localized,
-            profile.organizationName ?? profile.organizationId ?? "—",
+            detail.organization,
             Self.relativeFormatter.localizedString(
-                for: profile.lastUsedAt,
+                for: savedAt,
                 relativeTo: Date()
             )
         )
@@ -375,6 +432,67 @@ struct ClaudeAccountView: View {
         } ?? false
     }
 
+    static func terminalSummaryHealth(
+        _ profile: Profile
+    ) -> ClaudeTerminalSummaryHealth {
+        if LegacyPopoverBanner.CLISignInProblem(
+            profile.claudeUsage?.personalExtraUsageIssue
+        ) != nil {
+            return .needsAttention
+        }
+        guard let credentials = profile.cliCredentialsJSON,
+              ClaudeCodeSyncService.carriesLogin(credentials),
+              !ClaudeCodeSyncService.shared.isTokenExpired(credentials)
+        else {
+            return .needsAttention
+        }
+        return ClaudeSetupState.of(profile) == .terminalOnly
+            ? .workingNotRenewable
+            : .working
+    }
+
+    private func terminalSummaryHealth(
+        _ profile: Profile
+    ) -> ClaudeTerminalSummaryHealth {
+        Self.terminalSummaryHealth(profile)
+    }
+
+    private func browserCredentialNotSavedCard(
+        profileID: UUID
+    ) -> some View {
+        SettingsContentCard {
+            HStack(spacing: DesignTokens.Spacing.medium) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                VStack(
+                    alignment: .leading,
+                    spacing: DesignTokens.Spacing.extraSmall
+                ) {
+                    Text("personal.connected_not_saved".localized)
+                        .font(DesignTokens.Typography.bodyMedium)
+                    Text("popover.banner.credentials_not_saved.detail".localized)
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("personal.retry_save".localized) {
+                    _ = profileManager.retrySessionOnlyCredentialSave(
+                        profileID: profileID
+                    )
+                    profileManager.loadProfiles()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    static func showsBrowserCredentialNotSavedWarning(
+        profileID: UUID,
+        sessionOnlyProfileIDs: Set<UUID>
+    ) -> Bool {
+        sessionOnlyProfileIDs.contains(profileID)
+    }
+
     private func removeBrowserSignIn(_ profileID: UUID) {
         do {
             try profileManager.removeClaudeAICredentials(for: profileID)
@@ -425,11 +543,18 @@ struct ClaudeAccountView: View {
     private func cliAccountLinkingSection(profile: Profile) -> some View {
         if let accountName = profile.cliAccountName {
             // Linked state
-            linkedStatusCard(accountName: accountName, hasCredentials: profile.hasCliAccount)
+            linkedStatusCard(
+                accountName: accountName,
+                profileID: profile.id,
+                hasCredentials: profile.hasCliAccount
+            )
 
             if !profile.hasCliAccount || !credentialCheckResult.hasCredentials {
                 // Linked but no credentials yet — show setup instructions
-                postSetupCard(accountName: accountName)
+                postSetupCard(
+                    accountName: accountName,
+                    profileID: profile.id
+                )
             }
 
             // Shell integration card (shown once after first successful credential detection)
@@ -442,7 +567,7 @@ struct ClaudeAccountView: View {
         } else {
             // Not linked — show link button
             notLinkedStatusCard
-            linkButtonCard
+            linkButtonCard(profileID: profile.id)
         }
     }
 
@@ -468,7 +593,11 @@ struct ClaudeAccountView: View {
         )
     }
 
-    private func linkedStatusCard(accountName: String, hasCredentials: Bool) -> some View {
+    private func linkedStatusCard(
+        accountName: String,
+        profileID: UUID,
+        hasCredentials: Bool
+    ) -> some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.small) {
             HStack(spacing: DesignTokens.Spacing.medium) {
                 Circle()
@@ -487,7 +616,7 @@ struct ClaudeAccountView: View {
                 Spacer()
             }
 
-            if hasCredentials, isStoredLoginExpired {
+            if hasCredentials, isStoredLoginExpired(profileID: profileID) {
                 Divider()
                 expiredLoginNotice(accountName: accountName)
             } else if hasCredentials {
@@ -518,10 +647,10 @@ struct ClaudeAccountView: View {
     /// the screen has to say what actually does: sign in to that account
     /// again. Re-sync is only the remedy when this copy is stale but the
     /// account's own login is current.
-    private var isStoredLoginExpired: Bool {
-        guard let credentials = profileManager
-            .activeClaudeProfile?
-            .cliCredentialsJSON
+    private func isStoredLoginExpired(profileID: UUID) -> Bool {
+        guard let credentials = profileManager.profiles.first(where: {
+            $0.id == profileID
+        })?.cliCredentialsJSON
         else { return false }
         return ClaudeCodeSyncService.shared.isTokenExpired(credentials)
     }
@@ -578,7 +707,7 @@ struct ClaudeAccountView: View {
 
     // MARK: - Link Button Card
 
-    private var linkButtonCard: some View {
+    private func linkButtonCard(profileID: UUID) -> some View {
         SettingsSectionCard(
             title: "cli.link_title".localized,
             subtitle: "cli.link_subtitle".localized
@@ -592,7 +721,10 @@ struct ClaudeAccountView: View {
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(.secondary)
 
-                Button(action: { showLinkConfirmation = true }) {
+                Button(action: {
+                    linkConfirmationTargetID = profileID
+                    showLinkConfirmation = true
+                }) {
                     HStack(spacing: DesignTokens.Spacing.extraSmall) {
                         if linkingInProgress {
                             ProgressView()
@@ -615,7 +747,10 @@ struct ClaudeAccountView: View {
 
     // MARK: - Post-Setup Card (login instructions)
 
-    private func postSetupCard(accountName: String) -> some View {
+    private func postSetupCard(
+        accountName: String,
+        profileID: UUID
+    ) -> some View {
         SettingsSectionCard(
             title: "cli.setup_complete_title".localized,
             subtitle: "cli.setup_complete_subtitle".localized
@@ -683,7 +818,9 @@ struct ClaudeAccountView: View {
                             .foregroundColor(.secondary)
 
                         HStack(spacing: DesignTokens.Spacing.iconText) {
-                            Button(action: checkCredentials) {
+                            Button(action: {
+                                checkCredentials(profileID: profileID)
+                            }) {
                                 HStack(spacing: DesignTokens.Spacing.extraSmall) {
                                     Image(systemName: "magnifyingglass")
                                         .font(.system(size: DesignTokens.Icons.small))
@@ -715,7 +852,7 @@ struct ClaudeAccountView: View {
 
     private func linkedActionsCard(profile: Profile) -> some View {
         HStack(spacing: DesignTokens.Spacing.iconText) {
-            Button(action: syncFromCLI) {
+            Button(action: { syncFromCLI(profileID: profile.id) }) {
                 HStack(spacing: DesignTokens.Spacing.extraSmall) {
                     if isSyncing {
                         ProgressView()
@@ -733,7 +870,10 @@ struct ClaudeAccountView: View {
             .controlSize(.regular)
             .disabled(isSyncing)
 
-            Button(action: { showUnlinkConfirmation = true }) {
+            Button(action: {
+                unlinkConfirmationTargetID = profile.id
+                showUnlinkConfirmation = true
+            }) {
                 HStack(spacing: DesignTokens.Spacing.extraSmall) {
                     Image(systemName: "link.badge.minus")
                         .font(.system(size: DesignTokens.Icons.small))
@@ -1216,8 +1356,11 @@ struct ClaudeAccountView: View {
 
     // MARK: - Computed Properties
 
-    private var sanitizedName: String {
-        guard let name = profileManager.activeClaudeProfile?.name else { return "" }
+    private func sanitizedName(for profileID: UUID?) -> String {
+        guard let profileID,
+              let name = profileManager.profiles.first(where: {
+                  $0.id == profileID
+              })?.name else { return "" }
         return ClaudeSwitchService.shared.previewDirectoryName(for: name)
     }
 
@@ -1255,8 +1398,10 @@ struct ClaudeAccountView: View {
 
     // MARK: - Actions
 
-    private func performLinkAccount() {
-        guard let profile = profileManager.activeClaudeProfile else { return }
+    private func performLinkAccount(profileID: UUID) {
+        guard let profile = profileManager.profiles.first(where: {
+            $0.id == profileID && $0.providerID == .claude
+        }) else { return }
         linkingInProgress = true
         syncError = nil
         var plannedLinkWasPersisted = false
@@ -1314,8 +1459,10 @@ struct ClaudeAccountView: View {
         linkingInProgress = false
     }
 
-    private func performUnlinkAccount() {
-        guard let profile = profileManager.activeClaudeProfile,
+    private func performUnlinkAccount(profileID: UUID) {
+        guard let profile = profileManager.profiles.first(where: {
+            $0.id == profileID && $0.providerID == .claude
+        }),
               let accountName = profile.cliAccountName else { return }
 
         do {
@@ -1361,14 +1508,16 @@ struct ClaudeAccountView: View {
         }
     }
 
-    private func checkCredentials() {
-        guard let profile = profileManager.activeClaudeProfile,
+    private func checkCredentials(profileID: UUID) {
+        guard let profile = profileManager.profiles.first(where: {
+            $0.id == profileID && $0.providerID == .claude
+        }),
               let accountName = profile.cliAccountName else { return }
 
         syncError = nil
         let verifier = ClaudeTerminalLinkVerifier(
-            syncToProfile: {
-                try ClaudeCodeSyncService.shared.syncToProfile($0)
+            syncKeychainToProfile: {
+                try ClaudeCodeSyncService.shared.syncKeychainToProfile($0)
             },
             readLinkedAccountCredential: {
                 ClaudeSwitchService.shared.readLinkedAccountCredentials(
@@ -1401,7 +1550,7 @@ struct ClaudeAccountView: View {
             updated.cliAccountSyncedAt = Date()
             try profileManager.updateProfileThrowing(updated)
             credentialCheckResult = .legacyCredentials
-            loadCLIAccountInfo()
+            loadCLIAccountInfo(profileID: profile.id)
             if !SharedDataStore.shared.hasShownCLIShellIntegration() {
                 showShellIntegration = true
             }
@@ -1415,8 +1564,10 @@ struct ClaudeAccountView: View {
         }
     }
 
-    private func syncFromCLI() {
-        guard let profile = profileManager.activeClaudeProfile else { return }
+    private func syncFromCLI(profileID: UUID) {
+        guard let profile = profileManager.profiles.first(where: {
+            $0.id == profileID && $0.providerID == .claude
+        }) else { return }
 
         isSyncing = true
         syncError = nil
@@ -1430,7 +1581,7 @@ struct ClaudeAccountView: View {
                 updated.hasCliAccount = true
                 updated.cliAccountSyncedAt = Date()
                 try profileManager.updateProfileThrowing(updated)
-                loadCLIAccountInfo()
+                loadCLIAccountInfo(profileID: profile.id)
                 LoggingService.shared.log(
                     "ClaudeAccountView: Re-synced from linked account directory"
                 )
@@ -1447,12 +1598,14 @@ struct ClaudeAccountView: View {
                 try ClaudeCodeSyncService.shared.syncToProfile(profile.id)
                 profileManager.loadProfiles()
 
-                if var updated = profileManager.activeClaudeProfile {
+                if var updated = profileManager.profiles.first(where: {
+                    $0.id == profile.id
+                }) {
                     updated.hasCliAccount = true
                     updated.cliAccountSyncedAt = Date()
                     try profileManager.updateProfileThrowing(updated)
                 }
-                loadCLIAccountInfo()
+                loadCLIAccountInfo(profileID: profile.id)
                 LoggingService.shared.log("ClaudeAccountView: Re-synced from system keychain")
             } catch {
                 syncError = error.localizedDescription
@@ -1495,8 +1648,11 @@ struct ClaudeAccountView: View {
 
     // MARK: - Helpers
 
-    private func loadCLIAccountInfo() {
-        guard let profile = profileManager.activeClaudeProfile,
+    private func loadCLIAccountInfo(profileID: UUID? = nil) {
+        let profile = profileID.flatMap { id in
+            profileManager.profiles.first { $0.id == id }
+        } ?? profileManager.activeClaudeProfile
+        guard let profile,
               let json = profile.cliCredentialsJSON else {
             cliAccountInfo = nil
             return

@@ -67,6 +67,10 @@ struct Profile: Codable, Identifiable, Equatable {
     // MARK: - Metadata
     var createdAt: Date
     var lastUsedAt: Date
+    /// When the claude.ai credential was successfully written to durable
+    /// secure storage. Optional for profiles created before this metadata
+    /// existed; callers must not substitute unrelated activity timestamps.
+    var claudeBrowserCredentialSavedAt: Date?
 
     /// Legacy plaintext secrets from an older on-disk profile.
     ///
@@ -118,6 +122,7 @@ struct Profile: Codable, Identifiable, Equatable {
         isSelectedForDisplay: Bool = true,
         createdAt: Date = Date(),
         lastUsedAt: Date = Date(),
+        claudeBrowserCredentialSavedAt: Date? = nil,
         credentialMigrationRetry: ProfileCredentialMigrationRetry = .init(),
         currentUsageMigrationRetry: ProfileCurrentUsage? = nil,
         deletionInProgress: Bool = false
@@ -148,6 +153,8 @@ struct Profile: Codable, Identifiable, Equatable {
         self.isSelectedForDisplay = isSelectedForDisplay
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
+        self.claudeBrowserCredentialSavedAt =
+            claudeBrowserCredentialSavedAt
         self.credentialMigrationRetry = credentialMigrationRetry
         self.currentUsageMigrationRetry = currentUsageMigrationRetry
         self.deletionInProgress = deletionInProgress
@@ -180,6 +187,7 @@ struct Profile: Codable, Identifiable, Equatable {
         case isSelectedForDisplay
         case createdAt
         case lastUsedAt
+        case claudeBrowserCredentialSavedAt
         case credentialMigrationRetry
         case currentUsageMigrationRetry
         case deletionInProgress
@@ -263,6 +271,10 @@ struct Profile: Codable, Identifiable, Equatable {
         ) ?? true
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         lastUsedAt = try container.decodeIfPresent(Date.self, forKey: .lastUsedAt) ?? createdAt
+        claudeBrowserCredentialSavedAt = try container.decodeIfPresent(
+            Date.self,
+            forKey: .claudeBrowserCredentialSavedAt
+        )
         deletionInProgress = try container.decodeIfPresent(
             Bool.self,
             forKey: .deletionInProgress
@@ -338,6 +350,10 @@ struct Profile: Codable, Identifiable, Equatable {
         try container.encode(isSelectedForDisplay, forKey: .isSelectedForDisplay)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(lastUsedAt, forKey: .lastUsedAt)
+        try container.encodeIfPresent(
+            claudeBrowserCredentialSavedAt,
+            forKey: .claudeBrowserCredentialSavedAt
+        )
         if deletionInProgress {
             try container.encode(true, forKey: .deletionInProgress)
         }

@@ -1308,6 +1308,7 @@
 "claude_account.summary.browser.title" = "ブラウザのサインイン（claude.ai）";
 "claude_account.summary.terminal.title" = "ターミナルのサインイン（Claude Code）";
 "claude_account.summary.status.working" = "動作中";
+"claude_account.summary.status.needs_attention" = "要確認";
 "claude_account.summary.status.not_linked" = "未リンク";
 "claude_account.summary.status.missing" = "未設定";
 
@@ -1346,6 +1347,7 @@
 "claude_account.browser.sign_in" = "Claude.ai にサインイン…";
 "claude_account.browser.missing_detail" = "未連携 — 使用状況レポート用のブラウザーサインインを追加します。";
 "claude_account.browser.detail" = "claude.ai · %@ · セッションキーを %@ に保存";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@";
 "claude_account.terminal.resync" = "再同期";
 "claude_account.terminal.link" = "Claude Code を連携…";
 "claude_account.terminal.not_linked_detail" = "未連携 — この組織で使う Claude Code アカウントを連携します。";
@@ -1365,3 +1367,5 @@
 "claude_account.why_both.renewal" = "ブラウザーサインインのみがターミナルを更新し Claude Code へ書き戻せます。";
 "popover.banner.setup_incomplete" = "設定未完了 — Claude Code のサインイン切れでレポートが停止します。設定 → Claude アカウントで完了してください。";
 "menubar.accessibility.state.setup_incomplete" = "設定未完了: ブラウザーサインインを追加";
+"personal.connected_not_saved" = "接続済み — 未保存";
+"personal.retry_save" = "保存を再試行";
