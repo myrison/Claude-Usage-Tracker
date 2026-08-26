@@ -213,6 +213,258 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         }
     }
 
+    func testCredentialReadFailureDefersUpgradeAuthorityUntilRecovery() throws {
+        let profileID = UUID()
+        let secrets = MockProfileSecretStore()
+        secrets.values[locator(profileID, .cliCredentialsJSON)] =
+            #"{"claudeAiOauth":{"accessToken":"working"}}"#
+        let setupStore = retain(
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
+        )
+        try seedProfilesForTesting(
+            [Profile(id: profileID, name: "Terminal", hasCliAccount: true)],
+            in: setupStore
+        )
+
+        secrets.readErrors[.cliCredentialsJSON] = TestError.expected
+        let store = retain(
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
+        )
+        let unresolved = store.loadProfilesWithOutcome()
+        XCTAssertTrue(unresolved.isProfileIdentitySetAuthoritative)
+        XCTAssertFalse(
+            unresolved.isAuthoritativeForUpgradeClassification
+        )
+        XCTAssertNil(unresolved.profiles.first?.cliCredentialsJSON)
+
+        secrets.readErrors.removeAll()
+        let recovered = store.loadProfilesWithOutcome()
+        XCTAssertTrue(recovered.isAuthoritativeForUpgradeClassification)
+        XCTAssertEqual(
+            ClaudeSetupState.of(try XCTUnwrap(recovered.profiles.first)),
+            .terminalOnly
+        )
+    }
+
+    func testFailedVerifiedMigrationLoadBecomesAuthoritativeAfterRetry() throws {
+        let profileID = UUID()
+        seedLegacyProfile(
+            id: profileID,
+            claude: "MIGRATION_CLAUDE",
+            api: "MIGRATION_API",
+            cli: #"{"claudeAiOauth":{"accessToken":"migration"}}"#
+        )
+        let secrets = MockProfileSecretStore()
+        let backing = FaultingProfileDefaults()
+        backing.storage["profiles_v3"] = defaults.data(forKey: "profiles_v3")
+        backing.corruptNextProfileWrite = true
+        let store = retain(
+            makeIsolatedProfileStore(defaults: backing, secretStore: secrets)
+        )
+
+        let failed = store.loadProfilesWithOutcome()
+        XCTAssertTrue(failed.isProfileIdentitySetAuthoritative)
+        XCTAssertFalse(failed.isAuthoritativeForUpgradeClassification)
+
+        let recovered = store.loadProfilesWithOutcome()
+        XCTAssertTrue(recovered.isAuthoritativeForUpgradeClassification)
+        XCTAssertEqual(
+            ClaudeSetupState.of(try XCTUnwrap(recovered.profiles.first)),
+            .terminalOnly
+        )
+    }
+
+    @MainActor
+    func testStartupMigrationFailureBlocksAuthoritativeClassification() throws {
+        let profileID = UUID()
+        let secrets = MockProfileSecretStore()
+        secrets.values[locator(profileID, .cliCredentialsJSON)] =
+            #"{"claudeAiOauth":{"accessToken":"working"}}"#
+        let store = retain(
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
+        )
+        try seedProfilesForTesting(
+            [Profile(id: profileID, name: "Terminal", hasCliAccount: true)],
+            in: store
+        )
+        let sharedDataStore = SharedDataStore(defaults: defaults)
+        let manager = retain(ProfileManager(profileStore: store))
+        manager.configureClaudeAccountUpgradeClassification(
+            startupMigrationsSucceeded: false,
+            classifier: {
+                profiles,
+                isProfileIdentitySetAuthoritative,
+                isAuthoritative in
+                _ = sharedDataStore.classifyClaudeAccountsForUpgradeOnce(
+                    profiles,
+                    isProfileIdentitySetAuthoritative:
+                        isProfileIdentitySetAuthoritative,
+                    isAuthoritative: isAuthoritative
+                )
+            }
+        )
+
+        manager.loadProfiles()
+
+        XCTAssertTrue(
+            manager.profileLoadIsAuthoritativeForUpgradeClassification
+        )
+        XCTAssertFalse(
+            defaults.bool(forKey: "didClassifyClaudeAccountUpgradeV41")
+        )
+        XCTAssertNil(
+            defaults.object(
+                forKey: "terminalOnlyClaudeAccountUpgradeProfileIDsV41"
+            )
+        )
+    }
+
+    @MainActor
+    func testRecoveredLoadAutomaticallyClassifiesOnlyUpgradeBoundaryProfiles()
+        throws
+    {
+        let originalID = UUID()
+        let secrets = MockProfileSecretStore()
+        secrets.values[locator(originalID, .cliCredentialsJSON)] =
+            #"{"claudeAiOauth":{"accessToken":"original"}}"#
+        let store = retain(
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
+        )
+        try seedProfilesForTesting(
+            [Profile(id: originalID, name: "Original", hasCliAccount: true)],
+            in: store
+        )
+        let sharedDataStore = SharedDataStore(defaults: defaults)
+        let manager = retain(ProfileManager(profileStore: store))
+        manager.configureClaudeAccountUpgradeClassification(
+            startupMigrationsSucceeded: true,
+            classifier: {
+                profiles,
+                isProfileIdentitySetAuthoritative,
+                isAuthoritative in
+                _ = sharedDataStore.classifyClaudeAccountsForUpgradeOnce(
+                    profiles,
+                    isProfileIdentitySetAuthoritative:
+                        isProfileIdentitySetAuthoritative,
+                    isAuthoritative: isAuthoritative
+                )
+            }
+        )
+        secrets.readErrors[.cliCredentialsJSON] = TestError.expected
+
+        manager.loadProfiles()
+        XCTAssertFalse(
+            defaults.bool(forKey: "didClassifyClaudeAccountUpgradeV41")
+        )
+
+        let later = Profile(name: "Created later", hasCliAccount: true)
+        try store.appendProfile(
+            later,
+            expectedExistingIDs: [originalID]
+        )
+        secrets.values[locator(later.id, .cliCredentialsJSON)] =
+            #"{"claudeAiOauth":{"accessToken":"later"}}"#
+        secrets.readErrors.removeAll()
+
+        manager.loadProfiles()
+
+        XCTAssertTrue(
+            sharedDataStore.wasTerminalOnlyAtClaudeAccountUpgrade(originalID)
+        )
+        XCTAssertFalse(
+            sharedDataStore.wasTerminalOnlyAtClaudeAccountUpgrade(later.id)
+        )
+    }
+
+    @MainActor
+    func testUpgradeBoundarySurvivesRelaunchBeforeClassificationRecovery()
+        throws
+    {
+        let originalID = UUID()
+        let secrets = MockProfileSecretStore()
+        secrets.values[locator(originalID, .cliCredentialsJSON)] =
+            #"{"claudeAiOauth":{"accessToken":"original"}}"#
+        let firstStore = retain(
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
+        )
+        try seedProfilesForTesting(
+            [Profile(id: originalID, name: "Original", hasCliAccount: true)],
+            in: firstStore
+        )
+        let firstSharedDataStore = SharedDataStore(defaults: defaults)
+        let firstManager = retain(ProfileManager(profileStore: firstStore))
+        firstManager.configureClaudeAccountUpgradeClassification(
+            startupMigrationsSucceeded: false,
+            classifier: {
+                profiles,
+                isProfileIdentitySetAuthoritative,
+                isAuthoritative in
+                _ = firstSharedDataStore
+                    .classifyClaudeAccountsForUpgradeOnce(
+                        profiles,
+                        isProfileIdentitySetAuthoritative:
+                            isProfileIdentitySetAuthoritative,
+                        isAuthoritative: isAuthoritative
+                    )
+            }
+        )
+        secrets.readErrors[.cliCredentialsJSON] = TestError.expected
+
+        firstManager.loadProfiles()
+        XCTAssertEqual(
+            defaults.stringArray(
+                forKey: "claudeAccountUpgradeBoundaryProfileIDsV41"
+            ),
+            [originalID.uuidString]
+        )
+        XCTAssertFalse(
+            defaults.bool(forKey: "didClassifyClaudeAccountUpgradeV41")
+        )
+
+        let later = Profile(name: "Created after boundary", hasCliAccount: true)
+        try firstStore.appendProfile(
+            later,
+            expectedExistingIDs: [originalID]
+        )
+        secrets.values[locator(later.id, .cliCredentialsJSON)] =
+            #"{"claudeAiOauth":{"accessToken":"later"}}"#
+
+        secrets.readErrors.removeAll()
+        let secondStore = retain(
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
+        )
+        let secondSharedDataStore = SharedDataStore(defaults: defaults)
+        let secondManager = retain(ProfileManager(profileStore: secondStore))
+        secondManager.configureClaudeAccountUpgradeClassification(
+            startupMigrationsSucceeded: true,
+            classifier: {
+                profiles,
+                isProfileIdentitySetAuthoritative,
+                isAuthoritative in
+                _ = secondSharedDataStore
+                    .classifyClaudeAccountsForUpgradeOnce(
+                        profiles,
+                        isProfileIdentitySetAuthoritative:
+                            isProfileIdentitySetAuthoritative,
+                        isAuthoritative: isAuthoritative
+                    )
+            }
+        )
+
+        secondManager.loadProfiles()
+
+        XCTAssertTrue(
+            secondSharedDataStore.wasTerminalOnlyAtClaudeAccountUpgrade(
+                originalID
+            )
+        )
+        XCTAssertFalse(
+            secondSharedDataStore.wasTerminalOnlyAtClaudeAccountUpgrade(
+                later.id
+            )
+        )
+    }
+
     func testExplicitCredentialDeletionFailureRemainsRetryable() throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()

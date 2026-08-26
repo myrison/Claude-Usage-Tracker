@@ -779,6 +779,52 @@ final class UsageProviderRegistryTests: HostedAppTestCase {
         )
     }
 
+    func testClaudeCaptureSnapshotsSetupStateWithoutLatchingIt()
+        throws
+    {
+        let registry = makeRegistry(
+            claudeRequestCapture: { _ in
+                CapturedClaudeProviderRequest(
+                    coreFetch: {
+                        Self.makeClaudeUsage(sessionTokensUsed: 1)
+                    }
+                )
+            },
+            resolverCalls: Locked(0),
+            factoryCalls: Locked(0)
+        )
+        var profile = Profile(
+            name: "Terminal only",
+            cliCredentialsJSON:
+                #"{"claudeAiOauth":{"accessToken":"terminal"}}"#,
+            hasCliAccount: true
+        )
+
+        let terminalOnly = try registry.capture(
+            profile: profile,
+            context: makeContext()
+        )
+        XCTAssertEqual(
+            terminalOnly.claudeSetupState,
+            ClaudeSetupState.terminalOnly
+        )
+
+        profile.claudeSessionKey = "browser"
+        profile.organizationId = "org"
+        let repaired = try registry.capture(
+            profile: profile,
+            context: makeContext()
+        )
+        XCTAssertEqual(
+            repaired.claudeSetupState,
+            ClaudeSetupState.complete
+        )
+        XCTAssertEqual(
+            terminalOnly.claudeSetupState,
+            ClaudeSetupState.terminalOnly
+        )
+    }
+
     func testClaudeServiceCapturesInitiatingProfileOverageSetting()
         throws
     {

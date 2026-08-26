@@ -930,6 +930,11 @@ struct ProviderPopoverHeader: View {
                         "popover.normalized.health.claude_code_sign_in_problem",
                         default: "Claude Code sign-in needs attention"
                     )
+                case .setupIncomplete:
+                    return NormalizedUsageStrings.localized(
+                        "menubar.accessibility.state.setup_incomplete",
+                        default: "Setup incomplete: add the browser sign-in"
+                    )
                 case nil:
                     return NormalizedUsageStrings.localized(
                         "popover.normalized.health.sign_in_problem",
@@ -1316,7 +1321,8 @@ struct NormalizedUsageView: View {
     /// Opens Settings → CLI Account. Absent in surfaces that have nowhere to
     /// navigate to, which also hides the invitation to connect an account.
     var onConnectCLIAccount: (() -> Void)?
-    /// Opens Settings → Claude.ai, the remedy for `.claudeAccountUnresolved`.
+    /// Opens Settings → Claude Account, the remedy for
+    /// `.claudeAccountUnresolved`.
     /// Always supplied alongside `onConnectCLIAccount` in production; the
     /// notice's visibility is still gated on `onConnectCLIAccount` alone so
     /// existing call sites that only wire the CLI action keep working.
@@ -1449,7 +1455,7 @@ private struct ExtraUsageNoticeView: View {
     /// Settings → CLI Account, for the cases whose remedy is a Claude Code
     /// sign-in.
     let cliAccountAction: () -> Void
-    /// Settings → Claude.ai, for `.claudeAccountUnresolved`, whose remedy is
+    /// Settings → Claude Account, for `.claudeAccountUnresolved`, whose remedy is
     /// on the claude.ai side rather than the Claude Code one. Routing that
     /// case to the CLI screen would send someone to a screen with nothing
     /// useful on it — the exact failure this whole area already suffered
@@ -1571,7 +1577,7 @@ private struct ExtraUsageNoticeView: View {
                 "popover.extra_usage.claude_account_unresolved",
                 default: "This is your organization's total. Your own "
                     + "usage couldn't be matched to this organization — "
-                    + "reconnect your account in Settings → Claude.ai."
+                    + "reconnect your account in Settings → Claude Account."
             )
         }
     }
@@ -1629,7 +1635,7 @@ private struct ExtraUsageNoticeView: View {
                 "popover.extra_usage.absent.claude_account_unresolved",
                 default: "Your extra usage couldn't be matched to this "
                     + "organization — reconnect your account in "
-                    + "Settings → Claude.ai."
+                    + "Settings → Claude Account."
             )
         }
     }

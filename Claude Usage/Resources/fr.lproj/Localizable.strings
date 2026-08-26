@@ -345,8 +345,6 @@
 "api.success_configuration_saved" = "Configuration API enregistrée avec succès";
 
 /* Personal Usage */
-"personal.title" = "Utilisation Personnelle";
-"personal.subtitle" = "Suivez votre utilisation et vos sessions Claude.ai";
 "personal.label_session_key" = "Clé de Session";
 "personal.placeholder_session_key" = "sk-ant-sid-...";
 "personal.help_session_key" = "Collez votre cookie sessionKey depuis claude.ai DevTools";
@@ -515,7 +513,7 @@
 "general.autostart_subtitle" = "Démarrer automatiquement une nouvelle session si nécessaire";
 "general.autostart_toggle" = "Démarrage Automatique de Nouvelle Session";
 "general.autostart_description" = "Envoyer automatiquement un message lors de la réinitialisation de la session";
-"general.autostart_requirement" = "• Clé de session configurée dans Identifiants → onglet Claude.ai";
+"general.autostart_requirement" = "• Clé de session configurée dans Réglages → Compte Claude";
 "general.notifications_title" = "Notifications";
 "general.notifications_subtitle" = "Recevoir des notifications sur les jalons d'utilisation";
 "general.connected" = "Connecté";
@@ -625,12 +623,8 @@
 "section.settings" = "PARAMÈTRES";
 "section.app" = "APPLICATION";
 
-"section.claudeai_title" = "Claude.ai";
-"section.claudeai_desc" = "Identifiants Claude.ai";
 "section.api_console_title" = "Console API";
 "section.api_console_desc" = "Identifiants de la Console API";
-"section.cli_account_title" = "Compte CLI";
-"section.cli_account_desc" = "Synchronisation du compte CLI";
 "section.appearance_title" = "Apparence";
 "section.appearance_desc" = "Apparence de la barre de menu";
 "section.general_title" = "Général";
@@ -671,8 +665,6 @@
 /* ==================== */
 /* MARK: - CLI Account Sync */
 /* ==================== */
-"cli.title" = "Compte CLI";
-"cli.subtitle" = "Synchronisez votre compte Claude Code connecté";
 "cli.synced" = "Compte CLI Synchronisé";
 "cli.not_synced" = "Non Synchronisé";
 "cli.account_details" = "Détails du Compte";
@@ -867,7 +859,7 @@
 "feedback.role_other" = "Autre";
 
 // MARK: - Status Banners
-"popover.banner.credentials_expired" = "claude.ai a refusé la clé de session. Réglages → Claude.ai.";
+"popover.banner.credentials_expired" = "Clé de session refusée. Réglages → Compte Claude.";
 "popover.banner.cli_sign_in_expired" = "La connexion Claude Code de ce compte a expiré. Reconnectez-vous.";
 "popover.banner.cli_signed_out" = "Claude Code est déconnecté du compte lié ici.";
 "popover.banner.cli_sign_in_unusable" = "La connexion Claude Code de ce compte ne fonctionne pas.";
@@ -900,8 +892,6 @@
 "popover.banner.credentials_not_saved" = "Identifiants non enregistrés (%d)";
 "popover.banner.credentials_not_saved.detail" = "Enregistrés pour cette session uniquement — perdus à la fermeture.";
 "popover.banner.credentials_not_saved.retry" = "Réessayer l’enregistrement";
-"personal.connected_not_saved" = "Connecté — non enregistré";
-"personal.retry_save" = "Réessayer l’enregistrement";
 "quit.credentials_unsaved.title" = "Impossible d’enregistrer les identifiants";
 "quit.credentials_unsaved.body" = "En quittant, il faudra les saisir à nouveau.";
 "quit.credentials_unsaved.quit" = "Quitter quand même";
@@ -1268,7 +1258,6 @@
 "chrome_assisted.profile_changed" = "Le profil Claude actif a changé. Recommencez cette configuration.";
 "chrome_assisted.confirm_context" = "Je confirme que le profil Chrome %@ est le contexte à utiliser pour le profil RevvyTach %@. Cela n’est pas vérifié par l’API.";
 "chrome_assisted.new_claude_profile" = "nouveau profil Claude";
-"personal.session_key_stored" = "Clé de session enregistrée";
 "personal.session_key_validated" = "Clé de session validée";
 "menubar.overage_balance" = "Solde de Crédits";
 "menubar.overage_balance_organization" = "Solde de Crédits · Organisation";
@@ -1281,16 +1270,15 @@
 "cli.login_expired_explain" = "Une resynchronisation n'y changera rien : elle copie la connexion de ce compte, et cette connexion a expiré. Exécutez ceci dans le Terminal pour vous reconnecter.";
 "cli.login_expired_then_resync" = "Une fois connecté, revenez ici et appuyez sur Resynchroniser.";
 "popover.extra_usage.cli_other_organization" = "Il s'agit du total de votre organisation. Votre compte Claude Code lié appartient à une autre organisation, son utilisation n'est donc pas affichée ici.";
-"popover.extra_usage.claude_account_unresolved" = "Il s'agit du total de votre organisation. Votre propre utilisation n'a pas pu être associée à cette organisation — reconnectez votre compte dans Réglages → Claude.ai.";
+"popover.extra_usage.claude_account_unresolved" = "Il s'agit du total de votre organisation. Votre propre utilisation n'a pas pu être associée à cette organisation — reconnectez votre compte dans Réglages → Compte Claude.";
 "popover.extra_usage.absent.cli_not_linked" = "Votre utilisation supplémentaire provient de Claude Code, qui n'est pas encore lié à ce compte — ajoutez-le dans Réglages → Compte CLI.";
 "popover.extra_usage.absent.cli_sign_in_expired" = "Votre utilisation supplémentaire ne peut pas être lue : la connexion Claude Code de ce compte a expiré. Reconnectez-vous à Claude Code et la valeur réapparaîtra d'elle-même.";
 "popover.extra_usage.absent.cli_sign_in_has_no_token" = "Votre utilisation supplémentaire ne peut pas être lue : Claude Code est déconnecté du compte lié ici. Connectez-vous à ce compte et la valeur apparaîtra d'elle-même.";
 "popover.extra_usage.absent.cli_sign_in_unusable" = "Votre utilisation supplémentaire n'a pas pu être lue avec le compte Claude Code lié ici.";
 "popover.extra_usage.absent.cli_temporarily_unavailable" = "Votre utilisation supplémentaire n'a pas pu être lue cette fois-ci. Une nouvelle tentative aura lieu automatiquement.";
 "popover.extra_usage.absent.cli_other_organization" = "Votre utilisation supplémentaire n'est pas affichée : le compte Claude Code lié appartient à une autre organisation.";
-"popover.extra_usage.absent.claude_account_unresolved" = "Votre utilisation supplémentaire n'a pas pu être associée à cette organisation — reconnectez votre compte dans Réglages → Claude.ai.";
+"popover.extra_usage.absent.claude_account_unresolved" = "Votre utilisation supplémentaire n'a pas pu être associée à cette organisation — reconnectez votre compte dans Réglages → Compte Claude.";
 "popover.extra_usage.organization_lookup_failed" = "Votre utilisation supplémentaire n'a pas pu être lue à l'instant. Actualisez pour réessayer.";
-"cli.connect_extra_usage_hint" = "Connectez votre compte Claude Code pour voir votre propre utilisation supplémentaire. Si vous êtes administrateur, celle de votre organisation s'affiche par défaut.";
 
 // Résumé de la configuration du compte Claude
 "claude_account.summary.verdict.complete" = "Configuration complète — Les deux connexions sont liées. RevvyTach renouvelle automatiquement la connexion au terminal.";
@@ -1300,6 +1288,7 @@
 "claude_account.summary.browser.title" = "Connexion au navigateur (claude.ai)";
 "claude_account.summary.terminal.title" = "Connexion au terminal (Claude Code)";
 "claude_account.summary.status.working" = "Opérationnelle";
+"claude_account.summary.status.needs_attention" = "Action requise";
 "claude_account.summary.status.not_linked" = "Non liée";
 "claude_account.summary.status.missing" = "Manquante";
 
@@ -1327,3 +1316,37 @@
 "wizard.review.terminal_linked_detail" = "La connexion au terminal détectée sera liée à la fin de la configuration.";
 "wizard.review.terminal_not_linked_detail" = "Non liée. Vous pourrez l'ajouter plus tard dans Réglages → Compte Claude.";
 "wizard.start_tracking" = "Démarrer";
+"section.claude_account_title" = "Compte Claude";
+"section.claude_account_desc" = "Deux connexions, état et synchronisation";
+"claude_account.title" = "Compte Claude";
+"claude_account.subtitle" = "Deux connexions maintiennent les rapports de ce profil. RevvyTach ne peut conserver la connexion terminal que si celle du navigateur est aussi liée.";
+"claude_account.incomplete_badge" = "Incomplet";
+"claude_account.browser_sheet.title" = "Connexion navigateur (claude.ai)";
+"claude_account.browser_sheet.subtitle" = "Reliez ce profil à son organisation claude.ai.";
+"claude_account.browser.sign_in_again" = "Se reconnecter…";
+"claude_account.browser.sign_in" = "Se connecter à Claude.ai…";
+"claude_account.browser.missing_detail" = "Non liée — Ajoutez la connexion navigateur qui alimente les rapports.";
+"claude_account.browser.detail" = "claude.ai · %@ · clé de session stockée %@";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@ · date d’enregistrement non consignée";
+"claude_account.terminal.resync" = "Resynchroniser";
+"claude_account.terminal.link" = "Lier Claude Code…";
+"claude_account.terminal.not_linked_detail" = "Non liée — Liez le compte Claude Code utilisé pour cette organisation.";
+"claude_account.terminal.nonrenewable_detail" = "Compte Claude Code %@ · expire dans %@";
+"claude_account.terminal.expiry_unknown_detail" = "Compte Claude Code %@ · expiration inconnue";
+"claude_account.terminal.detail" = "Compte Claude Code %@ · renouvelé %@ · réécrit dans Claude Code";
+"claude_account.terminal.link_sheet.title" = "Connexion terminal (Claude Code)";
+"claude_account.terminal.link_sheet.subtitle" = "Créez le dossier, connectez Claude Code, puis vérifiez la connexion.";
+"claude_account.summary.status.working_not_renewable" = "Active, non renouvelable";
+"claude_account.sync.title" = "Synchronisation Claude Code";
+"claude_account.sync.subtitle" = "Alignez serveurs MCP, compétences et intégration shell.";
+"claude_account.upgrade_banner.message" = "Depuis la version 4.1, un profil Claude a besoin de sa connexion navigateur. Ce profil n'avait que la connexion terminal. Ajoutez une fois le navigateur et RevvyTach gérera ensuite les deux.";
+"claude_account.why_both.button" = "Pourquoi les deux ?";
+"claude_account.why_both.title" = "Pourquoi ce profil a deux connexions";
+"claude_account.why_both.subtitle" = "Chaque connexion alimente une partie différente de RevvyTach.";
+"claude_account.why_both.browser" = "Produit tous les chiffres d'utilisation et relie le profil à son organisation claude.ai.";
+"claude_account.why_both.terminal" = "Ajoute votre utilisation supplémentaire et permet de changer de compte Claude Code.";
+"claude_account.why_both.renewal" = "Seule la connexion navigateur permet de renouveler celle du terminal et de la réécrire dans Claude Code.";
+"popover.banner.setup_incomplete" = "Configuration incomplète — le profil cessera ses rapports à l'expiration de Claude Code. Terminez dans Réglages → Compte Claude.";
+"menubar.accessibility.state.setup_incomplete" = "Configuration incomplète : ajoutez la connexion navigateur";
+"personal.connected_not_saved" = "Connecté — non enregistré";
+"personal.retry_save" = "Réessayer l’enregistrement";

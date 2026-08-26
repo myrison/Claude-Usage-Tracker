@@ -2267,7 +2267,7 @@ struct MenuBarIconRenderer {
         halo.fill()
 
         switch credential {
-        case .claudeAI:
+        case .claudeAI, .setupIncomplete:
             NSColor.systemRed.setFill()
             NSBezierPath(ovalIn: markerRect).fill()
         case .claudeCode:

@@ -11,8 +11,27 @@ enum SettingsNavigationDestination: Equatable, Hashable, Sendable {
     case appearance(profileID: UUID)
     case general(profileID: UUID)
     case history(profileID: UUID)
-    /// Settings → CLI Account for one profile. The popover's invitation to
-    /// connect a Claude Code account lands here.
-    case cliAccount(profileID: UUID)
+    /// Settings → Claude Account for one Claude profile. Browser and
+    /// terminal sign-in repairs deliberately converge on this destination.
+    case claudeAccount(profileID: UUID)
     case manageProfiles
+}
+
+/// Shared with the UI-test bootstrap so its routing switch is covered by the
+/// ordinary unit-test target even though the bootstrap file is compiled only
+/// in UI-testing configurations.
+enum UITestSettingsRoute {
+    static func recordedAction(
+        for destination: SettingsNavigationDestination
+    ) -> String {
+        switch destination {
+        case .providerAccount: return "settings.account"
+        case .appearance: return "settings.appearance"
+        case .claudeAccount: return "settings.claude_account"
+        case .manageProfiles: return "settings.profiles"
+        case .defaultView: return "settings.default"
+        case .general: return "settings.general"
+        case .history: return "settings.history"
+        }
+    }
 }

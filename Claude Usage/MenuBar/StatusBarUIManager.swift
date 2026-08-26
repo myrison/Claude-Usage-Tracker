@@ -220,8 +220,13 @@ final class StatusBarUIManager {
     static func profileAccessibilityLabel(
         _ baseLabel: String,
         isActive: Bool,
-        attention: MenuBarAttentionSignal.Credential? = nil
+        attention: MenuBarAttentionSignal.Credential? = nil,
+        profileName: String? = nil
     ) -> String {
+        if attention == .setupIncomplete {
+            return (profileName ?? baseLabel) + " · "
+                + attentionStateText(.setupIncomplete)
+        }
         let label = String(
             format: ProviderUILocalization.text(
                 isActive
@@ -252,6 +257,11 @@ final class StatusBarUIManager {
             return ProviderUILocalization.text(
                 "menubar.accessibility.state.claude_code_sign_in_attention",
                 fallback: "Claude Code sign-in needs attention"
+            )
+        case .setupIncomplete:
+            return ProviderUILocalization.text(
+                "menubar.accessibility.state.setup_incomplete",
+                fallback: "Setup incomplete: add the browser sign-in"
             )
         }
     }
@@ -401,7 +411,8 @@ final class StatusBarUIManager {
         return profileAccessibilityLabel(
             base,
             isActive: true,
-            attention: attention
+            attention: attention,
+            profileName: profileName
         )
     }
 
@@ -413,19 +424,21 @@ final class StatusBarUIManager {
     /// the one item a person meets before the app has any data, which is
     /// exactly when they are trying to work out what it is.
     ///
-    /// It never carries the attention wording, and takes no credential to
-    /// carry. That branch returns before `marked` and so draws no dot; a
-    /// spoken complaint with no visible counterpart would be this surface
-    /// making a claim the icon does not.
     static func legacyDefaultLogoAccessibilityLabel(
-        profileName: String?
+        profileName: String?,
+        attention: MenuBarAttentionSignal.Credential? = nil
     ) -> String {
         let base = legacyLabelPrefix(profileName: profileName)
             + ProviderUILocalization.text(
                 "menubar.accessibility.state.no_data",
                 fallback: "no usage data"
             )
-        return profileAccessibilityLabel(base, isActive: true)
+        return profileAccessibilityLabel(
+            base,
+            isActive: true,
+            attention: attention,
+            profileName: profileName
+        )
     }
 
     /// "Claude, Work, " — the provider and, when there is one, the profile.
@@ -1784,7 +1797,8 @@ final class StatusBarUIManager {
             let label = Self.profileAccessibilityLabel(
                 baseLabel,
                 isActive: isActive,
-                attention: attention[profile.id]
+                attention: attention[profile.id],
+                profileName: profile.name
             )
             button.setAccessibilityLabel(label)
             button.toolTip = label
@@ -2129,11 +2143,17 @@ final class StatusBarUIManager {
                let button = statusItem.button {
                 // Get actual menu bar appearance from the button
                 let menuBarIsDark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                let logoImage = renderer.createDefaultAppLogo(isDarkMode: menuBarIsDark)
-                logoImage.isTemplate = true  // Let macOS handle the color
-                setButtonImage(button, image: logoImage)
+                let logoImage = defaultLogoImage(
+                    isDarkMode: menuBarIsDark,
+                    attention: attention
+                )
+                setButtonImage(
+                    button,
+                    image: logoImage
+                )
                 let label = Self.legacyDefaultLogoAccessibilityLabel(
-                    profileName: profile?.name
+                    profileName: profile?.name,
+                    attention: attention
                 )
                 button.setAccessibilityLabel(label)
                 button.toolTip = label
@@ -2288,6 +2308,23 @@ final class StatusBarUIManager {
         )
         marked.isTemplate = false
         return marked
+    }
+
+    /// The exact early-return image used when no usage credential or metric
+    /// is available. Exposed as a render seam so tests can prove setup
+    /// attention survives this path without creating a real status item.
+    func defaultLogoImage(
+        isDarkMode: Bool,
+        attention: MenuBarAttentionSignal.Credential?
+    ) -> NSImage {
+        let logo = renderer.createDefaultAppLogo(isDarkMode: isDarkMode)
+        logo.isTemplate = attention == nil
+        return Self.marked(
+            logo,
+            attention: attention,
+            renderer: renderer,
+            isDarkMode: isDarkMode
+        )
     }
 
     /// Get button for a specific metric (used for popover positioning)

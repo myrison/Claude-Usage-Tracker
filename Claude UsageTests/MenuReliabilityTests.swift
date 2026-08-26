@@ -208,8 +208,7 @@ final class MenuReliabilityTests: HostedAppTestCase {
             onRefresh: {},
             onManageProfiles: {},
             onPreferences: {},
-            onCLIAccount: {},
-            onClaudeAIAccount: {},
+            onCLIAccount: { _ in },
             onCredentialsBannerTap: { _ in }
         )
         let controller = retain(NSHostingController(rootView: content))

@@ -91,17 +91,100 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
         ] {
             XCTAssertEqual(
                 LegacyPopoverBanner.cliSignInBroken(problem).action,
-                .cliAccount
+                .claudeAccount
             )
             XCTAssertNotEqual(
                 LegacyPopoverBanner.cliSignInBroken(problem).action,
                 .preferences
             )
-            XCTAssertNotEqual(
-                LegacyPopoverBanner.cliSignInBroken(problem).action,
-                .claudeAIAccount
+        }
+    }
+
+    func testSetupIncompleteBannerUsesRequiredPrecedence() {
+        let now = Date()
+        XCTAssertEqual(
+            LegacyPopoverBanner.resolve(
+                hasCredentialError: false,
+                setupState: .terminalOnly,
+                cliSignInIssue: .signInExpired,
+                consecutiveRefreshFailures: 4,
+                lastSuccessfulRefreshTime:
+                    now.addingTimeInterval(-600),
+                now: now
+            ),
+            .setupIncomplete
+        )
+        XCTAssertEqual(
+            LegacyPopoverBanner.resolve(
+                hasCredentialError: true,
+                setupState: .terminalOnly,
+                consecutiveRefreshFailures: 0,
+                lastSuccessfulRefreshTime: now,
+                now: now
+            ),
+            .setupIncomplete
+        )
+        for state: ClaudeSetupState in [.browserOnly, .complete] {
+            XCTAssertNil(
+                LegacyPopoverBanner.resolve(
+                    hasCredentialError: false,
+                    setupState: state,
+                    consecutiveRefreshFailures: 0,
+                    lastSuccessfulRefreshTime: now,
+                    now: now
+                )
             )
         }
+        XCTAssertEqual(
+            LegacyPopoverBanner.setupIncomplete.action,
+            .claudeAccount
+        )
+    }
+
+    func testSetupIncompleteMenuAttentionClearsWithBrowserSignIn() {
+        XCTAssertEqual(
+            MenuBarAttentionSignal.attention(
+                cliSignInIssue: nil,
+                hasCredentialError: false,
+                healthStatus: .healthy,
+                setupState: .terminalOnly
+            ),
+            .setupIncomplete
+        )
+        for state: ClaudeSetupState in [.browserOnly, .complete] {
+            XCTAssertNil(
+                MenuBarAttentionSignal.attention(
+                    cliSignInIssue: nil,
+                    hasCredentialError: false,
+                    healthStatus: .healthy,
+                    setupState: state
+                )
+            )
+        }
+        XCTAssertEqual(
+            StatusBarUIManager.attentionStateText(.setupIncomplete),
+            "menubar.accessibility.state.setup_incomplete".localized
+        )
+        XCTAssertEqual(
+            StatusBarUIManager.profileAccessibilityLabel(
+                "Legacy profile",
+                isActive: true,
+                attention: .setupIncomplete
+            ),
+            "Legacy profile · "
+                + "menubar.accessibility.state.setup_incomplete".localized
+        )
+        XCTAssertEqual(
+            MenuBarAttentionSignal.attention(
+                cliSignInIssue: .signInExpired,
+                hasCredentialError: true,
+                healthStatus: .unauthenticated,
+                setupState: .terminalOnly
+            ),
+            .setupIncomplete,
+            "terminal-only must stay classified as incomplete even when the "
+                + "generic health surface also reports unauthenticated"
+        )
     }
 
     /// Each of the three says something different, and each resolves to a
@@ -149,6 +232,52 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
                 .credentialsNotSaved(count: 2)
             )
         }
+        XCTAssertEqual(
+            LegacyPopoverBanner.resolve(
+                sessionOnlyCredentialCount: 1,
+                hasCredentialError: true,
+                setupState: .terminalOnly,
+                cliSignInIssue: .signInExpired,
+                consecutiveRefreshFailures: 8,
+                lastSuccessfulRefreshTime: now.addingTimeInterval(-3_000),
+                now: now
+            ),
+            .credentialsNotSaved(count: 1)
+        )
+    }
+
+    func testAPIConsoleOnlyProfileNeverRaisesSetupIncomplete() {
+        let profile = Profile(
+            name: "API only",
+            apiSessionKey: "api-session",
+            apiOrganizationId: "api-org"
+        )
+        let state = ClaudeSetupState.of(profile)
+
+        XCTAssertEqual(state, .none)
+        XCTAssertFalse(
+            ClaudeAccountAttention.isSetupIncomplete(
+                profile,
+                snapshot: state
+            )
+        )
+        XCTAssertNil(
+            LegacyPopoverBanner.resolve(
+                hasCredentialError: false,
+                setupState: state,
+                consecutiveRefreshFailures: 0,
+                lastSuccessfulRefreshTime: now,
+                now: now
+            )
+        )
+        XCTAssertNil(
+            MenuBarAttentionSignal.attention(
+                cliSignInIssue: nil,
+                hasCredentialError: false,
+                healthStatus: .healthy,
+                setupState: state
+            )
+        )
     }
 
     /// And it outranks what used to sit directly below the claude.ai banner,
@@ -619,7 +748,7 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
         let plain = render(attention: nil, manager: manager)
 
         for credential: MenuBarAttentionSignal.Credential in [
-            .claudeAI, .claudeCode
+            .claudeAI, .claudeCode, .setupIncomplete
         ] {
             let marked = render(attention: credential, manager: manager)
             XCTAssertEqual(
@@ -880,7 +1009,7 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
         monochrome.showPaceMarker = false
 
         for credential: MenuBarAttentionSignal.Credential in [
-            .claudeAI, .claudeCode
+            .claudeAI, .claudeCode, .setupIncomplete
         ] {
             for isActive in [false, true] {
                 let marked = render(
@@ -1027,7 +1156,7 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
             return XCTFail("expected a status item for the profile")
         }
         for credential: MenuBarAttentionSignal.Credential in [
-            .claudeAI, .claudeCode
+            .claudeAI, .claudeCode, .setupIncomplete
         ] {
             let fragment = StatusBarUIManager.attentionStateText(credential)
             XCTAssertFalse(
@@ -1071,7 +1200,7 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
         let active = render(attention: nil, isActive: true, manager: manager)
 
         for credential: MenuBarAttentionSignal.Credential in [
-            .claudeAI, .claudeCode
+            .claudeAI, .claudeCode, .setupIncomplete
         ] {
             let activeMarked = render(
                 attention: credential,
@@ -1223,7 +1352,7 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
         for metricType in MenuBarMetricType.allCases {
             let label = singleProfileLabel(for: metricType)
             for credential: MenuBarAttentionSignal.Credential in [
-                .claudeAI, .claudeCode
+                .claudeAI, .claudeCode, .setupIncomplete
             ] {
                 XCTAssertFalse(
                     label.contains(
@@ -1300,9 +1429,6 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
     /// announced as nothing at all and this is the item a person meets
     /// before the app has any data.
     ///
-    /// It never carries the attention wording, and takes no credential to
-    /// carry: that branch returns before the marker is stamped, so a spoken
-    /// complaint there would be a claim the icon does not make.
     func testDefaultLogoItemIsNamedAndBlamesNoCredential() {
         let label = StatusBarUIManager.legacyDefaultLogoAccessibilityLabel(
             profileName: "Work"
@@ -1323,6 +1449,58 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
                 "the unmarked default logo blamed \(credential): " + label
             )
         }
+    }
+
+    func testDefaultLogoCarriesSetupIncompleteAccessibilityState() {
+        let label = StatusBarUIManager.legacyDefaultLogoAccessibilityLabel(
+            profileName: "Terminal only",
+            attention: .setupIncomplete
+        )
+
+        XCTAssertEqual(
+            label,
+            "Terminal only · "
+                + StatusBarUIManager.attentionStateText(.setupIncomplete)
+        )
+    }
+
+    func testMetricAndMultiProfileUseExactSetupIncompleteLabel() {
+        let suffix = StatusBarUIManager.attentionStateText(.setupIncomplete)
+        XCTAssertEqual(
+            singleProfileLabel(
+                for: .session,
+                attention: .setupIncomplete
+            ),
+            "Work · \(suffix)"
+        )
+        XCTAssertEqual(
+            StatusBarUIManager.profileAccessibilityLabel(
+                "Claude, Work, no usage data",
+                isActive: true,
+                attention: .setupIncomplete,
+                profileName: "Work"
+            ),
+            "Work · \(suffix)"
+        )
+    }
+
+    func testDefaultLogoDrawsSetupIncompleteMarker() {
+        let manager = retain(StatusBarUIManager())
+        defer { manager.cleanup() }
+        let plain = manager.defaultLogoImage(
+            isDarkMode: false,
+            attention: nil
+        )
+        let marked = manager.defaultLogoImage(
+            isDarkMode: false,
+            attention: .setupIncomplete
+        )
+
+        XCTAssertNotEqual(
+            marked.tiffRepresentation,
+            plain.tiffRepresentation
+        )
+        XCTAssertFalse(marked.isTemplate)
     }
 
     /// A profile that has not loaded yet degrades to "Claude, …" rather than

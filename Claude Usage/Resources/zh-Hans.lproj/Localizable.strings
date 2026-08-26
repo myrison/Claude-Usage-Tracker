@@ -365,8 +365,6 @@
 /* ==================== */
 /* MARK: - Personal Usage (Additional) */
 /* ==================== */
-"personal.title" = "个人使用";
-"personal.subtitle" = "跟踪您的 Claude.ai 使用情况和会话";
 "personal.label_session_key" = "会话密钥";
 "personal.placeholder_session_key" = "sk-ant-sid-...";
 "personal.help_session_key" = "粘贴您从 claude.ai DevTools 获取的 sessionKey cookie";
@@ -525,7 +523,7 @@
 "general.autostart_subtitle" = "需要时自动启动新会话";
 "general.autostart_toggle" = "自动启动新会话";
 "general.autostart_description" = "会话重置时自动发送消息";
-"general.autostart_requirement" = "• 在凭据 → Claude.ai 标签页中配置了会话密钥";
+"general.autostart_requirement" = "• 已在“设置 → Claude 帐户”中配置会话密钥";
 "general.notifications_title" = "通知";
 "general.notifications_subtitle" = "获取使用里程碑通知";
 "general.connected" = "已连接";
@@ -637,12 +635,8 @@
 "section.settings" = "设置";
 "section.app" = "应用";
 
-"section.claudeai_title" = "Claude.ai";
-"section.claudeai_desc" = "Claude.ai 凭据";
 "section.api_console_title" = "API 控制台";
 "section.api_console_desc" = "API 控制台凭据";
-"section.cli_account_title" = "CLI 账户";
-"section.cli_account_desc" = "CLI 账户同步";
 "section.appearance_title" = "外观";
 "section.appearance_desc" = "菜单栏外观";
 "section.general_title" = "通用";
@@ -683,8 +677,6 @@
 /* ==================== */
 /* MARK: - CLI Account Sync */
 /* ==================== */
-"cli.title" = "CLI 账户";
-"cli.subtitle" = "同步您的 Claude Code 登录账户";
 "cli.synced" = "CLI 账户已同步";
 "cli.not_synced" = "未同步";
 "cli.account_details" = "账户详情";
@@ -886,7 +878,7 @@
 "feedback.role_other" = "其他";
 
 // MARK: - Status Banners
-"popover.banner.credentials_expired" = "claude.ai 拒绝了会话密钥。请在“设置 → Claude.ai”中更新。";
+"popover.banner.credentials_expired" = "claude.ai 拒绝了会话密钥。请在“设置 → Claude 帐户”中更新。";
 "popover.banner.cli_sign_in_expired" = "此账号的 Claude Code 登录已过期。请重新登录。";
 "popover.banner.cli_signed_out" = "Claude Code 已从此处关联的账号退出登录。";
 "popover.banner.cli_sign_in_unusable" = "此账号的 Claude Code 登录无法使用。";
@@ -919,8 +911,6 @@
 "popover.banner.credentials_not_saved" = "凭据未保存 (%d)";
 "popover.banner.credentials_not_saved.detail" = "仅在本次会话中保存，退出后将丢失。";
 "popover.banner.credentials_not_saved.retry" = "重试保存";
-"personal.connected_not_saved" = "已连接 — 未保存";
-"personal.retry_save" = "重试保存";
 "quit.credentials_unsaved.title" = "无法保存凭据";
 "quit.credentials_unsaved.body" = "退出后需要重新输入。";
 "quit.credentials_unsaved.quit" = "仍然退出";
@@ -1285,7 +1275,6 @@
 "chrome_assisted.profile_changed" = "活跃的 Claude 配置文件已更改。请重新开始此设置。";
 "chrome_assisted.confirm_context" = "我确认 Chrome 配置文件 %@ 是我希望用于 RevvyTach 配置文件 %@ 的上下文。这未经 API 验证。";
 "chrome_assisted.new_claude_profile" = "新的 Claude 配置文件";
-"personal.session_key_stored" = "会话密钥已存储";
 "personal.session_key_validated" = "会话密钥已验证";
 "menubar.overage_balance" = "积分余额";
 "menubar.overage_balance_organization" = "积分余额 · 组织";
@@ -1298,16 +1287,15 @@
 "cli.login_expired_explain" = "重新同步无法解决：它只是复制此账号的登录，而该登录已过期。请在终端中运行以下命令重新登录。";
 "cli.login_expired_then_resync" = "登录完成后，回到这里点击“重新同步”。";
 "popover.extra_usage.cli_other_organization" = "这是您所在组织的总量。已关联的 Claude Code 账号属于其他组织，因此不会在此显示其用量。";
-"popover.extra_usage.claude_account_unresolved" = "这是您所在组织的总量。无法将您自己的用量与此组织匹配 — 请在“设置 → Claude.ai”中重新连接您的账号。";
+"popover.extra_usage.claude_account_unresolved" = "这是您所在组织的总量。无法将您自己的用量与此组织匹配 — 请在“设置 → Claude 帐户”中重新连接您的账号。";
 "popover.extra_usage.absent.cli_not_linked" = "您自己的额外用量来自 Claude Code，但尚未关联到此账号 — 请在“设置 → CLI 账号”中添加。";
 "popover.extra_usage.absent.cli_sign_in_expired" = "无法读取您自己的额外用量：此账号的 Claude Code 登录已过期。请重新登录 Claude Code，该数值会自动重新显示。";
 "popover.extra_usage.absent.cli_sign_in_has_no_token" = "无法读取您自己的额外用量：Claude Code 已从此处关联的账号退出登录。请登录该账号，该数值会自动显示。";
 "popover.extra_usage.absent.cli_sign_in_unusable" = "无法使用此处关联的 Claude Code 账号读取您的额外用量。";
 "popover.extra_usage.absent.cli_temporarily_unavailable" = "本次未能读取您的额外用量，稍后将自动重试。";
 "popover.extra_usage.absent.cli_other_organization" = "不会显示您自己的额外用量：已关联的 Claude Code 账号属于其他组织。";
-"popover.extra_usage.absent.claude_account_unresolved" = "无法将您自己的额外用量与此组织匹配 — 请在“设置 → Claude.ai”中重新连接您的账号。";
+"popover.extra_usage.absent.claude_account_unresolved" = "无法将您自己的额外用量与此组织匹配 — 请在“设置 → Claude 帐户”中重新连接您的账号。";
 "popover.extra_usage.organization_lookup_failed" = "此次未能读取您自己的额外用量。请刷新后重试。";
-"cli.connect_extra_usage_hint" = "连接您的 Claude Code 账号即可查看自己的额外用量。如果您是管理员，默认显示的是组织的用量。";
 
 // Claude 账号设置摘要
 "claude_account.summary.verdict.complete" = "设置完成 — 两种登录均已关联。RevvyTach 会自动续期终端登录。";
@@ -1317,6 +1305,7 @@
 "claude_account.summary.browser.title" = "浏览器登录（claude.ai）";
 "claude_account.summary.terminal.title" = "终端登录（Claude Code）";
 "claude_account.summary.status.working" = "正常";
+"claude_account.summary.status.needs_attention" = "需要处理";
 "claude_account.summary.status.not_linked" = "未关联";
 "claude_account.summary.status.missing" = "缺失";
 
@@ -1344,3 +1333,37 @@
 "wizard.review.terminal_linked_detail" = "检测到的终端登录将在设置完成时关联。";
 "wizard.review.terminal_not_linked_detail" = "未关联。可稍后从“设置 → Claude 账号”添加。";
 "wizard.start_tracking" = "开始跟踪";
+"section.claude_account_title" = "Claude 帐户";
+"section.claude_account_desc" = "两种登录、健康状态和同步";
+"claude_account.title" = "Claude 帐户";
+"claude_account.subtitle" = "两种登录使此配置文件持续报告。只有同时关联浏览器登录，RevvyTach 才能续期终端登录。";
+"claude_account.incomplete_badge" = "未完成";
+"claude_account.browser_sheet.title" = "浏览器登录 (claude.ai)";
+"claude_account.browser_sheet.subtitle" = "将此配置文件连接到 claude.ai 组织。";
+"claude_account.browser.sign_in_again" = "重新登录…";
+"claude_account.browser.sign_in" = "登录 Claude.ai…";
+"claude_account.browser.missing_detail" = "未关联 — 添加用于使用量报告的浏览器登录。";
+"claude_account.browser.detail" = "claude.ai · %@ · 会话密钥已于 %@ 存储";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@ · 未记录存储日期";
+"claude_account.terminal.resync" = "重新同步";
+"claude_account.terminal.link" = "关联 Claude Code…";
+"claude_account.terminal.not_linked_detail" = "未关联 — 关联此组织使用的 Claude Code 帐户。";
+"claude_account.terminal.nonrenewable_detail" = "Claude Code 帐户 %@ · %@ 后过期";
+"claude_account.terminal.expiry_unknown_detail" = "Claude Code 帐户 %@ · 到期时间未知";
+"claude_account.terminal.detail" = "Claude Code 帐户 %@ · %@ 续期 · 已写回 Claude Code";
+"claude_account.terminal.link_sheet.title" = "终端登录 (Claude Code)";
+"claude_account.terminal.link_sheet.subtitle" = "创建帐户目录，登录 Claude Code，然后检查登录。";
+"claude_account.summary.status.working_not_renewable" = "正常，无法续期";
+"claude_account.sync.title" = "Claude Code 同步";
+"claude_account.sync.subtitle" = "使 MCP 服务器、技能和 shell 集成保持一致。";
+"claude_account.upgrade_banner.message" = "从 4.1 版起，Claude 配置文件需要浏览器登录才能保持有效。此配置文件原来只有终端登录。添加一次浏览器登录后，RevvyTach 会管理两者。";
+"claude_account.why_both.button" = "为何需要两者？";
+"claude_account.why_both.title" = "为何此配置文件有两种登录";
+"claude_account.why_both.subtitle" = "每种登录支持 RevvyTach 的不同功能。";
+"claude_account.why_both.browser" = "提供所有使用量，并将配置文件关联到 claude.ai 组织。";
+"claude_account.why_both.terminal" = "添加个人额外使用量，并可切换 Claude Code 帐户。";
+"claude_account.why_both.renewal" = "只有浏览器登录允许 RevvyTach 续期终端登录并写回 Claude Code。";
+"popover.banner.setup_incomplete" = "设置未完成 — Claude Code 登录过期后此配置文件将停止报告。请在设置 → Claude 帐户中完成。";
+"menubar.accessibility.state.setup_incomplete" = "设置未完成：添加浏览器登录";
+"personal.connected_not_saved" = "已连接 — 未保存";
+"personal.retry_save" = "重试保存";

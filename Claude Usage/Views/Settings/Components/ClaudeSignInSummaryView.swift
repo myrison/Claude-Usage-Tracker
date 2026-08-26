@@ -5,23 +5,60 @@
 
 import SwiftUI
 
+/// An optional action shown alongside one of the sign-in rows.
+struct ClaudeSignInSummaryAction {
+    enum Style {
+        case standard
+        case destructive
+    }
+
+    let title: String
+    let style: Style
+    let action: () -> Void
+
+    init(
+        _ title: String,
+        style: Style = .standard,
+        action: @escaping () -> Void
+    ) {
+        self.title = title
+        self.style = style
+        self.action = action
+    }
+}
+
+enum ClaudeTerminalSummaryHealth: Equatable {
+    case working
+    case workingNotRenewable
+    case needsAttention
+}
+
 /// A reusable summary of the browser and terminal sign-ins for a Claude profile.
 ///
-/// The caller supplies live, context-specific detail text; this view owns the
-/// shared verdict, row labels, and status presentation.
+/// The caller supplies live, context-specific detail text and optional actions;
+/// this view owns the shared verdict, row labels, and status presentation.
 struct ClaudeSignInSummaryView: View {
     let state: ClaudeSetupState
     let browserDetail: String
     let terminalDetail: String
+    let browserAction: ClaudeSignInSummaryAction?
+    let terminalAction: ClaudeSignInSummaryAction?
+    let terminalHealth: ClaudeTerminalSummaryHealth
 
     init(
         state: ClaudeSetupState,
         browserDetail: String,
-        terminalDetail: String
+        terminalDetail: String,
+        browserAction: ClaudeSignInSummaryAction? = nil,
+        terminalAction: ClaudeSignInSummaryAction? = nil,
+        terminalHealth: ClaudeTerminalSummaryHealth = .working
     ) {
         self.state = state
         self.browserDetail = browserDetail
         self.terminalDetail = terminalDetail
+        self.browserAction = browserAction
+        self.terminalAction = terminalAction
+        self.terminalHealth = terminalHealth
     }
 
     var body: some View {
@@ -32,7 +69,8 @@ struct ClaudeSignInSummaryView: View {
                 signInRow(
                     title: localized("claude_account.summary.browser.title"),
                     detail: browserDetail,
-                    status: browserStatus
+                    status: browserStatus,
+                    action: browserAction
                 )
 
                 Divider()
@@ -41,7 +79,8 @@ struct ClaudeSignInSummaryView: View {
                 signInRow(
                     title: localized("claude_account.summary.terminal.title"),
                     detail: terminalDetail,
-                    status: terminalStatus
+                    status: terminalStatus,
+                    action: terminalAction
                 )
             }
             .background(SettingsColors.cardBackground)
@@ -79,7 +118,8 @@ struct ClaudeSignInSummaryView: View {
     private func signInRow(
         title: String,
         detail: String,
-        status: Status
+        status: Status,
+        action: ClaudeSignInSummaryAction?
     ) -> some View {
         HStack(alignment: .center, spacing: Spacing.lg) {
             VStack(alignment: .leading, spacing: Spacing.xs) {
@@ -97,6 +137,10 @@ struct ClaudeSignInSummaryView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let action {
+                actionButton(action)
+            }
         }
         .padding(Spacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -116,6 +160,24 @@ struct ClaudeSignInSummaryView: View {
             .accessibilityLabel(localized(status.localizationKey))
     }
 
+    private func actionButton(_ summaryAction: ClaudeSignInSummaryAction) -> some View {
+        Button(action: summaryAction.action) {
+            Text(summaryAction.title)
+                .font(Typography.label)
+                .foregroundStyle(summaryAction.style.foregroundColor)
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, Spacing.sm)
+                .background(summaryAction.style.backgroundColor)
+                .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusMedium))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Spacing.radiusMedium)
+                        .strokeBorder(summaryAction.style.borderColor, lineWidth: 0.5)
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(summaryAction.title)
+    }
+
     private var browserStatus: Status {
         switch state {
         case .complete, .browserOnly:
@@ -128,7 +190,14 @@ struct ClaudeSignInSummaryView: View {
     private var terminalStatus: Status {
         switch state {
         case .complete, .terminalOnly:
-            return .working
+            switch terminalHealth {
+            case .working:
+                return .working
+            case .workingNotRenewable:
+                return .workingNotRenewable
+            case .needsAttention:
+                return .needsAttention
+            }
         case .browserOnly, .none:
             return .notLinked
         }
@@ -181,6 +250,8 @@ private struct Verdict {
 
 private enum Status {
     case working
+    case workingNotRenewable
+    case needsAttention
     case notLinked
     case missing
 
@@ -188,6 +259,10 @@ private enum Status {
         switch self {
         case .working:
             return "claude_account.summary.status.working"
+        case .workingNotRenewable:
+            return "claude_account.summary.status.working_not_renewable"
+        case .needsAttention:
+            return "claude_account.summary.status.needs_attention"
         case .notLinked:
             return "claude_account.summary.status.not_linked"
         case .missing:
@@ -199,10 +274,41 @@ private enum Status {
         switch self {
         case .working:
             return SettingsColors.success
+        case .workingNotRenewable, .needsAttention:
+            return SettingsColors.error
         case .notLinked:
             return SettingsColors.secondary
         case .missing:
             return SettingsColors.error
+        }
+    }
+}
+
+private extension ClaudeSignInSummaryAction.Style {
+    var foregroundColor: Color {
+        switch self {
+        case .standard:
+            return .primary
+        case .destructive:
+            return .white
+        }
+    }
+
+    var backgroundColor: Color {
+        switch self {
+        case .standard:
+            return SettingsColors.cardBackground
+        case .destructive:
+            return SettingsColors.error
+        }
+    }
+
+    var borderColor: Color {
+        switch self {
+        case .standard:
+            return SettingsColors.border
+        case .destructive:
+            return .clear
         }
     }
 }

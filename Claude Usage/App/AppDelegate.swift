@@ -134,12 +134,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Complete or retry the verified legacy credential/profile migration
         // before any normal profile hydration or first-launch decisions.
-        ProfileMigrationService.shared.migrateIfNeeded()
+        let profileMigrationSucceeded =
+            ProfileMigrationService.shared.migrateIfNeeded()
 
         // Copy any profile credential still sitting in the legacy file
         // Keychain into the data-protection Keychain now that this build can
         // use it. Additive only; see the service's own documentation.
-        ProfileKeychainDomainMigrationService.shared.migrateIfNeeded()
+        let keychainDomainMigrationSucceeded =
+            ProfileKeychainDomainMigrationService.shared.migrateIfNeeded()
+
+        providerUICompositionRoot.profileManager
+            .configureClaudeAccountUpgradeClassification(
+                startupMigrationsSucceeded: profileMigrationSucceeded
+                    && keychainDomainMigrationSucceeded,
+                classifier: {
+                    profiles,
+                    isProfileIdentitySetAuthoritative,
+                    isAuthoritative in
+                    _ = SharedDataStore.shared
+                        .classifyClaudeAccountsForUpgradeOnce(
+                            profiles,
+                            isProfileIdentitySetAuthoritative:
+                                isProfileIdentitySetAuthoritative,
+                            isAuthoritative: isAuthoritative
+                        )
+                }
+            )
 
         // Self-heal a CODEX_HOME pointer left behind by a since-deleted
         // directory (e.g. an external drive that's now unmounted) before any

@@ -1007,7 +1007,7 @@ final class ProviderMenuPresentationTests: HostedAppTestCase {
 
         XCTAssertEqual(
             MenuBarManager.popoverSettingsDestination(for: claude),
-            .defaultView
+            .claudeAccount(profileID: profileID)
         )
         XCTAssertEqual(
             MenuBarManager.popoverSettingsDestination(for: codex),

@@ -193,6 +193,7 @@ nonisolated struct PresentationSnapshot: @unchecked Sendable {
     let activity: UsageRefreshActivity
     let lastSuccessfulAt: Date?
     let currentFailure: ProviderRefreshFailure?
+    var claudeSetupState: ClaudeSetupState? = nil
 }
 
 struct ClaudeStatusPresentation {
@@ -220,6 +221,8 @@ final class UsagePresentationStore: ObservableObject {
     private var activityInvocationOrders: [UUID: UInt64] = [:]
     private var activityRequestIDs: [UUID: UUID] = [:]
     private var completedActivityRequestIDs: [UUID: UUID] = [:]
+    private var synchronizedClaudeSetupStates:
+        [UUID: ClaudeSetupState] = [:]
     private var claudeStatusInvocationOrder: UInt64 = 0
     private var claudeStatusCompletedInvocationOrder: UInt64 = 0
     private var terminalProfileIDs: Set<UUID> = []
@@ -334,8 +337,30 @@ final class UsagePresentationStore: ObservableObject {
                 forKey: snapshot.profileID
             )
         }
-        snapshots[snapshot.profileID] = snapshot
+        var accepted = snapshot
+        if let synchronized =
+            synchronizedClaudeSetupStates[snapshot.profileID] {
+            accepted.claudeSetupState = synchronized
+            if snapshot.claudeSetupState == synchronized {
+                synchronizedClaudeSetupStates.removeValue(
+                    forKey: snapshot.profileID
+                )
+            }
+        }
+        snapshots[snapshot.profileID] = accepted
         return true
+    }
+
+    func synchronizeClaudeSetupState(
+        _ state: ClaudeSetupState,
+        profileID: UUID
+    ) {
+        guard !isShutdown, var snapshot = snapshots[profileID] else {
+            return
+        }
+        snapshot.claudeSetupState = state
+        snapshots[profileID] = snapshot
+        synchronizedClaudeSetupStates[profileID] = state
     }
 
     func registerActivityInvocation(
@@ -422,6 +447,7 @@ final class UsagePresentationStore: ObservableObject {
 
     func purge(profileID: UUID) {
         snapshots.removeValue(forKey: profileID)
+        synchronizedClaudeSetupStates.removeValue(forKey: profileID)
         activityInvocationOrders.removeValue(forKey: profileID)
         activityRequestIDs.removeValue(forKey: profileID)
         completedActivityRequestIDs.removeValue(forKey: profileID)
@@ -449,7 +475,8 @@ final class UsagePresentationStore: ObservableObject {
             claudeAPIUsage: snapshot.claudeAPIUsage,
             activity: .idle,
             lastSuccessfulAt: snapshot.lastSuccessfulAt,
-            currentFailure: snapshot.currentFailure
+            currentFailure: snapshot.currentFailure,
+            claudeSetupState: snapshot.claudeSetupState
         )
         activityRequestIDs.removeValue(forKey: profileID)
     }
@@ -569,7 +596,8 @@ private extension PresentationSnapshot {
             claudeAPIUsage: claudeAPIUsage,
             activity: activity,
             lastSuccessfulAt: lastSuccessfulAt,
-            currentFailure: currentFailure
+            currentFailure: currentFailure,
+            claudeSetupState: claudeSetupState
         )
     }
 }
@@ -1294,7 +1322,10 @@ final class UsageRefreshRuntime {
                     lastSuccessfulAt:
                         retainedForIdentity?.lastSuccessfulAt,
                     currentFailure:
-                        retainedForIdentity?.currentFailure
+                        retainedForIdentity?.currentFailure,
+                    claudeSetupState: profile.providerID == .claude
+                        ? ClaudeSetupState.of(profile)
+                        : nil
                 )
                 if !inputLedger.isDeleting(profile.id) {
                     inputLedger.beginDeletion(
@@ -1346,7 +1377,10 @@ final class UsageRefreshRuntime {
                             isRecoverable:
                                 initialState != .disabled,
                             consecutiveCount: 0
-                        )
+                        ),
+                    claudeSetupState: profile.providerID == .claude
+                        ? ClaudeSetupState.of(profile)
+                        : nil
                 )
             } catch {
                 hydrated[profile.id] = PresentationSnapshot(
@@ -1369,7 +1403,10 @@ final class UsageRefreshRuntime {
                         occurredAt: now(),
                         isRecoverable: true,
                         consecutiveCount: 1
-                    )
+                    ),
+                    claudeSetupState: profile.providerID == .claude
+                        ? ClaudeSetupState.of(profile)
+                        : nil
                 )
             }
         }
@@ -1638,7 +1675,10 @@ final class UsageRefreshRuntime {
                 claudeAPIUsage: cached?.claudeAPIUsage,
                 activity: .idle,
                 lastSuccessfulAt: cached?.lastSuccessfulAt,
-                currentFailure: failure
+                currentFailure: failure,
+                claudeSetupState: profile.providerID == .claude
+                    ? ClaudeSetupState.of(profile)
+                    : nil
             ),
             expected: context,
             invocationOrder: invocationOrder
@@ -2992,7 +3032,8 @@ actor UsageRefreshEngine {
             activity: activity,
             lastSuccessfulAt: slot.lastSuccess
                 ?? cached?.lastSuccessfulAt,
-            currentFailure: cached?.currentFailure
+            currentFailure: cached?.currentFailure,
+            claudeSetupState: request.job.claudeSetupState
         )
         await presentationStore.publish(
             snapshot,
@@ -3022,7 +3063,8 @@ actor UsageRefreshEngine {
             activity: activity,
             lastSuccessfulAt:
                 slot.lastSuccess ?? usage?.report?.fetchedAt,
-            currentFailure: failure
+            currentFailure: failure,
+            claudeSetupState: request.job.claudeSetupState
         )
     }
 

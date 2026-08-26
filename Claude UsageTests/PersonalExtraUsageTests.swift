@@ -3162,17 +3162,7 @@ final class PersonalExtraUsageTests: XCTestCase {
             ),
             "This is your organization's total. Your own usage couldn't be "
                 + "matched to this organization — reconnect your account in "
-                + "Settings → Claude.ai."
-        )
-        XCTAssertEqual(
-            english.localizedString(
-                forKey: "cli.connect_extra_usage_hint",
-                value: nil,
-                table: nil
-            ),
-            "Connect your Claude Code account to see your own extra usage. "
-                + "If you're an admin, you'll see your organization's by "
-                + "default."
+                + "Settings → Claude Account."
         )
     }
 

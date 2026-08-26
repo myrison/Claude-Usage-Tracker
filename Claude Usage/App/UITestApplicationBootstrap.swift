@@ -1133,24 +1133,10 @@ private final class UITestMenuStatusController:
         controller.window.center()
         controller.window.makeKeyAndOrderFront(nil)
         settingsControllers.append(controller)
-        let action: String
-        switch destination {
-        case .providerAccount:
-            action = "settings.account"
-        case .appearance:
-            action = "settings.appearance"
-        case .cliAccount:
-            action = "settings.cli_account"
-        case .manageProfiles:
-            action = "settings.profiles"
-        case .defaultView:
-            action = "settings.default"
-        case .general:
-            action = "settings.general"
-        case .history:
-            action = "settings.history"
-        }
-        record(action, target: target)
+        record(
+            UITestSettingsRoute.recordedAction(for: destination),
+            target: target
+        )
     }
 
     private func currentProfile(

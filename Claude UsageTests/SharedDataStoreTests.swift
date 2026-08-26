@@ -57,6 +57,145 @@ final class SharedDataStoreTests: XCTestCase {
         XCTAssertTrue(sharedDataStore.hasCompletedSetup())
     }
 
+    func testClaudeAccountUpgradeClassificationIsRecordedOnce() {
+        let terminalOnlyID = UUID()
+        let browserOnlyID = UUID()
+        let terminalOnly = Profile(
+            id: terminalOnlyID,
+            name: "Legacy terminal",
+            cliCredentialsJSON:
+                #"{"claudeAiOauth":{"accessToken":"token"}}"#,
+            hasCliAccount: true
+        )
+        let browserOnly = Profile(
+            id: browserOnlyID,
+            name: "Browser",
+            claudeSessionKey: "session",
+            organizationId: "org"
+        )
+
+        XCTAssertEqual(
+            sharedDataStore.classifyClaudeAccountsForUpgradeOnce([
+                terminalOnly, browserOnly
+            ]),
+            [terminalOnlyID]
+        )
+        XCTAssertTrue(
+            sharedDataStore.wasTerminalOnlyAtClaudeAccountUpgrade(
+                terminalOnlyID
+            )
+        )
+
+        // A later profile must not be folded into the historical cohort.
+        let later = Profile(
+            name: "Later terminal",
+            cliCredentialsJSON:
+                #"{"claudeAiOauth":{"accessToken":"later"}}"#,
+            hasCliAccount: true
+        )
+        XCTAssertEqual(
+            sharedDataStore.classifyClaudeAccountsForUpgradeOnce([later]),
+            [terminalOnlyID]
+        )
+        XCTAssertFalse(
+            sharedDataStore.wasTerminalOnlyAtClaudeAccountUpgrade(later.id)
+        )
+    }
+
+    func testEmptyClaudeAccountUpgradeClassificationStillRunsOnlyOnce() {
+        XCTAssertEqual(
+            sharedDataStore.classifyClaudeAccountsForUpgradeOnce([]),
+            []
+        )
+        let later = Profile(
+            name: "Later terminal",
+            cliCredentialsJSON:
+                #"{"claudeAiOauth":{"accessToken":"later"}}"#,
+            hasCliAccount: true
+        )
+        XCTAssertEqual(
+            sharedDataStore.classifyClaudeAccountsForUpgradeOnce([later]),
+            []
+        )
+        XCTAssertFalse(
+            sharedDataStore.wasTerminalOnlyAtClaudeAccountUpgrade(later.id)
+        )
+    }
+
+    func testNonAuthoritativeUpgradeClassificationDefersUntilRecovery() {
+        let terminalOnly = Profile(
+            name: "Recovered terminal",
+            cliCredentialsJSON:
+                #"{"claudeAiOauth":{"accessToken":"recovered"}}"#,
+            hasCliAccount: true
+        )
+
+        XCTAssertEqual(
+            sharedDataStore.classifyClaudeAccountsForUpgradeOnce(
+                [terminalOnly],
+                isAuthoritative: false
+            ),
+            []
+        )
+        XCTAssertFalse(
+            defaults!.bool(forKey: "didClassifyClaudeAccountUpgradeV41")
+        )
+        XCTAssertNil(
+            defaults!.object(
+                forKey: "terminalOnlyClaudeAccountUpgradeProfileIDsV41"
+            )
+        )
+        XCTAssertEqual(
+            defaults!.stringArray(
+                forKey: "claudeAccountUpgradeBoundaryProfileIDsV41"
+            ),
+            [terminalOnly.id.uuidString]
+        )
+        XCTAssertEqual(
+            sharedDataStore.classifyClaudeAccountsForUpgradeOnce(
+                [terminalOnly],
+                isAuthoritative: true
+            ),
+            [terminalOnly.id]
+        )
+
+        let later = Profile(
+            name: "Later terminal",
+            cliCredentialsJSON:
+                #"{"claudeAiOauth":{"accessToken":"later"}}"#,
+            hasCliAccount: true
+        )
+        XCTAssertEqual(
+            sharedDataStore.classifyClaudeAccountsForUpgradeOnce(
+                [later],
+                isAuthoritative: true
+            ),
+            [terminalOnly.id]
+        )
+        XCTAssertFalse(
+            sharedDataStore.wasTerminalOnlyAtClaudeAccountUpgrade(later.id)
+        )
+    }
+
+    func testUnreadableProfileMetadataDefersBoundaryCapture() {
+        XCTAssertEqual(
+            sharedDataStore.classifyClaudeAccountsForUpgradeOnce(
+                [],
+                isProfileIdentitySetAuthoritative: false,
+                isAuthoritative: false
+            ),
+            []
+        )
+        XCTAssertNil(
+            defaults!.object(
+                forKey: "claudeAccountUpgradeBoundaryProfileIDsV41"
+            )
+        )
+        XCTAssertFalse(
+            defaults!.bool(forKey: "didClassifyClaudeAccountUpgradeV41")
+        )
+    }
+
     // MARK: - GitHub Star Prompt Tests
 
     func testFirstLaunchDate() {

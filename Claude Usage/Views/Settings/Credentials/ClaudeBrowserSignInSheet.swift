@@ -1,5 +1,5 @@
 //
-//  PersonalUsageView.swift
+//  ClaudeBrowserSignInSheet.swift
 //  Claude Usage - Claude.ai Personal Usage Tracking
 //
 //  Created by Claude Code on 2025-12-20.
@@ -40,17 +40,15 @@ struct WizardState {
     var hasConfirmedChromeContext = false
 }
 
-@MainActor
-private enum PersonalUsageAttemptGate {
-    static func targetIsStillCurrent(
+enum PersonalUsageAttemptGate {
+    static func targetIsAvailable(
         wizardState: WizardState,
-        profileManager: ProfileManager
+        profiles: [Profile]
     ) -> Bool {
         guard let targetID = wizardState.targetProfileID else { return false }
-        return profileManager.activeClaudeProfile?.id == targetID
-            && profileManager.profiles.contains(where: {
-                $0.id == targetID && $0.providerID == .claude
-            })
+        return profiles.contains(where: {
+            $0.id == targetID && $0.providerID == .claude
+        })
     }
 
     static func acceptsCompletion(
@@ -58,93 +56,43 @@ private enum PersonalUsageAttemptGate {
         targetID: UUID,
         generation: UUID,
         key: String,
-        profileManager: ProfileManager
+        profiles: [Profile]
     ) -> Bool {
         SessionKeyAttemptPolicy.acceptsCompletion(
             generation: generation,
             currentGeneration: wizardState.attempt.generation,
             keyMatches: wizardState.sessionKey == key,
             targetMatches: wizardState.targetProfileID == targetID
-                && targetIsStillCurrent(
+                && targetIsAvailable(
                     wizardState: wizardState,
-                    profileManager: profileManager
+                    profiles: profiles
                 )
         )
     }
 }
 
-/// Claude.ai personal usage tracking (free tier)
-struct PersonalUsageView: View {
+/// Reusable browser sign-in flow for one Claude profile.
+struct ClaudeBrowserSignInSheet: View {
     @StateObject private var profileManager = ProfileManager.shared
-    @State private var wizardState = WizardState()
-    @State private var currentCredentials: ProfileCredentials?
+    @State private var wizardState: WizardState
+    let targetProfileID: UUID
+    let onCompletion: () -> Void
     private let apiService = ClaudeAPIService()
+
+    init(targetProfileID: UUID, onCompletion: @escaping () -> Void) {
+        self.targetProfileID = targetProfileID
+        self.onCompletion = onCompletion
+        _wizardState = State(
+            initialValue: WizardState(targetProfileID: targetProfileID)
+        )
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.section) {
-                // Page Header
                 SettingsPageHeader(
-                    title: "personal.title".localized,
-                    subtitle: "personal.subtitle".localized
-                )
-
-                // Professional Status Card
-                HStack(spacing: DesignTokens.Spacing.medium) {
-                    Circle()
-                        .fill(statusDotColor)
-                        .frame(width: DesignTokens.StatusDot.standard, height: DesignTokens.StatusDot.standard)
-
-                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.extraSmall) {
-                        Text(statusTitle)
-                            .font(DesignTokens.Typography.bodyMedium)
-
-                        if let creds = currentCredentials, creds.hasClaudeAI {
-                            Text(
-                                isActiveCredentialSessionOnly
-                                    ? "personal.session_key_validated".localized
-                                    : "personal.session_key_stored".localized
-                            )
-                                .font(DesignTokens.Typography.captionMono)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-
-                    Spacer()
-
-                    // The credential works but is not in the Keychain, so it
-                    // is lost at quit unless this succeeds.
-                    if isActiveCredentialSessionOnly {
-                        Button(action: retryCredentialSave) {
-                            Text("personal.retry_save".localized)
-                                .font(DesignTokens.Typography.body)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.regular)
-                    }
-
-                    // Remove button integrated into status card
-                    if currentCredentials?.hasClaudeAI == true {
-                        Button(action: removeCredentials) {
-                            HStack(spacing: DesignTokens.Spacing.extraSmall) {
-                                Image(systemName: "trash")
-                                    .font(.system(size: DesignTokens.Icons.small))
-                                Text("common.remove".localized)
-                                    .font(DesignTokens.Typography.body)
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.regular)
-                        .foregroundColor(.red)
-                    }
-                }
-                .padding(DesignTokens.Spacing.medium)
-                .background(DesignTokens.Colors.cardBackground)
-                .cornerRadius(DesignTokens.Radius.card)
-                .overlay(
-                    RoundedRectangle(cornerRadius: DesignTokens.Radius.card)
-                        .strokeBorder(DesignTokens.Colors.cardBorder, lineWidth: 1)
+                    title: "claude_account.browser_sheet.title".localized,
+                    subtitle: "claude_account.browser_sheet.subtitle".localized
                 )
 
                 // Configuration Card Container
@@ -210,7 +158,7 @@ struct PersonalUsageView: View {
                             ConfirmStep(
                                 wizardState: $wizardState,
                                 apiService: apiService,
-                                onSave: { loadCurrentCredentials() }
+                                onSave: onCompletion
                             )
                         }
                     }
@@ -230,15 +178,6 @@ struct PersonalUsageView: View {
         }
         .onAppear {
             loadExistingConfiguration()
-            loadCurrentCredentials()
-        }
-        .onChange(of: profileManager.activeClaudeProfile?.id) { _, _ in
-            // Reload when profile changes
-            loadExistingConfiguration()
-            loadCurrentCredentials()
-
-            // Reset wizard state
-            wizardState = WizardState()
         }
     }
 
@@ -252,7 +191,11 @@ struct PersonalUsageView: View {
     }
 
     private func loadExistingConfiguration() {
-        guard let profile = profileManager.activeClaudeProfile else { return }
+        guard let profile = profileManager.profiles.first(where: {
+            $0.id == targetProfileID && $0.providerID == .claude
+        }) else { return }
+        wizardState.targetProfileID = profile.id
+        wizardState.targetProfileName = profile.name
 
         // Load existing credentials for comparison
         if let creds = try? ProfileStore.shared.loadProfileCredentials(profile.id) {
@@ -261,69 +204,6 @@ struct PersonalUsageView: View {
         }
     }
 
-    private func loadCurrentCredentials() {
-        guard let profile = profileManager.activeClaudeProfile else { return }
-        currentCredentials = try? ProfileStore.shared.loadProfileCredentials(profile.id)
-    }
-
-    /// True when the active Claude profile's credential is being held in
-    /// memory because secure storage refused it.
-    private var isActiveCredentialSessionOnly: Bool {
-        guard let id = profileManager.activeClaudeProfile?.id else {
-            return false
-        }
-        return profileManager.sessionOnlyCredentialProfileIDs.contains(id)
-    }
-
-    private var statusDotColor: Color {
-        guard currentCredentials?.hasClaudeAI == true else {
-            return Color.secondary.opacity(0.4)
-        }
-        return isActiveCredentialSessionOnly ? .orange : .green
-    }
-
-    private var statusTitle: String {
-        guard currentCredentials?.hasClaudeAI == true else {
-            return "general.not_connected".localized
-        }
-        return isActiveCredentialSessionOnly
-            ? "personal.connected_not_saved".localized
-            : "general.connected".localized
-    }
-
-    private func retryCredentialSave() {
-        profileManager.retrySessionOnlyCredentialSave(
-            profileID: profileManager.activeClaudeProfile?.id
-        )
-    }
-
-    private func removeCredentials() {
-        guard let profileId = profileManager.activeClaudeProfile?.id else {
-            LoggingService.shared.logError("PersonalUsageView: No active profile for removal")
-            return
-        }
-
-        LoggingService.shared.log("PersonalUsageView: Starting credential removal for profile \(profileId)")
-
-        do {
-            // Use ProfileManager's shared removal method
-            try profileManager.removeClaudeAICredentials(for: profileId)
-
-            // Reload UI to update the view
-            loadCurrentCredentials()
-
-            // Reset wizard
-            wizardState = WizardState()
-
-            LoggingService.shared.log("PersonalUsageView: Successfully removed Claude.ai credentials")
-
-        } catch {
-            let appError = AppError.wrap(error)
-            ErrorLogger.shared.log(appError, severity: .error)
-            ErrorPresenter.shared.showAlert(for: appError)
-            LoggingService.shared.logError("PersonalUsageView: Failed to remove credentials - \(appError.message)")
-        }
-    }
 }
 
 // MARK: - Step 1: Enter Key
@@ -375,10 +255,7 @@ struct EnterKeyStep: View {
                     cookieDomain: "claude.ai",
                     onSuccess: { result in
                         wizardState.showingAuthSheet = false
-                        replaceSessionKey(
-                            result.sessionKey,
-                            preserveCapturedTarget: true
-                        )
+                        replaceSessionKey(result.sessionKey)
                         wizardState.sessionKeyExpiryDate = result.expiryDate
                         testConnection()
                     },
@@ -432,8 +309,7 @@ struct EnterKeyStep: View {
 
         retireAttempt(
             clearKey: false,
-            clearChromeContext: false,
-            clearTarget: false
+            clearChromeContext: false
         )
         guard let target = capturedTargetIfStillCurrent() else { return }
         let generation = wizardState.attempt.generation
@@ -451,7 +327,7 @@ struct EnterKeyStep: View {
                         targetID: target.id,
                         generation: generation,
                         key: key,
-                        profileManager: .shared
+                        profiles: ProfileManager.shared.profiles
                     ) else { return }
                     guard SessionKeyAttemptPolicy.hasSelectableOrganization(
                         organizations.count
@@ -491,7 +367,7 @@ struct EnterKeyStep: View {
                         targetID: target.id,
                         generation: generation,
                         key: key,
-                        profileManager: .shared
+                        profiles: ProfileManager.shared.profiles
                     ) else { return }
                     let errorMessage = SetupErrorMessage.text(for: appError)
                     wizardState.validationState = .error(errorMessage)
@@ -501,11 +377,7 @@ struct EnterKeyStep: View {
     }
 
     private func beginChromeLaunch() -> UUID {
-        guard let target = ProfileManager.shared.activeClaudeProfile else {
-            retireAttempt(clearKey: false)
-            wizardState.validationState = .error(
-                "chrome_assisted.no_active_profile".localized
-            )
+        guard let target = capturedTargetIfAvailable() else {
             return wizardState.attempt.generation
         }
         retireAttempt(clearKey: false)
@@ -519,38 +391,26 @@ struct EnterKeyStep: View {
         wizardState.showingAuthSheet = true
     }
 
-    private func replaceSessionKey(
-        _ key: String,
-        preserveCapturedTarget: Bool = false
-    ) {
+    private func replaceSessionKey(_ key: String) {
         wizardState.sessionKey = key
-        retireAttempt(
-            clearKey: false,
-            clearTarget: !preserveCapturedTarget
-        )
+        retireAttempt(clearKey: false)
     }
 
     private func retireAttemptForKeyEdit() {
         retireAttempt(
             clearKey: false,
-            clearChromeContext: false,
-            clearTarget: false
+            clearChromeContext: false
         )
     }
 
     private func retireAttempt(
         clearKey: Bool,
-        clearChromeContext: Bool = true,
-        clearTarget: Bool = true
+        clearChromeContext: Bool = true
     ) {
         wizardState.attempt.invalidate()
         wizardState.validationState = .idle
         wizardState.testedOrganizations = []
         wizardState.selectedOrgId = nil
-        if clearTarget {
-            wizardState.targetProfileID = nil
-            wizardState.targetProfileName = nil
-        }
         if clearChromeContext {
             wizardState.launchedChromeProfileLabel = nil
             wizardState.hasConfirmedChromeContext = false
@@ -559,28 +419,19 @@ struct EnterKeyStep: View {
     }
 
     private func capturedTargetIfStillCurrent() -> Profile? {
-        if let targetID = wizardState.targetProfileID {
-            guard PersonalUsageAttemptGate.targetIsStillCurrent(
-                wizardState: wizardState,
-                profileManager: .shared
-            ), let target = ProfileManager.shared.profiles.first(where: {
-                $0.id == targetID && $0.providerID == .claude
-            }) else {
-                wizardState.validationState = .error(
-                    "chrome_assisted.profile_changed".localized
-                )
-                return nil
-            }
-            return target
-        }
-        guard let target = ProfileManager.shared.activeClaudeProfile else {
+        capturedTargetIfAvailable()
+    }
+
+    private func capturedTargetIfAvailable() -> Profile? {
+        guard let targetID = wizardState.targetProfileID,
+              let target = ProfileManager.shared.profiles.first(where: {
+                  $0.id == targetID && $0.providerID == .claude
+              }) else {
             wizardState.validationState = .error(
-                "chrome_assisted.no_active_profile".localized
+                "chrome_assisted.profile_changed".localized
             )
             return nil
         }
-        wizardState.targetProfileID = target.id
-        wizardState.targetProfileName = target.name
         return target
     }
 }
@@ -921,8 +772,7 @@ struct ConfirmStep: View {
               let profileId = wizardState.targetProfileID,
               let target = ProfileManager.shared.profiles.first(where: {
                   $0.id == profileId && $0.providerID == .claude
-              }),
-              ProfileManager.shared.activeClaudeProfile?.id == profileId else {
+              }) else {
             wizardState.validationState = .error(
                 "chrome_assisted.profile_changed".localized
             )
@@ -951,7 +801,7 @@ struct ConfirmStep: View {
                         targetID: target.id,
                         generation: generation,
                         key: key,
-                        profileManager: .shared
+                        profiles: ProfileManager.shared.profiles
                     )
                 }) else {
                     await MainActor.run { isSaving = false }
@@ -964,14 +814,14 @@ struct ConfirmStep: View {
                 try ProfileManager.shared.saveCredentials(
                     for: target.id,
                     credentials: creds,
-                    acceptingSessionOnly: acceptSessionOnly
+                    acceptingSessionOnly: acceptSessionOnly,
+                    browserCredentialSave: true
                 )
 
                 await MainActor.run {
                     guard wizardState.attempt.matches(generation),
                           wizardState.targetProfileID == target.id,
-                          wizardState.sessionKey == key,
-                          ProfileManager.shared.activeClaudeProfile?.id == target.id
+                          wizardState.sessionKey == key
                     else {
                         isSaving = false
                         return
@@ -1047,9 +897,9 @@ struct ConfirmStep: View {
             selectedOrganizationID: wizardState.selectedOrgId,
             chromeProfileLabel: wizardState.launchedChromeProfileLabel,
             chromeContextConfirmed: wizardState.hasConfirmedChromeContext,
-            targetMatches: PersonalUsageAttemptGate.targetIsStillCurrent(
+            targetMatches: PersonalUsageAttemptGate.targetIsAvailable(
                 wizardState: wizardState,
-                profileManager: .shared
+                profiles: ProfileManager.shared.profiles
             )
         )
     }
@@ -1060,6 +910,9 @@ struct ConfirmStep: View {
 // MARK: - Previews
 
 #Preview {
-    PersonalUsageView()
+    ClaudeBrowserSignInSheet(
+        targetProfileID: UUID(),
+        onCompletion: {}
+    )
         .frame(width: 520, height: 600)
 }

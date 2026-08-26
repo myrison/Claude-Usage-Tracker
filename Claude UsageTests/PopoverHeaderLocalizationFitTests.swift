@@ -70,6 +70,21 @@ final class PopoverHeaderLocalizationFitTests: XCTestCase {
         ).width
     }
 
+    private func wrappedHeight(
+        _ text: String,
+        width: CGFloat,
+        size: CGFloat,
+        weight: NSFont.Weight = .regular
+    ) -> CGFloat {
+        (text as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [
+                .font: NSFont.systemFont(ofSize: size, weight: weight)
+            ]
+        ).height
+    }
+
     /// Every health verdict the account row can carry.
     private static let healthKeys = [
         "popover.normalized.health.healthy",
@@ -129,6 +144,31 @@ final class PopoverHeaderLocalizationFitTests: XCTestCase {
         }
     }
 
+    func testSetupIncompleteBannerFitsItsFourLineSurface() throws {
+        let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        let fourLineHeight = ceil(font.ascender - font.descender
+            + font.leading) * 4
+        for locale in Self.locales {
+            let message = try string(
+                "popover.banner.setup_incomplete",
+                locale
+            )
+            let measured = wrappedHeight(
+                message,
+                width: Self.bannerTextWidth,
+                size: 11,
+                weight: .medium
+            )
+            XCTAssertLessThanOrEqual(
+                measured,
+                fourLineHeight,
+                "\(locale) truncates setup-incomplete banner — "
+                    + "\(Int(measured))pt high against a four-line "
+                    + "\(Int(fourLineHeight))pt limit"
+            )
+        }
+    }
+
     func testAccountHealthRowFitsInEveryLocale() throws {
         for locale in Self.locales {
             let label = try string(
@@ -150,6 +190,50 @@ final class PopoverHeaderLocalizationFitTests: XCTestCase {
                         + "\(Int(total))pt in \(Int(Self.availableWidth))pt"
                 )
             }
+        }
+    }
+
+    func testClaudeAccountSidebarBadgeFitsInEveryLocale() throws {
+        // Exact production geometry: `ProfileSectionContainer` consumes 12pt
+        // on each sidebar edge; `CredentialMiniCard` adds 4pt outer and 8pt
+        // inner padding on each edge; its leading icon is 12pt; and the
+        // icon/VStack plus VStack/Spacer boundaries each consume the real 8pt
+        // HStack gap. The title and badge are vertically stacked, so each gets
+        // this leading-column width independently. The badge's text also pays
+        // its own 5pt capsule inset on each side.
+        let sidebarWidth: CGFloat = 190
+        let containerInsets: CGFloat = 2 * 12
+        let rowInsets: CGFloat = 2 * 8
+        let cardOuterInsets: CGFloat = 2 * 4
+        let cardInnerInsets: CGFloat = 2 * 8
+        let iconWidth: CGFloat = 12
+        let hStackGaps: CGFloat = 2 * 8
+        let badgeInsets: CGFloat = 2 * 5
+        let leadingColumnWidth = sidebarWidth - containerInsets - rowInsets
+            - cardOuterInsets - cardInnerInsets - iconWidth - hStackGaps
+        let badgeTextWidth = leadingColumnWidth - badgeInsets
+        for locale in Self.locales {
+            let title = try string("section.claude_account_title", locale)
+            let badge = try string(
+                "claude_account.incomplete_badge",
+                locale
+            )
+            let titleWidth = width(title, size: 11, weight: .medium)
+            let badgeWidth = width(badge, size: 8, weight: .semibold)
+            XCTAssertLessThanOrEqual(
+                titleWidth,
+                leadingColumnWidth,
+                "\(locale) truncates Claude Account — "
+                    + "\(Int(titleWidth))pt in "
+                    + "\(Int(leadingColumnWidth))pt"
+            )
+            XCTAssertLessThanOrEqual(
+                badgeWidth,
+                badgeTextWidth,
+                "\(locale) truncates Incomplete badge — "
+                    + "\(Int(badgeWidth))pt in "
+                    + "\(Int(badgeTextWidth))pt"
+            )
         }
     }
 

@@ -213,6 +213,21 @@ final class ProfileProviderCoreTests: HostedAppTestCase {
         )
     }
 
+    func testCodexProfileRejectsClaudeBrowserCredentialSaveMetadata() {
+        let invalid = Profile(
+            name: "Codex with Claude metadata",
+            providerConfiguration: .codex(.init()),
+            claudeBrowserCredentialSavedAt: Date()
+        )
+
+        XCTAssertThrowsError(try JSONEncoder().encode(invalid)) { error in
+            XCTAssertEqual(
+                error as? ProfileProviderConfigurationError,
+                .claudeStateOnCodexProfile(invalid.id)
+            )
+        }
+    }
+
     @MainActor
     func testCanonicalizerExpandsTildeResolvesSymlinkAndDoesNotReadAuth() throws {
         let root = try makeTemporaryDirectory()
@@ -2947,6 +2962,49 @@ final class ProfileProviderCoreTests: HostedAppTestCase {
         )
         XCTAssertEqual(retried.claudeSessionKey, "retry-claude")
         XCTAssertEqual(retried.refreshInterval, 88)
+        XCTAssertTrue(source.cleaned)
+        XCTAssertTrue(defaults.bool(forKey: "didMigrateToProfilesV3"))
+    }
+
+    @MainActor
+    func testStartupProfileMigrationReportsFailureUntilRecovery() throws {
+        let (defaults, suite) = try HostedTestDefaults.defaults(
+            "ProfileProviderCoreTests"
+        )
+        defer { HostedTestDefaults.finish(defaults, suiteName: suite) }
+        HostedTestDefaults.reset(defaults, suiteName: suite)
+        let secrets = ProviderSecretStore()
+        secrets.writeError = ProviderTestError.expected
+        let store = retain(makeIsolatedProfileStore(
+            defaults: defaults,
+            secretStore: secrets,
+            usageFileStore: ProviderUsageStore()
+        ))
+        let profile = Profile(name: "Migration owner")
+        try seedProfilesForTesting([profile], in: store)
+        let source = ProviderLegacySource(
+            snapshot: .init(
+                globalClaudeSessionKey: "retry-at-startup",
+                fileClaudeSessionKey: nil,
+                globalAPISessionKey: nil,
+                defaultsAPISessionKey: nil
+            )
+        )
+        let migration = retain(ProfileMigrationService(
+            defaults: defaults,
+            profileStore: store,
+            credentialMigration: retain(KeychainMigrationService(
+                source: source,
+                defaults: defaults
+            )),
+            legacySettings: ProviderLegacySettings()
+        ))
+
+        XCTAssertFalse(migration.migrateIfNeeded())
+        XCTAssertFalse(source.cleaned)
+
+        secrets.writeError = nil
+        XCTAssertTrue(migration.migrateIfNeeded())
         XCTAssertTrue(source.cleaned)
         XCTAssertTrue(defaults.bool(forKey: "didMigrateToProfilesV3"))
     }

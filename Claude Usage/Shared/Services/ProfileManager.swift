@@ -199,6 +199,18 @@ class ProfileManager: ObservableObject {
     /// refused it. These are lost at quit, so the UI has to say so — see the
     /// popover banner, the Settings status card, and the quit-time guard.
     @Published private(set) var sessionOnlyCredentialProfileIDs: Set<UUID> = []
+    /// Browser credentials held only in memory. Unlike the aggregate set
+    /// above, this drives only the browser-specific Settings warning.
+    @Published private(set) var sessionOnlyClaudeAICredentialProfileIDs:
+        Set<UUID> = []
+    /// Whether the most recent profile load fully resolved every Claude
+    /// credential locator and can safely commit the one-time 4.1 cohort.
+    @Published private(set) var profileLoadIsAuthoritativeForUpgradeClassification = false
+    /// The synchronous credential-state snapshot consumed by account UI.
+    /// It changes in the same main-actor transaction as `profiles`, so a
+    /// refresh captured before a repair cannot reintroduce stale setup UI.
+    @Published private(set) var claudeSetupStateSnapshots:
+        [UUID: ClaudeSetupState] = [:]
 
     private let profileStore: ProfileStore
     private let historyService: any ProfileHistoryDeleting
@@ -208,6 +220,10 @@ class ProfileManager: ObservableObject {
     private let lifecycleEventSink: ProfileLifecycleEventSink
     private let postClaudeCreationMigration: (UUID) throws -> Profile
     private let now: () -> Date
+    private var classifyClaudeAccountsForUpgrade:
+        (([Profile], Bool, Bool) -> Void)?
+    private var startupMigrationsAllowUpgradeClassification = true
+    private var profileLoadHasAuthoritativeIdentitySet = false
 
     private var switchingSemaphore = false
 
@@ -241,34 +257,76 @@ class ProfileManager: ObservableObject {
         self.now = now
 
         let store = self.profileStore
-        sessionOnlyCredentialProfileIDs =
-            store.profilesWithSessionOnlyCredentials
-        store.sessionOnlySecretsDidChange = { [weak self] held in
+        synchronizeSessionOnlyCredentialProfileIDs()
+        store.sessionOnlySecretsDidChange = { [weak self] held, browserHeld in
             guard let self else { return }
             Task { @MainActor in
                 self.sessionOnlyCredentialProfileIDs = held
+                self.sessionOnlyClaudeAICredentialProfileIDs = browserHeld
             }
         }
+    }
+
+    private func loadProfilesFromStore() -> [Profile] {
+        let outcome = profileStore.loadProfilesWithOutcome()
+        profileLoadHasAuthoritativeIdentitySet =
+            outcome.isProfileIdentitySetAuthoritative
+        profileLoadIsAuthoritativeForUpgradeClassification =
+            outcome.isAuthoritativeForUpgradeClassification
+        return outcome.profiles
+    }
+
+    private func synchronizeSessionOnlyCredentialProfileIDs() {
+        sessionOnlyCredentialProfileIDs =
+            profileStore.profilesWithSessionOnlyCredentials
+        sessionOnlyClaudeAICredentialProfileIDs =
+            profileStore.profilesWithSessionOnlyClaudeAICredentials
+    }
+
+    func configureClaudeAccountUpgradeClassification(
+        startupMigrationsSucceeded: Bool,
+        classifier: @escaping ([Profile], Bool, Bool) -> Void
+    ) {
+        startupMigrationsAllowUpgradeClassification =
+            startupMigrationsSucceeded
+        classifyClaudeAccountsForUpgrade = classifier
+    }
+
+    private func classifyClaudeAccountsForUpgradeAfterLoad() {
+        classifyClaudeAccountsForUpgrade?(
+            profiles,
+            profileLoadHasAuthoritativeIdentitySet,
+            startupMigrationsAllowUpgradeClassification
+                && profileLoadIsAuthoritativeForUpgradeClassification
+        )
     }
 
     /// Re-attempts secure storage for held credentials. Returns true when
     /// nothing is left being held for the requested scope.
     @discardableResult
     func retrySessionOnlyCredentialSave(profileID: UUID? = nil) -> Bool {
+        let browserTargets =
+            profileStore.profilesWithSessionOnlyClaudeAICredentials
+                .filter { profileID == nil || $0 == profileID }
         let cleared = profileStore.retrySessionOnlyPersistence(
             profileID: profileID
         )
-        sessionOnlyCredentialProfileIDs =
-            profileStore.profilesWithSessionOnlyCredentials
+        synchronizeSessionOnlyCredentialProfileIDs()
+        let remainingBrowserTargets =
+            profileStore.profilesWithSessionOnlyClaudeAICredentials
+        for id in browserTargets where !remainingBrowserTargets.contains(id) {
+            stampBrowserCredentialSavedAt(for: id)
+        }
         return cleared
     }
 
     // MARK: - Initialization
 
     func loadProfiles() {
-        profiles = profileStore.loadProfiles()
-        sessionOnlyCredentialProfileIDs =
-            profileStore.profilesWithSessionOnlyCredentials
+        profiles = loadProfilesFromStore()
+        synchronizeClaudeSetupStateSnapshots()
+        synchronizeSessionOnlyCredentialProfileIDs()
+        classifyClaudeAccountsForUpgradeAfterLoad()
 
         // A pre-upgrade install has only the single legacy slot. Both
         // providers get a chance to claim it against their own candidates —
@@ -782,7 +840,7 @@ class ProfileManager: ObservableObject {
         } catch {
             // Rollback recovery may have completed forward on relaunch. Reload
             // the authoritative metadata before surfacing the failure.
-            profiles = profileStore.loadProfiles()
+            profiles = loadProfilesFromStore()
             if let activeID = activeProfile?.id {
                 activeProfile = profiles.first(where: { $0.id == activeID })
             }
@@ -846,6 +904,7 @@ class ProfileManager: ObservableObject {
         }
 
         profiles[index] = profile
+        synchronizeClaudeSetupStateSnapshot(for: profile)
 
         if activeProfile?.id == profile.id {
             activeProfile = profile
@@ -1163,7 +1222,7 @@ class ProfileManager: ObservableObject {
                 try activationClaudeEffects
                     .resyncBeforeSwitching(currentProfile.id)
                 // Reload profiles to get the updated data in memory
-                profiles = profileStore.loadProfiles()
+                profiles = loadProfilesFromStore()
                 LoggingService.shared.log("✓ Re-synced current profile before switching")
             } catch {
                 LoggingService.shared.logError("Failed to re-sync current profile (non-fatal)", error: error)
@@ -1171,7 +1230,7 @@ class ProfileManager: ObservableObject {
         }
 
         // Reload profiles from disk to get latest data (including any resyncs from other profiles)
-        profiles = profileStore.loadProfiles()
+        profiles = loadProfilesFromStore()
 
         // Get the updated target profile from the reloaded data
         guard let updatedProfile = profiles.first(where: { $0.id == id }) else {
@@ -1230,7 +1289,8 @@ class ProfileManager: ObservableObject {
     func saveCredentials(
         for profileId: UUID,
         credentials: ProfileCredentials,
-        acceptingSessionOnly: Bool = false
+        acceptingSessionOnly: Bool = false,
+        browserCredentialSave: Bool = false
     ) throws {
         guard let index = profiles.firstIndex(where: { $0.id == profileId }) else {
             throw ProfileStoreError.profileNotFound(profileId)
@@ -1243,7 +1303,20 @@ class ProfileManager: ObservableObject {
             || previous.apiOrganizationId != credentials.apiOrganizationId
             || previous.cliCredentialsJSON != credentials.cliCredentialsJSON
 
-        if acceptingSessionOnly {
+        let savedAt = browserCredentialSave && !acceptingSessionOnly
+            ? now()
+            : nil
+        if let savedAt {
+            var updated = profiles[index]
+            updated.claudeSessionKey = credentials.claudeSessionKey
+            updated.organizationId = credentials.organizationId
+            updated.apiSessionKey = credentials.apiSessionKey
+            updated.apiOrganizationId = credentials.apiOrganizationId
+            updated.apiSessionKeyExpiry = credentials.apiSessionKeyExpiry
+            updated.cliCredentialsJSON = credentials.cliCredentialsJSON
+            updated.claudeBrowserCredentialSavedAt = savedAt
+            try profileStore.saveProfileUpdate(updated)
+        } else if acceptingSessionOnly {
             try profileStore.saveProfileCredentialsAcceptingSessionOnly(
                 profileId,
                 credentials: credentials
@@ -1254,8 +1327,7 @@ class ProfileManager: ObservableObject {
                 credentials: credentials
             )
         }
-        sessionOnlyCredentialProfileIDs =
-            profileStore.profilesWithSessionOnlyCredentials
+        synchronizeSessionOnlyCredentialProfileIDs()
 
         profiles[index].claudeSessionKey = credentials.claudeSessionKey
         profiles[index].organizationId = credentials.organizationId
@@ -1263,13 +1335,35 @@ class ProfileManager: ObservableObject {
         profiles[index].apiOrganizationId = credentials.apiOrganizationId
         profiles[index].apiSessionKeyExpiry = credentials.apiSessionKeyExpiry
         profiles[index].cliCredentialsJSON = credentials.cliCredentialsJSON
+        if let savedAt {
+            profiles[index].claudeBrowserCredentialSavedAt = savedAt
+        } else if browserCredentialSave && acceptingSessionOnly {
+            // The replacement now in use exists only in memory. Keeping the
+            // previous durable credential's date here would label this new,
+            // unsaved sign-in with a save that never happened. The ProfileStore
+            // intentionally retains the old persisted metadata until Retry
+            // Save succeeds, so a failed session-only attempt does not rewrite
+            // durable history.
+            profiles[index].claudeBrowserCredentialSavedAt = nil
+        }
 
         if activeProfile?.id == profileId {
             activeProfile = profiles[index]
         }
+        synchronizeClaudeSetupStateSnapshot(for: profiles[index])
         if requestInputsChanged {
             postCredentialChange(profileID: profileId, component: .all)
         }
+    }
+
+    private func stampBrowserCredentialSavedAt(for profileId: UUID) {
+        guard let index = profiles.firstIndex(where: { $0.id == profileId })
+        else { return }
+        profiles[index].claudeBrowserCredentialSavedAt = now()
+        if activeProfile?.id == profileId {
+            activeProfile = profiles[index]
+        }
+        profileStore.saveProfiles(profiles)
     }
 
     /// Removes Claude.ai credentials for a profile
@@ -1371,6 +1465,7 @@ class ProfileManager: ObservableObject {
         if component == .claude {
             profiles[index].claudeSessionKey = nil
             profiles[index].organizationId = nil
+            profiles[index].claudeBrowserCredentialSavedAt = nil
             profiles[index].claudeUsage = nil
         } else {
             profiles[index].apiSessionKey = nil
@@ -1382,6 +1477,30 @@ class ProfileManager: ObservableObject {
         if activeProfile?.id == profileID {
             activeProfile = profiles[index]
         }
+        synchronizeClaudeSetupStateSnapshot(for: profiles[index])
+    }
+
+    func claudeSetupState(for profile: Profile) -> ClaudeSetupState? {
+        guard profile.providerID == .claude else { return nil }
+        return claudeSetupStateSnapshots[profile.id]
+            ?? ClaudeSetupState.of(profile)
+    }
+
+    private func synchronizeClaudeSetupStateSnapshot(for profile: Profile) {
+        if profile.providerID == .claude {
+            claudeSetupStateSnapshots[profile.id] = ClaudeSetupState.of(profile)
+        } else {
+            claudeSetupStateSnapshots.removeValue(forKey: profile.id)
+        }
+    }
+
+    private func synchronizeClaudeSetupStateSnapshots() {
+        claudeSetupStateSnapshots = Dictionary(
+            uniqueKeysWithValues: profiles.compactMap { profile in
+                guard profile.providerID == .claude else { return nil }
+                return (profile.id, ClaudeSetupState.of(profile))
+            }
+        )
     }
 
     private func postCredentialChange(

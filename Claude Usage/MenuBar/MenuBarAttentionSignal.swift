@@ -50,6 +50,9 @@ enum MenuBarAttentionSignal {
         /// The Claude Code CLI sign-in. It produces exactly one thing: the
         /// member's own extra-usage figure. Everything else keeps working.
         case claudeCode
+        /// A legacy terminal-only profile will go silent when that sign-in
+        /// lapses because no browser sign-in exists to renew it.
+        case setupIncomplete
     }
 
     /// - Parameters:
@@ -68,15 +71,17 @@ enum MenuBarAttentionSignal {
     static func attention(
         cliSignInIssue: ClaudeUsage.PersonalExtraUsageIssue?,
         hasCredentialError: Bool,
-        healthStatus: ProviderHealthStatus?
+        healthStatus: ProviderHealthStatus?,
+        setupState: ClaudeSetupState? = nil
     ) -> Credential? {
-        // claude.ai first, so that when both credentials are broken at once
-        // the mark drawn and the words spoken both name the bigger loss.
-        // This is the same precedence `LegacyPopoverBanner.resolve` already
-        // applies, for the same reason: the claude.ai credential produces
-        // every number on screen, the Claude Code one produces a single row.
-        // Two surfaces disagreeing about which failure matters more would be
-        // worse than either ordering.
+        // A terminal-only profile is incomplete regardless of which generic
+        // refresh error happens to be visible at the same time. Match the
+        // popover banner so the icon and its repair destination keep naming
+        // the missing browser sign-in until that setup step is completed.
+        if setupState == .terminalOnly {
+            return .setupIncomplete
+        }
+
         if hasCredentialError { return .claudeAI }
 
         // Exhaustive on purpose, with no `default:`, matching the discipline

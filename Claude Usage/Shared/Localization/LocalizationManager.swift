@@ -158,8 +158,6 @@ enum LocalizationKey: String {
     case wizardSaveConfiguration = "wizard.save_configuration"
 
     // MARK: - CLI Account
-    case cliTitle = "cli.title"
-    case cliSubtitle = "cli.subtitle"
     case cliSynced = "cli.synced"
     case cliNotSynced = "cli.not_synced"
     case cliAccountDetails = "cli.account_details"

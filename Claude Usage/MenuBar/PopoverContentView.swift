@@ -24,24 +24,14 @@ struct VisualEffectBackground: NSViewRepresentable {
 struct PopoverNavigationActions {
     let manageProfiles: () -> Void
     let preferences: () -> Void
-    /// Settings → CLI Account, where a Claude Code account gets linked.
-    let cliAccount: () -> Void
-    /// Settings → Claude.ai, where the profile's claude.ai organization link
-    /// gets reconnected.
-    let claudeAIAccount: () -> Void
+    /// Settings → Claude Account for either sign-in remedy.
+    let claudeAccount: (UUID?) -> Void
 }
 
 enum LegacyPopoverBanner: Equatable {
     enum Action: Equatable {
         case preferences
-        /// Settings → Claude.ai, where the session key lives. Distinct from
-        /// `preferences` because "open Settings" is not an answer when the
-        /// user has two unrelated credentials and only one of them is broken.
-        case claudeAIAccount
-        /// Settings → CLI Account, where the Claude Code sign-in lives. The
-        /// other half of the same distinction: the two credentials fail
-        /// independently and each has its own screen.
-        case cliAccount
+        case claudeAccount
         case refresh
         case retryCredentialSave
     }
@@ -96,6 +86,7 @@ enum LegacyPopoverBanner: Equatable {
     /// lost at quit.
     case credentialsNotSaved(count: Int)
     case credentialError
+    case setupIncomplete
     /// The profile's Claude Code account is signed out or its sign-in no
     /// longer works. Ranked below `credentialError` on purpose: the claude.ai
     /// credential produces every number on screen, this one produces a single
@@ -115,12 +106,14 @@ enum LegacyPopoverBanner: Equatable {
             // CLI credential. Sending the user to Settings at large let them
             // re-sync the CLI account instead, which can never clear this
             // banner no matter how many times it succeeds.
-            return .claudeAIAccount
+            return .claudeAccount
+        case .setupIncomplete:
+            return .claudeAccount
         case .cliSignInBroken:
             // The mirror image of the case above, and the same trap: Settings
             // at large would let someone update their claude.ai session key
             // and watch a Claude Code complaint survive it untouched.
-            return .cliAccount
+            return .claudeAccount
         case .refreshFailed, .stale:
             return .refresh
         }
@@ -135,6 +128,8 @@ enum LegacyPopoverBanner: Equatable {
             )
         case .credentialError:
             return "popover.banner.credentials_expired".localized
+        case .setupIncomplete:
+            return "popover.banner.setup_incomplete".localized
         case .cliSignInBroken(let problem):
             // States the account fact, not the extra-usage consequence: the
             // grey footnote at the bottom of the popover already said "your
@@ -171,6 +166,7 @@ enum LegacyPopoverBanner: Equatable {
     static func resolve(
         sessionOnlyCredentialCount: Int = 0,
         hasCredentialError: Bool,
+        setupState: ClaudeSetupState? = nil,
         /// The profile's own Claude Code verdict, straight off the last
         /// reading. Defaulted so the call sites that are only exercising the
         /// claude.ai-side precedence don't have to restate "no CLI problem";
@@ -184,6 +180,9 @@ enum LegacyPopoverBanner: Equatable {
             return .credentialsNotSaved(
                 count: sessionOnlyCredentialCount
             )
+        }
+        if setupState == .terminalOnly {
+            return .setupIncomplete
         }
         if hasCredentialError {
             return .credentialError
@@ -318,8 +317,7 @@ struct PopoverContentView: View {
         onRefresh: @escaping () -> Void,
         onManageProfiles: @escaping () -> Void,
         onPreferences: @escaping () -> Void,
-        onCLIAccount: @escaping () -> Void,
-        onClaudeAIAccount: @escaping () -> Void,
+        onCLIAccount: @escaping (UUID?) -> Void,
         onCredentialsBannerTap: @escaping (UUID?) -> Void
     ) {
         self.manager = manager
@@ -330,8 +328,7 @@ struct PopoverContentView: View {
         navigationActions = PopoverNavigationActions(
             manageProfiles: onManageProfiles,
             preferences: onPreferences,
-            cliAccount: onCLIAccount,
-            claudeAIAccount: onClaudeAIAccount
+            claudeAccount: onCLIAccount
         )
         self.onCredentialsBannerTap = onCredentialsBannerTap
     }
@@ -469,6 +466,11 @@ struct PopoverContentView: View {
                 sessionOnlyCredentialCount:
                     profileManager.sessionOnlyCredentialProfileIDs.count,
                 hasCredentialError: manager.hasCredentialError,
+                setupState: displayedProfile.flatMap {
+                    manager.profileUsagePresentations[$0.id]?
+                        .claudeSetupState
+                        ?? profileManager.claudeSetupState(for: $0)
+                },
                 cliSignInIssue: presentation.legacyClaudeUsage?
                     .personalExtraUsageIssue,
                 consecutiveRefreshFailures:
@@ -504,8 +506,12 @@ struct PopoverContentView: View {
                     // notice from an already-linked profile would bury a
                     // broken sign-in rather than surface it. Which of the
                     // three explanations appears is decided from the data.
-                    onConnectCLIAccount: navigationActions.cliAccount,
-                    onConnectClaudeAIAccount: navigationActions.claudeAIAccount
+                    onConnectCLIAccount: {
+                        navigationActions.claudeAccount(displayedProfile?.id)
+                    },
+                    onConnectClaudeAIAccount: {
+                        navigationActions.claudeAccount(displayedProfile?.id)
+                    }
                 )
             }
         }
@@ -569,6 +575,14 @@ struct PopoverContentView: View {
                     color: .orange,
                     onTap: { onCredentialsBannerTap(displayedProfile?.id) }
                 )
+            case .setupIncomplete:
+                StatusBannerView(
+                    icon: "exclamationmark.triangle.fill",
+                    message: banner.message,
+                    color: .red,
+                    lineLimit: 4,
+                    onTap: { onCredentialsBannerTap(displayedProfile?.id) }
+                )
             case .cliSignInBroken:
                 StatusBannerView(
                     icon: "person.crop.circle.badge.exclamationmark",
@@ -579,7 +593,9 @@ struct PopoverContentView: View {
                     // claude.ai banner above was fixed for: the user arrives
                     // at a screen with nothing on it that can clear what they
                     // just read.
-                    onTap: navigationActions.cliAccount
+                    onTap: {
+                        navigationActions.claudeAccount(displayedProfile?.id)
+                    }
                 )
             case .refreshFailed:
                 ExpandableStatusBanner(
@@ -1281,6 +1297,7 @@ struct StatusBannerView: View {
     let icon: String
     let message: String
     let color: Color
+    var lineLimit: Int = 2
     var onTap: (() -> Void)? = nil
 
     var body: some View {
@@ -1291,7 +1308,7 @@ struct StatusBannerView: View {
             Text(message)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.primary)
-                .lineLimit(2)
+                .lineLimit(lineLimit)
                 // Without `.fixedSize` here the text keeps its single-line
                 // ideal width and `lineLimit(2)` never gets a second line to
                 // use; the explicit `maxWidth: .infinity` frame below is what
@@ -1482,6 +1499,8 @@ extension NormalizedUsagePresentation {
             return self
         case .credentialError:
             kindToStrip = .unauthenticated
+        case .setupIncomplete:
+            return self
         case .cliSignInBroken:
             // Nothing to strip. The `.degraded` notice this coexists with is
             // raised by any degraded cause, not just this one, so removing it

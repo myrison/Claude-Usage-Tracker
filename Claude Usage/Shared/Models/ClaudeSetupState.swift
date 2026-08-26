@@ -1,9 +1,11 @@
 //
+
+import UsageCore
 //  ClaudeSetupState.swift
 //  Claude Usage
 //
 
-enum ClaudeSetupState: Equatable {
+enum ClaudeSetupState: Equatable, Sendable {
     case complete
     case browserOnly
     case terminalOnly
@@ -23,5 +25,15 @@ enum ClaudeSetupState: Equatable {
         case (false, false):
             return .none
         }
+    }
+}
+
+enum ClaudeAccountAttention {
+    static func isSetupIncomplete(
+        _ profile: Profile,
+        snapshot: ClaudeSetupState? = nil
+    ) -> Bool {
+        profile.providerID == .claude
+            && (snapshot ?? ClaudeSetupState.of(profile)) == .terminalOnly
     }
 }
