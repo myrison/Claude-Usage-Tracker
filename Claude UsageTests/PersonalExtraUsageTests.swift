@@ -2396,6 +2396,302 @@ final class PersonalExtraUsageTests: XCTestCase {
         XCTAssertEqual(usage.sessionPercentage, 0)
     }
 
+    func testCancellingTerminalPreparationStillStoresAndMirrorsRotation()
+        async throws
+    {
+        let expired = Self.credentialsJSON(expiresAt: 1_000)
+        let profile = terminalOnlyProfile(credentialsJSON: expired)
+        let store = makeIsolatedProfileStore()
+        try seedProfilesForTesting([profile], in: store)
+        try store.saveCLIProfileCredential(expired, for: profile.id)
+        let manager = ProfileManager(profileStore: store)
+        manager.profiles = [profile]
+        let renewals = RenewedCredentialRecorder()
+        var logMessages: [String] = []
+        let keychain = TerminalRenewalSecurityRunner(holding: expired)
+        let cliSync = ClaudeCodeSyncService(
+            profileStore: store,
+            systemCredentialsReader: { expired },
+            securityRunner: keychain
+        )
+        let service = ClaudeAPIService(
+            profileManager: manager,
+            systemCredentialsReader: { nil },
+            renewedCredentialWriter: { renewal, profileID in
+                renewals.record(
+                    renewal.credentialsJSON,
+                    rotatedFrom: renewal.rotatedFrom,
+                    for: profileID
+                )
+                try cliSync.saveRefreshedCredentials(
+                    renewal.credentialsJSON,
+                    for: profileID,
+                    rotatedFrom: renewal.rotatedFrom
+                )
+            },
+            loggingService: LoggingService { logMessages.append($0) }
+        )
+        let refreshStarted = expectation(description: "token refresh started")
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            holdTokenRefreshResponse: true,
+            onTokenRefreshStarted: { refreshStarted.fulfill() }
+        )
+
+        let cancelledWaitEnded = expectation(
+            description: "cancelled preparation stopped waiting"
+        )
+        let cancelledPreparation = Task { @MainActor in
+            defer { cancelledWaitEnded.fulfill() }
+            try await service.captureUsageRequestPreparingTerminalSignIn(
+                for: profile
+            )
+        }
+        await fulfillment(of: [refreshStarted], timeout: 2)
+        cancelledPreparation.cancel()
+        await fulfillment(of: [cancelledWaitEnded], timeout: 2)
+        StubClaudeEndpointsURLProtocol.releaseTokenRefreshResponse()
+        do {
+            _ = try await cancelledPreparation.value
+            XCTFail("the cancelled owner must stop waiting")
+        } catch {
+            XCTAssertTrue(cancelledPreparation.isCancelled)
+        }
+
+        let laterCapture = try await service
+            .captureUsageRequestPreparingTerminalSignIn(for: profile)
+
+        XCTAssertTrue(laterCapture.capturesOAuthToken("renewed-access"))
+        XCTAssertEqual(renewals.writes.count, 1)
+        XCTAssertTrue(
+            try XCTUnwrap(
+                store.loadProfileCredentials(profile.id).cliCredentialsJSON
+            ).contains(#""accessToken":"renewed-access""#)
+        )
+        let keychainWrite = try XCTUnwrap(keychain.invocations.last)
+        XCTAssertEqual(keychainWrite.first, "add-generic-password")
+        XCTAssertTrue(
+            keychainWrite.contains { $0.contains("renewed-access") }
+        )
+        XCTAssertTrue(
+            logMessages.contains(
+                "Finished renewing the terminal sign-in for Claude Code "
+                    + "account 'fixture-account' after its refresh job was "
+                    + "cancelled; the rotated login was stored."
+            )
+        )
+    }
+
+    func testConcurrentTerminalPreparationWaitersShareOneTokenRefresh()
+        async throws
+    {
+        let expired = Self.credentialsJSON(expiresAt: 1_000)
+        let profile = terminalOnlyProfile(credentialsJSON: expired)
+        let store = makeIsolatedProfileStore()
+        try seedProfilesForTesting([profile], in: store)
+        try store.saveCLIProfileCredential(expired, for: profile.id)
+        let manager = ProfileManager(profileStore: store)
+        manager.profiles = [profile]
+        let renewals = RenewedCredentialRecorder()
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            renewals: renewals
+        )
+        let refreshStarted = expectation(description: "token refresh started")
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            holdTokenRefreshResponse: true,
+            onTokenRefreshStarted: { refreshStarted.fulfill() }
+        )
+
+        let first = Task { @MainActor in
+            try await service.captureUsageRequestPreparingTerminalSignIn(
+                for: profile
+            )
+        }
+        await fulfillment(of: [refreshStarted], timeout: 2)
+        let second = Task { @MainActor in
+            try await service.captureUsageRequestPreparingTerminalSignIn(
+                for: profile
+            )
+        }
+        await Task.yield()
+        StubClaudeEndpointsURLProtocol.releaseTokenRefreshResponse()
+
+        let firstRequest = try await first.value
+        let secondRequest = try await second.value
+        XCTAssertTrue(firstRequest.capturesOAuthToken("renewed-access"))
+        XCTAssertTrue(secondRequest.capturesOAuthToken("renewed-access"))
+        XCTAssertEqual(
+            StubClaudeEndpointsURLProtocol.requestedURLs.filter {
+                $0 == ClaudeCLITokenRefresher.tokenEndpoint
+            }.count,
+            1
+        )
+        XCTAssertEqual(renewals.writes.count, 1)
+    }
+
+    func testCancelledPersonalExtraUsageWaitStillPersistsTokenRotation()
+        async throws
+    {
+        let profileID = UUID()
+        let expired = Self.credentialsJSON(expiresAt: 1_000)
+        let store = makeIsolatedProfileStore()
+        try seedProfile(
+            id: profileID,
+            organizationID: teamOrganizationID,
+            credentialsJSON: expired,
+            in: store
+        )
+        let renewals = RenewedCredentialRecorder()
+        let service = try makeService(
+            profileID: profileID,
+            store: store,
+            renewals: renewals
+        )
+        let profile = try seededProfile(profileID)
+        let refreshStarted = expectation(description: "token refresh started")
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            holdTokenRefreshResponse: true,
+            onTokenRefreshStarted: { refreshStarted.fulfill() }
+        )
+
+        let cancelledWaitEnded = expectation(
+            description: "cancelled personal reading stopped waiting"
+        )
+        let cancelledReading = Task { @MainActor in
+            defer { cancelledWaitEnded.fulfill() }
+            try await service.fetchUsageData(
+                sessionKey: "sk-ant-sid01-fixture-session-key-value",
+                organizationId: teamOrganizationID,
+                profile: profile
+            )
+        }
+        await fulfillment(of: [refreshStarted], timeout: 2)
+        cancelledReading.cancel()
+        await fulfillment(of: [cancelledWaitEnded], timeout: 2)
+        StubClaudeEndpointsURLProtocol.releaseTokenRefreshResponse()
+        _ = try? await cancelledReading.value
+
+        _ = try await service.fetchUsageData(
+            sessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            profile: profile
+        )
+
+        XCTAssertEqual(renewals.writes.count, 1)
+        XCTAssertTrue(
+            renewals.carriesAccessToken("renewed-access", for: profileID)
+        )
+        XCTAssertTrue(
+            try XCTUnwrap(
+                store.loadProfileCredentials(profileID).cliCredentialsJSON
+            ).contains(#""accessToken":"renewed-access""#)
+        )
+    }
+
+    func testSupersedingPreparationJoinsRefreshInsteadOfRetryingSpentToken()
+        async throws
+    {
+        let expired = Self.credentialsJSON(expiresAt: 1_000)
+        let profile = terminalOnlyProfile(credentialsJSON: expired)
+        let store = makeIsolatedProfileStore()
+        try seedProfilesForTesting([profile], in: store)
+        try store.saveCLIProfileCredential(expired, for: profile.id)
+        let manager = ProfileManager(profileStore: store)
+        manager.profiles = [profile]
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store
+        )
+        let refreshStarted = expectation(description: "token refresh started")
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            holdTokenRefreshResponse: true,
+            onTokenRefreshStarted: { refreshStarted.fulfill() }
+        )
+
+        let supersededWaitEnded = expectation(
+            description: "superseded preparation stopped waiting"
+        )
+        let superseded = Task { @MainActor in
+            defer { supersededWaitEnded.fulfill() }
+            try await service.captureUsageRequestPreparingTerminalSignIn(
+                for: profile
+            )
+        }
+        await fulfillment(of: [refreshStarted], timeout: 2)
+        superseded.cancel()
+        await fulfillment(of: [supersededWaitEnded], timeout: 2)
+        _ = try? await superseded.value
+        let replacement = Task { @MainActor in
+            try await service.captureUsageRequestPreparingTerminalSignIn(
+                for: profile
+            )
+        }
+        await Task.yield()
+
+        XCTAssertEqual(
+            StubClaudeEndpointsURLProtocol.requestedURLs.filter {
+                $0 == ClaudeCLITokenRefresher.tokenEndpoint
+            }.count,
+            1,
+            "the replacement must join the exchange already spending this token"
+        )
+        StubClaudeEndpointsURLProtocol.releaseTokenRefreshResponse()
+        let request = try await replacement.value
+
+        XCTAssertTrue(request.capturesOAuthToken("renewed-access"))
+        XCTAssertEqual(
+            StubClaudeEndpointsURLProtocol.requestedURLs.filter {
+                $0 == ClaudeCLITokenRefresher.tokenEndpoint
+            }.count,
+            1
+        )
+    }
+
+    func testTimedOutTokenExchangeIsNotRetriedWithTheSameRefreshToken()
+        async throws
+    {
+        let expired = Self.credentialsJSON(expiresAt: 1_000)
+        let profile = terminalOnlyProfile(credentialsJSON: expired)
+        let store = makeIsolatedProfileStore()
+        try seedProfilesForTesting([profile], in: store)
+        try store.saveCLIProfileCredential(expired, for: profile.id)
+        let manager = ProfileManager(profileStore: store)
+        manager.profiles = [profile]
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store
+        )
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            transportErrors: [
+                ClaudeCLITokenRefresher.tokenEndpoint: .timedOut
+            ]
+        )
+
+        for _ in 0..<2 {
+            do {
+                _ = try await service
+                    .captureUsageRequestPreparingTerminalSignIn(for: profile)
+                XCTFail("an exchange with no knowable result is not usable")
+            } catch let error as AppError {
+                XCTAssertEqual(error.code, .sessionKeyNotFound)
+            }
+        }
+
+        XCTAssertEqual(
+            StubClaudeEndpointsURLProtocol.requestedURLs.filter {
+                $0 == ClaudeCLITokenRefresher.tokenEndpoint
+            }.count,
+            1,
+            "a timeout may have spent the token, so the old token is never replayed"
+        )
+    }
+
     func testTerminalOnlyRefreshAdoptsLiveLoginAfterInvalidGrant()
         async throws
     {
@@ -3571,6 +3867,10 @@ private nonisolated final class StubClaudeEndpointsURLProtocol: URLProtocol {
     /// refresh; anything else stands for the ordinary transport failures.
     nonisolated(unsafe) private static var transportErrors:
         [String: URLError.Code] = [:]
+    nonisolated(unsafe) private static var tokenRefreshResponseGate:
+        DispatchSemaphore?
+    nonisolated(unsafe) private static var onTokenRefreshStarted:
+        (() -> Void)?
 
     static func install(
         cliOrganizationID: String,
@@ -3590,10 +3890,16 @@ private nonisolated final class StubClaudeEndpointsURLProtocol: URLProtocol {
         // A profile response with no `organization` key at all: what a
         // personal Max/Pro account looks like, as opposed to a team one.
         oauthProfileCarriesOrganization: Bool = true,
-        transportErrors: [String: URLError.Code] = [:]
+        transportErrors: [String: URLError.Code] = [:],
+        holdTokenRefreshResponse: Bool = false,
+        onTokenRefreshStarted: (() -> Void)? = nil
     ) {
         requestedURLs = []
         Self.transportErrors = transportErrors
+        tokenRefreshResponseGate = holdTokenRefreshResponse
+            ? DispatchSemaphore(value: 0)
+            : nil
+        Self.onTokenRefreshStarted = onTokenRefreshStarted
         responses = [
             "https://claude.ai/api/organizations": (200, Data("""
             [{"uuid":"665a6475-2eb6-4da8-8379-d5529d283568",
@@ -3683,10 +3989,21 @@ private nonisolated final class StubClaudeEndpointsURLProtocol: URLProtocol {
 
     static func reset() {
         guard isActive else { return }
+        releaseTokenRefreshResponse()
         URLProtocol.unregisterClass(StubClaudeEndpointsURLProtocol.self)
         isActive = false
         responses = [:]
         transportErrors = [:]
+        tokenRefreshResponseGate = nil
+        onTokenRefreshStarted = nil
+    }
+
+    static func releaseTokenRefreshResponse() {
+        // Several signals make a failing de-duplication test fail its count
+        // assertion instead of hanging a second accidental request forever.
+        for _ in 0..<4 {
+            tokenRefreshResponseGate?.signal()
+        }
     }
 
     override class func canInit(with request: URLRequest) -> Bool {
@@ -3712,6 +4029,10 @@ private nonisolated final class StubClaudeEndpointsURLProtocol: URLProtocol {
             return
         }
         Self.requestedURLs.append(url.absoluteString)
+        if url.absoluteString == ClaudeCLITokenRefresher.tokenEndpoint {
+            Self.onTokenRefreshStarted?()
+            Self.tokenRefreshResponseGate?.wait()
+        }
         if let code = Self.transportErrors[url.absoluteString] {
             client?.urlProtocol(self, didFailWithError: URLError(code))
             return
