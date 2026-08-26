@@ -1586,12 +1586,6 @@ struct LinkClaudeCodeStepSetup: View {
             return (credentials, commandAccountName)
         }
 
-        // A plain Claude Code sign-in has no managed directory to switch to,
-        // so it is safe to link as credentials-only.
-        if let systemCredentials = try? syncService.readSystemCredentials(),
-           isUsableTerminalSignIn(systemCredentials) {
-            return (systemCredentials, nil)
-        }
         return nil
     }
 
