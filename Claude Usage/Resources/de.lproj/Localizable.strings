@@ -730,11 +730,6 @@
 "about.reset_confirm" = "Zurücksetzen";
 "about.reset_confirmation_message" = "Dies löscht dauerhaft alle Profile, Anmeldedaten und Einstellungen. Die App wird beendet und Sie müssen sie erneut einrichten. Dies kann nicht rückgängig gemacht werden.";
 
-/* Claude Code Info */
-"wizard.claude_code_info_title" = "Claude Code verwenden?";
-"wizard.claude_code_info_description" = "Nutzungsverfolgung funktioniert, aber die Auto-Start-Sitzung funktioniert nicht ohne Sitzungsschlüssel";
-"wizard.claude_code_skip_setup" = "Setup überspringen";
-
 /* Migration Strings */
 "wizard.migrate_description_short" = "Importieren Sie Ihre alten Profildaten aus der vorherigen App-Version";
 
@@ -905,13 +900,6 @@
 
 // MARK: - Overage Balance
 "popover.overage_balance" = "Guthaben";
-
-// MARK: - Setup Wizard CLI Detection
-"setup.cli_detecting" = "CLI-Anmeldedaten werden gesucht...";
-"setup.cli_detected.title" = "CLI Erkannt!";
-"setup.cli_detected.description" = "Claude Code CLI-Anmeldedaten auf Ihrem System gefunden. Starten Sie das Tracking mit einem Klick.";
-"setup.cli_detected.start" = "Tracking Starten";
-"setup.cli_detected.manual" = "Manuell Einrichten";
 
 // MARK: - Custom Notification Settings
 "notifications.custom_thresholds" = "Benutzerdefinierte Schwellenwerte";
@@ -1323,3 +1311,39 @@
 "popover.extra_usage.absent.claude_account_unresolved" = "Ihre Zusatznutzung konnte dieser Organisation nicht zugeordnet werden – verbinden Sie Ihr Konto erneut unter Einstellungen → Claude.ai.";
 "popover.extra_usage.organization_lookup_failed" = "Ihre Zusatznutzung konnte gerade nicht gelesen werden. Aktualisieren Sie, um es erneut zu versuchen.";
 "cli.connect_extra_usage_hint" = "Verbinden Sie Ihr Claude Code-Konto, um Ihre eigene zusätzliche Nutzung zu sehen. Als Administrator sehen Sie standardmäßig die Ihrer Organisation.";
+
+// Zusammenfassung der Claude-Kontoeinrichtung
+"claude_account.summary.verdict.complete" = "Vollständig eingerichtet — Beide Anmeldungen sind verknüpft. RevvyTach erneuert die Terminal-Anmeldung automatisch.";
+"claude_account.summary.verdict.browser_only" = "Nur Browser-Anmeldung — Die Nutzungsverfolgung funktioniert. Ihre eigene Zusatznutzung wird hier nicht angezeigt und RevvyTach kann Claude Code nicht zu diesem Konto wechseln.";
+"claude_account.summary.verdict.terminal_only" = "Einrichtung unvollständig — dieses Profil wird nicht mehr berichten. Nur die Terminal-Anmeldung ist verknüpft. RevvyTach kann sie nicht selbst erneuern; wenn die Anmeldung von Claude Code abläuft, wird dieses Profil keine Daten mehr melden. Fügen Sie die Browser-Anmeldung hinzu, um die Einrichtung abzuschließen.";
+"claude_account.summary.verdict.none" = "Einrichtung unvollständig — Fügen Sie die Browser-Anmeldung (claude.ai) hinzu, um die Nutzungsverfolgung zu starten.";
+"claude_account.summary.browser.title" = "Browser-Anmeldung (claude.ai)";
+"claude_account.summary.terminal.title" = "Terminal-Anmeldung (Claude Code)";
+"claude_account.summary.status.working" = "Funktioniert";
+"claude_account.summary.status.not_linked" = "Nicht verknüpft";
+"claude_account.summary.status.missing" = "Fehlt";
+
+// Claude-Einrichtungsassistent: Terminal-Anmeldung verknüpfen und prüfen
+"wizard.browser_sign_in.title" = "Bei claude.ai anmelden";
+"wizard.organization.title" = "Organisation";
+"wizard.link_terminal.title" = "Claude Code verknüpfen";
+"wizard.link_terminal.subtitle" = "Optional, empfohlen. So kann RevvyTach Ihre eigene Zusatznutzung anzeigen und Claude Code zwischen Konten wechseln.";
+"wizard.link_terminal.checking" = "Terminal-Anmeldung wird geprüft…";
+"wizard.link_terminal.detected_title" = "Claude Code ist auf diesem Mac angemeldet";
+"wizard.link_terminal.account" = "Konto: %@";
+"wizard.link_terminal.directory" = "Ordner: %@";
+"wizard.link_terminal.signed_in" = "Angemeldet";
+"wizard.link_terminal.link_checkbox" = "Diese Anmeldung mit dem Profil „%@“ verknüpfen";
+"wizard.link_terminal.link_detail" = "RevvyTach erneuert sie zusammen mit Ihrer Browser-Anmeldung und schreibt Erneuerungen zurück, damit Claude Code Sie wegen dieser App nicht erneut zur Anmeldung auffordert.";
+"wizard.link_terminal.continue_without" = "Ohne Verknüpfung fortfahren";
+"wizard.link_terminal.link_continue" = "Verknüpfen und fortfahren";
+"wizard.link_terminal.not_found_title" = "Keine Claude Code-Anmeldung auf diesem Mac gefunden";
+"wizard.link_terminal.not_found_detail" = "Wenn Sie Claude Code verwenden, melden Sie sich dort zuerst an. RevvyTach findet die Anmeldung dann. Sie können sie auch später unter Einstellungen → Claude-Konto verknüpfen.";
+"wizard.link_terminal.command_label" = "Anmeldebefehl";
+"wizard.link_terminal.copy_command" = "Befehl kopieren";
+"wizard.link_terminal.check_again" = "Erneut prüfen";
+"wizard.review.title" = "Überprüfen";
+"wizard.review.browser_detail" = "Browser-Anmeldung ist für %@ bereit.";
+"wizard.review.terminal_linked_detail" = "Die erkannte Terminal-Anmeldung wird beim Abschluss verknüpft.";
+"wizard.review.terminal_not_linked_detail" = "Nicht verknüpft. Sie können sie später unter Einstellungen → Claude-Konto hinzufügen.";
+"wizard.start_tracking" = "Tracking starten";

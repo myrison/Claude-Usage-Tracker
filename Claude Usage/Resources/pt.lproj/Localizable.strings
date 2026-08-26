@@ -728,11 +728,6 @@
 "about.reset_confirm" = "Redefinir";
 "about.reset_confirmation_message" = "Isso excluirá permanentemente todos os perfis, credenciais e configurações. O aplicativo será encerrado e você precisará configurá-lo novamente. Isso não pode ser desfeito.";
 
-/* Claude Code Info */
-"wizard.claude_code_info_title" = "Usando Claude Code?";
-"wizard.claude_code_info_description" = "O rastreamento de uso funcionará, mas o início automático de sessão não funcionará sem a chave de sessão";
-"wizard.claude_code_skip_setup" = "Pular configuração";
-
 /* Migration Strings */
 "wizard.migrate_description_short" = "Importar seus dados de perfis antigos da versão anterior do aplicativo";
 
@@ -903,13 +898,6 @@
 
 // MARK: - Overage Balance
 "popover.overage_balance" = "Saldo";
-
-// MARK: - Setup Wizard CLI Detection
-"setup.cli_detecting" = "Verificando credenciais CLI...";
-"setup.cli_detected.title" = "CLI Detectado!";
-"setup.cli_detected.description" = "Credenciais do Claude Code CLI encontradas no seu sistema. Comece o rastreamento com um clique.";
-"setup.cli_detected.start" = "Iniciar Rastreamento";
-"setup.cli_detected.manual" = "Configurar Manualmente";
 
 // MARK: - Custom Notification Settings
 "notifications.custom_thresholds" = "Limites Personalizados";
@@ -1323,3 +1311,39 @@
 "popover.extra_usage.absent.claude_account_unresolved" = "Não foi possível associar o seu uso adicional a esta organização — reconecte a sua conta em Configurações → Claude.ai.";
 "popover.extra_usage.organization_lookup_failed" = "Não foi possível ler o seu uso adicional agora. Atualize para tentar novamente.";
 "cli.connect_extra_usage_hint" = "Conecte a sua conta do Claude Code para ver o seu próprio uso extra. Se você for administrador, verá o da sua organização por padrão.";
+
+// Resumo da configuração da conta Claude
+"claude_account.summary.verdict.complete" = "Configuração completa — Ambos os inícios de sessão estão vinculados. O RevvyTach renova automaticamente o início de sessão do terminal.";
+"claude_account.summary.verdict.browser_only" = "Apenas início de sessão do navegador — O acompanhamento funciona. O seu uso adicional não aparece aqui e o RevvyTach não pode mudar o Claude Code para esta conta.";
+"claude_account.summary.verdict.terminal_only" = "Configuração incompleta — este perfil deixará de informar. Apenas o início de sessão do terminal está vinculado. O RevvyTach não consegue renová-lo sozinho, por isso, quando o início de sessão do Claude Code expirar, este perfil ficará sem reportar. Adicione o início de sessão do navegador para concluir a configuração.";
+"claude_account.summary.verdict.none" = "Configuração incompleta — Adicione o início de sessão do navegador (claude.ai) para começar a acompanhar o uso.";
+"claude_account.summary.browser.title" = "Início de sessão do navegador (claude.ai)";
+"claude_account.summary.terminal.title" = "Início de sessão do terminal (Claude Code)";
+"claude_account.summary.status.working" = "A funcionar";
+"claude_account.summary.status.not_linked" = "Não vinculado";
+"claude_account.summary.status.missing" = "Em falta";
+
+// Assistente Claude: vincular o início de sessão do terminal e rever
+"wizard.browser_sign_in.title" = "Iniciar sessão em claude.ai";
+"wizard.organization.title" = "Organização";
+"wizard.link_terminal.title" = "Vincular Claude Code";
+"wizard.link_terminal.subtitle" = "Opcional, recomendado. Isto permite ao RevvyTach mostrar o seu uso adicional e alternar o Claude Code entre contas.";
+"wizard.link_terminal.checking" = "A procurar um início de sessão do terminal…";
+"wizard.link_terminal.detected_title" = "O Claude Code tem sessão iniciada neste Mac";
+"wizard.link_terminal.account" = "Conta: %@";
+"wizard.link_terminal.directory" = "Diretório: %@";
+"wizard.link_terminal.signed_in" = "Sessão iniciada";
+"wizard.link_terminal.link_checkbox" = "Vincular este início de sessão ao perfil “%@”";
+"wizard.link_terminal.link_detail" = "O RevvyTach mantém-no renovado com o início de sessão do navegador e grava as renovações para que o Claude Code não volte a pedir início de sessão por causa desta app.";
+"wizard.link_terminal.continue_without" = "Continuar sem vincular";
+"wizard.link_terminal.link_continue" = "Vincular e continuar";
+"wizard.link_terminal.not_found_title" = "Nenhum início de sessão do Claude Code encontrado neste Mac";
+"wizard.link_terminal.not_found_detail" = "Se utiliza o Claude Code, inicie sessão primeiro e o RevvyTach irá encontrá-la. Também pode vinculá-la depois em Definições → Conta Claude.";
+"wizard.link_terminal.command_label" = "Comando de início de sessão";
+"wizard.link_terminal.copy_command" = "Copiar comando";
+"wizard.link_terminal.check_again" = "Verificar novamente";
+"wizard.review.title" = "Rever";
+"wizard.review.browser_detail" = "O início de sessão do navegador está pronto para %@.";
+"wizard.review.terminal_linked_detail" = "O início de sessão do terminal detetado será vinculado no fim.";
+"wizard.review.terminal_not_linked_detail" = "Não vinculado. Pode adicioná-lo depois em Definições → Conta Claude.";
+"wizard.start_tracking" = "Iniciar";
