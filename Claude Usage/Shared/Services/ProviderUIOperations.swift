@@ -512,24 +512,16 @@ final class ProviderUIDependencies {
         target: ClaudeManualSetupTarget = .compatibilityCurrent
     ) async throws -> Profile {
         let targetProfile = try resolvedClaudeManualSetupTarget(target)
-        var credentials = try profileManager.loadCredentials(
-            for: targetProfile.id
-        )
-        credentials.claudeSessionKey = sessionKey
-        credentials.organizationId = organizationID
+        var profile = try requiredProfile(targetProfile.id)
+        profile.claudeSessionKey = sessionKey
+        profile.organizationId = organizationID
         let shouldAttemptTerminalLink = terminalCredentialsJSON != nil
         let validatedTerminalCredentials = terminalCredentialsJSON.flatMap {
             ClaudeCodeSyncService.carriesLogin($0) ? $0 : nil
         }
         if shouldAttemptTerminalLink {
-            credentials.cliCredentialsJSON = validatedTerminalCredentials
+            profile.cliCredentialsJSON = validatedTerminalCredentials
         }
-        try profileManager.saveCredentials(
-            for: targetProfile.id,
-            credentials: credentials,
-            acceptingSessionOnly: acceptSessionOnlyStorage
-        )
-        var profile = try requiredProfile(targetProfile.id)
         profile.autoStartSessionEnabled =
             autoStartSessionEnabled
         if shouldAttemptTerminalLink,
@@ -545,7 +537,13 @@ final class ProviderUIDependencies {
             profile.cliAccountSyncedAt = nil
             profile.cliAccountName = nil
         }
-        try profileManager.updateProfileThrowing(profile)
+        // Commit browser credentials, an optional terminal sign-in, and its
+        // link metadata together. A failed write must not leave a terminal
+        // secret behind without the metadata that describes it.
+        try profileManager.updateProfileThrowing(
+            profile,
+            acceptingSessionOnly: acceptSessionOnlyStorage
+        )
         try await activateForCompletedSetup(profile.id)
         markSetupCompleted()
         return try requiredProfile(profile.id)

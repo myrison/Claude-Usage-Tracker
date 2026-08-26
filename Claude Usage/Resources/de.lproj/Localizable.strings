@@ -730,8 +730,6 @@
 "about.reset_confirm" = "Zurücksetzen";
 "about.reset_confirmation_message" = "Dies löscht dauerhaft alle Profile, Anmeldedaten und Einstellungen. Die App wird beendet und Sie müssen sie erneut einrichten. Dies kann nicht rückgängig gemacht werden.";
 
-/* Claude Code Info */
-
 /* Migration Strings */
 "wizard.migrate_description_short" = "Importieren Sie Ihre alten Profildaten aus der vorherigen App-Version";
 
@@ -902,8 +900,6 @@
 
 // MARK: - Overage Balance
 "popover.overage_balance" = "Guthaben";
-
-// MARK: - Setup Wizard CLI Detection
 
 // MARK: - Custom Notification Settings
 "notifications.custom_thresholds" = "Benutzerdefinierte Schwellenwerte";
@@ -1319,7 +1315,7 @@
 // Zusammenfassung der Claude-Kontoeinrichtung
 "claude_account.summary.verdict.complete" = "Vollständig eingerichtet — Beide Anmeldungen sind verknüpft. RevvyTach erneuert die Terminal-Anmeldung automatisch.";
 "claude_account.summary.verdict.browser_only" = "Nur Browser-Anmeldung — Die Nutzungsverfolgung funktioniert. Ihre eigene Zusatznutzung wird hier nicht angezeigt und RevvyTach kann Claude Code nicht zu diesem Konto wechseln.";
-"claude_account.summary.verdict.terminal_only" = "Einrichtung unvollständig — dieses Profil wird nicht mehr berichten. Nur die Terminal-Anmeldung ist verknüpft. RevvyTach kann sie nicht selbst erneuern. Fügen Sie die Browser-Anmeldung hinzu.";
+"claude_account.summary.verdict.terminal_only" = "Einrichtung unvollständig — dieses Profil wird nicht mehr berichten. Nur die Terminal-Anmeldung ist verknüpft. RevvyTach kann sie nicht selbst erneuern; wenn die Anmeldung von Claude Code abläuft, wird dieses Profil keine Daten mehr melden. Fügen Sie die Browser-Anmeldung hinzu, um die Einrichtung abzuschließen.";
 "claude_account.summary.verdict.none" = "Einrichtung unvollständig — Fügen Sie die Browser-Anmeldung (claude.ai) hinzu, um die Nutzungsverfolgung zu starten.";
 "claude_account.summary.browser.title" = "Browser-Anmeldung (claude.ai)";
 "claude_account.summary.terminal.title" = "Terminal-Anmeldung (Claude Code)";

@@ -730,7 +730,6 @@
 "wizard.migration_skipped" = "迁移已跳过。如果需要，您可以稍后手动同步旧数据。";
 "wizard.skip_migration" = "跳过";
 
-/* Claude Code Info */
 "wizard.migrate_description_short" = "从以前的应用版本导入您的旧配置文件数据";
 
 // History
@@ -900,8 +899,6 @@
 
 // MARK: - Overage Balance
 "popover.overage_balance" = "余额";
-
-// MARK: - Setup Wizard CLI Detection
 
 // MARK: - Custom Notification Settings
 "notifications.custom_thresholds" = "自定义阈值";
@@ -1315,7 +1312,7 @@
 // Claude 账号设置摘要
 "claude_account.summary.verdict.complete" = "设置完成 — 两种登录均已关联。RevvyTach 会自动续期终端登录。";
 "claude_account.summary.verdict.browser_only" = "仅浏览器登录 — 用量跟踪正常。此处不会显示您自己的额外用量，RevvyTach 也无法将 Claude Code 切换到此账号。";
-"claude_account.summary.verdict.terminal_only" = "设置未完成 — 此配置将停止报告。目前仅关联了终端登录，RevvyTach 无法单独续期。请添加浏览器登录以完成设置。";
+"claude_account.summary.verdict.terminal_only" = "设置未完成 — 此配置将停止报告。目前仅关联了终端登录。RevvyTach 无法自行续期，因此 Claude Code 登录失效后，此配置将不再报告。请添加浏览器登录以完成设置。";
 "claude_account.summary.verdict.none" = "设置未完成 — 添加浏览器登录（claude.ai）以开始跟踪用量。";
 "claude_account.summary.browser.title" = "浏览器登录（claude.ai）";
 "claude_account.summary.terminal.title" = "终端登录（Claude Code）";

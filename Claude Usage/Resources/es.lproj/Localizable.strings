@@ -713,8 +713,6 @@
 "about.reset_confirm" = "Restablecer";
 "about.reset_confirmation_message" = "Esto eliminará permanentemente todos los perfiles, credenciales y configuraciones. La aplicación se cerrará y deberá configurarla nuevamente. Esto no se puede deshacer.";
 
-/* Claude Code Info */
-
 /* Migration Strings */
 "wizard.migrate_description_short" = "Importar datos de perfiles antiguos de la versión anterior de la aplicación";
 
@@ -885,8 +883,6 @@
 
 // MARK: - Overage Balance
 "popover.overage_balance" = "Saldo";
-
-// MARK: - Setup Wizard CLI Detection
 
 // MARK: - Custom Notification Settings
 "notifications.custom_thresholds" = "Umbrales Personalizados";
@@ -1302,7 +1298,7 @@
 // Resumen de configuración de la cuenta de Claude
 "claude_account.summary.verdict.complete" = "Configuración completa — Ambos inicios de sesión están vinculados. RevvyTach renueva automáticamente el inicio de sesión de terminal.";
 "claude_account.summary.verdict.browser_only" = "Solo inicio de sesión del navegador — El seguimiento funciona. No verás aquí tu uso adicional y RevvyTach no podrá cambiar Claude Code a esta cuenta.";
-"claude_account.summary.verdict.terminal_only" = "Configuración incompleta — este perfil dejará de informar. Solo está vinculado el inicio de sesión de terminal. RevvyTach no puede renovarlo por sí solo. Añade el inicio de sesión del navegador.";
+"claude_account.summary.verdict.terminal_only" = "Configuración incompleta — este perfil dejará de informar. Solo está vinculado el inicio de sesión de terminal. RevvyTach no puede renovarlo por sí solo, por lo que cuando caduque el inicio de sesión de Claude Code este perfil quedará en silencio. Añade el inicio de sesión del navegador para completar la configuración.";
 "claude_account.summary.verdict.none" = "Configuración incompleta — Añade el inicio de sesión del navegador (claude.ai) para empezar a seguir el uso.";
 "claude_account.summary.browser.title" = "Inicio de sesión del navegador (claude.ai)";
 "claude_account.summary.terminal.title" = "Inicio de sesión de terminal (Claude Code)";

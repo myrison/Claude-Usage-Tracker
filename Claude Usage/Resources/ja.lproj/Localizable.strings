@@ -730,8 +730,6 @@
 "about.reset_confirm" = "リセット";
 "about.reset_confirmation_message" = "これにより、すべてのプロファイル、認証情報、設定が完全に削除されます。アプリは終了し、再度設定する必要があります。この操作は元に戻せません。";
 
-/* Claude Code Info */
-
 /* Migration Strings */
 "wizard.migrate_description_short" = "以前のアプリバージョンから古いプロファイルデータをインポート";
 
@@ -902,8 +900,6 @@
 
 // MARK: - Overage Balance
 "popover.overage_balance" = "残高";
-
-// MARK: - Setup Wizard CLI Detection
 
 // MARK: - Custom Notification Settings
 "notifications.custom_thresholds" = "カスタムしきい値";
@@ -1319,7 +1315,7 @@
 // Claude アカウント設定の概要
 "claude_account.summary.verdict.complete" = "設定完了 — 両方のサインインがリンクされています。RevvyTach はターミナルのサインインを自動更新します。";
 "claude_account.summary.verdict.browser_only" = "ブラウザのサインインのみ — 使用状況の追跡は機能します。自分の追加使用量は表示されず、RevvyTach は Claude Code のアカウントを切り替えられません。";
-"claude_account.summary.verdict.terminal_only" = "設定が不完全です — このプロファイルは報告を停止します。ターミナルのサインインのみがリンクされています。ブラウザのサインインを追加してください。";
+"claude_account.summary.verdict.terminal_only" = "設定が不完全です — このプロファイルは報告を停止します。ターミナルのサインインのみがリンクされています。RevvyTach はこれを単独で更新できないため、Claude Code のサインインが期限切れになるとこのプロファイルは報告を停止します。設定を完了するにはブラウザのサインインを追加してください。";
 "claude_account.summary.verdict.none" = "設定が不完全です — ブラウザのサインイン（claude.ai）を追加して追跡を開始してください。";
 "claude_account.summary.browser.title" = "ブラウザのサインイン（claude.ai）";
 "claude_account.summary.terminal.title" = "ターミナルのサインイン（Claude Code）";

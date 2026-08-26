@@ -724,11 +724,28 @@ class ProfileStore {
     /// Writes the metadata and keeps the secrets in memory only.
     private func holdCredentialsForSessionOnly(
         _ profileId: UUID,
-        credentials: ProfileCredentials
+        credentials: ProfileCredentials,
+        profileMetadata: Profile? = nil
     ) throws {
         var profiles = try loadProfilesWithVerifiedMigration()
         guard let index = profiles.firstIndex(where: { $0.id == profileId }) else {
             throw ProfileStoreError.profileNotFound(profileId)
+        }
+        if var profileMetadata {
+            try validateProviderIdentity(
+                candidate: profileMetadata,
+                stored: profiles[index]
+            )
+            try validateDeletionState(
+                candidate: profileMetadata,
+                stored: profiles[index]
+            )
+            profileMetadata.credentialMigrationRetry =
+                profiles[index].credentialMigrationRetry
+            profileMetadata.currentUsageMigrationRetry =
+                profiles[index].currentUsageMigrationRetry
+            profileMetadata.deletionInProgress = profiles[index].deletionInProgress
+            profiles[index] = profileMetadata
         }
         profiles[index].claudeSessionKey = credentials.claudeSessionKey
         profiles[index].organizationId = credentials.organizationId
@@ -937,6 +954,33 @@ class ProfileStore {
             mutations: credentialMutations,
             candidateProfiles: profiles
         )
+    }
+
+    /// Saves a full profile update while allowing the user-approved
+    /// session-only fallback to retain its non-secret metadata atomically with
+    /// the in-memory credentials.
+    func saveProfileUpdateAcceptingSessionOnly(
+        _ updatedProfile: Profile
+    ) throws {
+        do {
+            try saveProfileUpdate(updatedProfile)
+        } catch let error as ProfileStoreError {
+            guard case .credentialTransactionFailed = error else {
+                throw error
+            }
+            try holdCredentialsForSessionOnly(
+                updatedProfile.id,
+                credentials: ProfileCredentials(
+                    claudeSessionKey: updatedProfile.claudeSessionKey,
+                    organizationId: updatedProfile.organizationId,
+                    apiSessionKey: updatedProfile.apiSessionKey,
+                    apiOrganizationId: updatedProfile.apiOrganizationId,
+                    apiSessionKeyExpiry: updatedProfile.apiSessionKeyExpiry,
+                    cliCredentialsJSON: updatedProfile.cliCredentialsJSON
+                ),
+                profileMetadata: updatedProfile
+            )
+        }
     }
 
     func loadProfileCredentials(_ profileId: UUID) throws -> ProfileCredentials {

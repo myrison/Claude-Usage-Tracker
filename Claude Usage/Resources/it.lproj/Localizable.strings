@@ -728,8 +728,6 @@
 "about.reset_confirm" = "Ripristina";
 "about.reset_confirmation_message" = "Questo eliminerà permanentemente tutti i profili, credenziali e impostazioni. L'app si chiuderà e dovrai configurarla di nuovo. Questa azione non può essere annullata.";
 
-/* Claude Code Info */
-
 /* Migration Strings */
 "wizard.migrate_description_short" = "Importa i tuoi vecchi dati dei profili dalla versione precedente dell'app";
 
@@ -900,8 +898,6 @@
 
 // MARK: - Overage Balance
 "popover.overage_balance" = "Saldo";
-
-// MARK: - Setup Wizard CLI Detection
 
 // MARK: - Custom Notification Settings
 "notifications.custom_thresholds" = "Soglie Personalizzate";
@@ -1319,7 +1315,7 @@
 // Riepilogo della configurazione dell'account Claude
 "claude_account.summary.verdict.complete" = "Configurazione completa — Entrambi gli accessi sono collegati. RevvyTach rinnova automaticamente l'accesso al terminale.";
 "claude_account.summary.verdict.browser_only" = "Solo accesso dal browser — Il monitoraggio funziona. Non vedrai qui il tuo utilizzo aggiuntivo e RevvyTach non potrà passare Claude Code a questo account.";
-"claude_account.summary.verdict.terminal_only" = "Configurazione incompleta — questo profilo smetterà di segnalare. È collegato solo l'accesso al terminale. RevvyTach non può rinnovarlo da solo. Aggiungi l'accesso dal browser.";
+"claude_account.summary.verdict.terminal_only" = "Configurazione incompleta — questo profilo smetterà di segnalare. È collegato solo l'accesso al terminale. RevvyTach non può rinnovarlo da solo, quindi quando scade l'accesso di Claude Code questo profilo smette di segnalare. Aggiungi l'accesso dal browser per completare la configurazione.";
 "claude_account.summary.verdict.none" = "Configurazione incompleta — Aggiungi l'accesso dal browser (claude.ai) per iniziare il monitoraggio.";
 "claude_account.summary.browser.title" = "Accesso dal browser (claude.ai)";
 "claude_account.summary.terminal.title" = "Accesso al terminale (Claude Code)";

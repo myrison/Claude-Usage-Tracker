@@ -710,8 +710,6 @@
 "about.reset_confirm" = "Réinitialiser";
 "about.reset_confirmation_message" = "Cela supprimera définitivement tous les profils, identifiants et paramètres. L'application se fermera et vous devrez la reconfigurer. Cette action est irréversible.";
 
-/* Claude Code Info */
-
 /* Migration Strings */
 "wizard.migrate_description_short" = "Importer vos anciennes données de profils depuis la version précédente de l'application";
 
@@ -882,8 +880,6 @@
 
 // MARK: - Overage Balance
 "popover.overage_balance" = "Solde";
-
-// MARK: - Setup Wizard CLI Detection
 
 // MARK: - Custom Notification Settings
 "notifications.custom_thresholds" = "Seuils Personnalisés";
@@ -1299,7 +1295,7 @@
 // Résumé de la configuration du compte Claude
 "claude_account.summary.verdict.complete" = "Configuration complète — Les deux connexions sont liées. RevvyTach renouvelle automatiquement la connexion au terminal.";
 "claude_account.summary.verdict.browser_only" = "Connexion au navigateur uniquement — Le suivi fonctionne. Votre propre utilisation supplémentaire n'apparaîtra pas ici et RevvyTach ne pourra pas basculer Claude Code vers ce compte.";
-"claude_account.summary.verdict.terminal_only" = "Configuration incomplète — ce profil cessera de transmettre. Seule la connexion au terminal est liée. RevvyTach ne peut pas la renouveler seul. Ajoutez la connexion au navigateur.";
+"claude_account.summary.verdict.terminal_only" = "Configuration incomplète — ce profil cessera de transmettre. Seule la connexion au terminal est liée. RevvyTach ne peut pas la renouveler seul ; lorsque la connexion de Claude Code expire, ce profil devient silencieux. Ajoutez la connexion au navigateur pour terminer la configuration.";
 "claude_account.summary.verdict.none" = "Configuration incomplète — Ajoutez la connexion au navigateur (claude.ai) pour commencer le suivi.";
 "claude_account.summary.browser.title" = "Connexion au navigateur (claude.ai)";
 "claude_account.summary.terminal.title" = "Connexion au terminal (Claude Code)";

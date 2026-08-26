@@ -808,7 +808,6 @@
 "wizard.skip_migration" = "Skip";
 "wizard.migration_skipped" = "Migration skipped. You can manually sync old data later if needed.";
 
-/* Claude Code Info */
 "wizard.migrate_description_short" = "Import your old profiles data from previous app version";
 
 /* ==================== */
@@ -994,8 +993,6 @@
 
 // MARK: - Overage Balance
 "popover.overage_balance" = "Balance";
-
-// MARK: - Setup Wizard CLI Detection
 
 // MARK: - Custom Notification Settings
 "notifications.custom_thresholds" = "Custom Thresholds";

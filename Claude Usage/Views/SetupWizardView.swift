@@ -1538,31 +1538,34 @@ struct LinkClaudeCodeStepSetup: View {
         wizardState.shouldLinkTerminalSignIn = false
 
         Task {
-            guard let detection = detectedTerminalSignIn() else {
-                wizardState.detectedTerminalCredentials = nil
-                wizardState.detectedTerminalAccountName = nil
-                wizardState.detectedTerminalDirectory = nil
-                wizardState.detectedTerminalSignedInAt = nil
-                wizardState.terminalDetectionStatus = .notDetected
-                return
-            }
+            let detection = detectedTerminalSignIn()
+            await MainActor.run {
+                guard let detection else {
+                    wizardState.detectedTerminalCredentials = nil
+                    wizardState.detectedTerminalAccountName = nil
+                    wizardState.detectedTerminalDirectory = nil
+                    wizardState.detectedTerminalSignedInAt = nil
+                    wizardState.terminalDetectionStatus = .notDetected
+                    return
+                }
 
-            let accountName = detection.accountName
-            wizardState.detectedTerminalCredentials = detection.credentials
-            wizardState.detectedTerminalAccountName = accountName
-            if let accountName {
-                let directory = ClaudeSwitchService.shared
-                    .accountDirectoryPath(for: accountName)
-                wizardState.detectedTerminalDirectory = directory.path
-                wizardState.detectedTerminalSignedInAt = latestSignInDate(
-                    in: directory
-                )
-            } else {
-                wizardState.detectedTerminalDirectory = nil
-                wizardState.detectedTerminalSignedInAt = nil
+                let accountName = detection.accountName
+                wizardState.detectedTerminalCredentials = detection.credentials
+                wizardState.detectedTerminalAccountName = accountName
+                if let accountName {
+                    let directory = ClaudeSwitchService.shared
+                        .accountDirectoryPath(for: accountName)
+                    wizardState.detectedTerminalDirectory = directory.path
+                    wizardState.detectedTerminalSignedInAt = latestSignInDate(
+                        in: directory
+                    )
+                } else {
+                    wizardState.detectedTerminalDirectory = nil
+                    wizardState.detectedTerminalSignedInAt = nil
+                }
+                wizardState.shouldLinkTerminalSignIn = true
+                wizardState.terminalDetectionStatus = .detected
             }
-            wizardState.shouldLinkTerminalSignIn = true
-            wizardState.terminalDetectionStatus = .detected
         }
     }
 
@@ -1571,30 +1574,23 @@ struct LinkClaudeCodeStepSetup: View {
         accountName: String?
     )? {
         let syncService = ClaudeCodeSyncService.shared
-        if let systemCredentials = try? syncService.readSystemCredentials(),
-           isUsableTerminalSignIn(systemCredentials) {
-            return (
-                systemCredentials,
-                linkedAccountName(matching: systemCredentials)
-            )
-        }
-
-        // The command shown by this step signs into a dedicated account
-        // directory. Check that named login as well as already known linked
-        // directories so “Check again” can see the login it just requested.
         let switchService = ClaudeSwitchService.shared
         let commandAccountName = switchService.sanitizeProfileName(profileName)
-        let names = ([commandAccountName, switchService.currentAccountName()]
-            .compactMap { $0 } + switchService.availableAccountNames())
-            .reduce(into: [String]()) { uniqueNames, name in
-                if !uniqueNames.contains(name) { uniqueNames.append(name) }
-            }
-        for name in names {
-            guard let credentials = try? syncService.readSystemCredentials(
-                forAccountNamed: name
-            ),
-            isUsableTerminalSignIn(credentials) else { continue }
-            return (credentials, name)
+
+        // The only named directory this flow may adopt is the one the wizard
+        // explicitly tells the user to sign into. Do not guess among other
+        // linked accounts on a multi-account machine.
+        if let credentials = try? syncService.readSystemCredentials(
+            forAccountNamed: commandAccountName
+        ), isUsableTerminalSignIn(credentials) {
+            return (credentials, commandAccountName)
+        }
+
+        // A plain Claude Code sign-in has no managed directory to switch to,
+        // so it is safe to link as credentials-only.
+        if let systemCredentials = try? syncService.readSystemCredentials(),
+           isUsableTerminalSignIn(systemCredentials) {
+            return (systemCredentials, nil)
         }
         return nil
     }
@@ -1602,28 +1598,6 @@ struct LinkClaudeCodeStepSetup: View {
     private func isUsableTerminalSignIn(_ credentials: String) -> Bool {
         ClaudeCodeSyncService.shared.extractAccessToken(from: credentials) != nil
             && !ClaudeCodeSyncService.shared.isTokenExpired(credentials)
-    }
-
-    private func linkedAccountName(matching credentials: String) -> String? {
-        let syncService = ClaudeCodeSyncService.shared
-        guard let detectedToken = syncService.extractAccessToken(
-            from: credentials
-        ) else { return nil }
-        let switchService = ClaudeSwitchService.shared
-        let currentName = switchService.currentAccountName()
-        let candidates = ([currentName].compactMap { $0 }
-            + switchService.availableAccountNames())
-            .reduce(into: [String]()) { names, name in
-                if !names.contains(name) { names.append(name) }
-            }
-        return candidates.first { name in
-            guard let linkedCredentials = switchService
-                .readLinkedAccountCredentials(directoryName: name) else {
-                return false
-            }
-            return syncService.extractAccessToken(from: linkedCredentials)
-                == detectedToken
-        }
     }
 
     private func latestSignInDate(in directory: URL) -> Date? {

@@ -5,51 +5,23 @@
 
 import SwiftUI
 
-/// An optional action shown alongside one of the sign-in rows.
-struct ClaudeSignInSummaryAction {
-    enum Style {
-        case standard
-        case destructive
-    }
-
-    let title: String
-    let style: Style
-    let action: () -> Void
-
-    init(
-        _ title: String,
-        style: Style = .standard,
-        action: @escaping () -> Void
-    ) {
-        self.title = title
-        self.style = style
-        self.action = action
-    }
-}
-
 /// A reusable summary of the browser and terminal sign-ins for a Claude profile.
 ///
-/// The caller supplies live, context-specific detail text and optional actions;
-/// this view owns the shared verdict, row labels, and status presentation.
+/// The caller supplies live, context-specific detail text; this view owns the
+/// shared verdict, row labels, and status presentation.
 struct ClaudeSignInSummaryView: View {
     let state: ClaudeSetupState
     let browserDetail: String
     let terminalDetail: String
-    let browserAction: ClaudeSignInSummaryAction?
-    let terminalAction: ClaudeSignInSummaryAction?
 
     init(
         state: ClaudeSetupState,
         browserDetail: String,
-        terminalDetail: String,
-        browserAction: ClaudeSignInSummaryAction? = nil,
-        terminalAction: ClaudeSignInSummaryAction? = nil
+        terminalDetail: String
     ) {
         self.state = state
         self.browserDetail = browserDetail
         self.terminalDetail = terminalDetail
-        self.browserAction = browserAction
-        self.terminalAction = terminalAction
     }
 
     var body: some View {
@@ -60,8 +32,7 @@ struct ClaudeSignInSummaryView: View {
                 signInRow(
                     title: localized("claude_account.summary.browser.title"),
                     detail: browserDetail,
-                    status: browserStatus,
-                    action: browserAction
+                    status: browserStatus
                 )
 
                 Divider()
@@ -70,8 +41,7 @@ struct ClaudeSignInSummaryView: View {
                 signInRow(
                     title: localized("claude_account.summary.terminal.title"),
                     detail: terminalDetail,
-                    status: terminalStatus,
-                    action: terminalAction
+                    status: terminalStatus
                 )
             }
             .background(SettingsColors.cardBackground)
@@ -109,8 +79,7 @@ struct ClaudeSignInSummaryView: View {
     private func signInRow(
         title: String,
         detail: String,
-        status: Status,
-        action: ClaudeSignInSummaryAction?
+        status: Status
     ) -> some View {
         HStack(alignment: .center, spacing: Spacing.lg) {
             VStack(alignment: .leading, spacing: Spacing.xs) {
@@ -128,10 +97,6 @@ struct ClaudeSignInSummaryView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            if let action {
-                actionButton(action)
-            }
         }
         .padding(Spacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -149,24 +114,6 @@ struct ClaudeSignInSummaryView: View {
                     .strokeBorder(status.color.opacity(0.28), lineWidth: 0.5)
             }
             .accessibilityLabel(localized(status.localizationKey))
-    }
-
-    private func actionButton(_ summaryAction: ClaudeSignInSummaryAction) -> some View {
-        Button(action: summaryAction.action) {
-            Text(summaryAction.title)
-                .font(Typography.label)
-                .foregroundStyle(summaryAction.style.foregroundColor)
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, Spacing.sm)
-                .background(summaryAction.style.backgroundColor)
-                .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusMedium))
-                .overlay {
-                    RoundedRectangle(cornerRadius: Spacing.radiusMedium)
-                        .strokeBorder(summaryAction.style.borderColor, lineWidth: 0.5)
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(summaryAction.title)
     }
 
     private var browserStatus: Status {
@@ -256,35 +203,6 @@ private enum Status {
             return SettingsColors.secondary
         case .missing:
             return SettingsColors.error
-        }
-    }
-}
-
-private extension ClaudeSignInSummaryAction.Style {
-    var foregroundColor: Color {
-        switch self {
-        case .standard:
-            return .primary
-        case .destructive:
-            return .white
-        }
-    }
-
-    var backgroundColor: Color {
-        switch self {
-        case .standard:
-            return SettingsColors.cardBackground
-        case .destructive:
-            return SettingsColors.error
-        }
-    }
-
-    var borderColor: Color {
-        switch self {
-        case .standard:
-            return SettingsColors.border
-        case .destructive:
-            return .clear
         }
     }
 }

@@ -803,7 +803,10 @@ class ProfileManager: ObservableObject {
 
     /// Credential-aware update for workflows that must not report success
     /// unless secure storage and profile metadata have both been verified.
-    func updateProfileThrowing(_ profile: Profile) throws {
+    func updateProfileThrowing(
+        _ profile: Profile,
+        acceptingSessionOnly: Bool = false
+    ) throws {
         guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else {
             throw ProfileStoreError.profileNotFound(profile.id)
         }
@@ -825,9 +828,17 @@ class ProfileManager: ObservableObject {
         )
 
         if cliSecretChanged && !claudeSecretChanged && !apiSecretChanged {
-            try profileStore.saveCLIProfileUpdate(profile)
+            if acceptingSessionOnly {
+                try profileStore.saveProfileUpdateAcceptingSessionOnly(profile)
+            } else {
+                try profileStore.saveCLIProfileUpdate(profile)
+            }
         } else if claudeSecretChanged || apiSecretChanged || cliSecretChanged {
-            try profileStore.saveProfileUpdate(profile)
+            if acceptingSessionOnly {
+                try profileStore.saveProfileUpdateAcceptingSessionOnly(profile)
+            } else {
+                try profileStore.saveProfileUpdate(profile)
+            }
         } else {
             var candidate = profiles
             candidate[index] = profile
