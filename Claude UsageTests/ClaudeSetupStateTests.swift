@@ -331,20 +331,95 @@ final class ClaudeSetupStateTests: HostedAppTestCase {
         )
     }
 
-    func testSessionOnlyWarningIsScopedToDisplayedProfile() {
-        let displayed = UUID()
-        let other = UUID()
+    @MainActor
+    func testBrowserSessionOnlyWarningExcludesAPIAndCLICredentials() throws {
+        let browser = Profile(name: "Browser held")
+        let api = Profile(name: "API held")
+        let cli = Profile(name: "CLI held")
+        let otherBrowser = Profile(name: "Other browser held")
+        let secrets = RetryableBrowserSecretStore()
+        let store = retain(
+            makeIsolatedProfileStore(
+                defaults: IsolatedProfileDefaults(),
+                secretStore: secrets
+            )
+        )
+        try seedProfilesForTesting(
+            [browser, api, cli, otherBrowser],
+            in: store
+        )
+        let manager = retain(ProfileManager(profileStore: store))
+        manager.loadProfiles()
+        secrets.refusedFields = Set(ProfileSecretField.allCases)
 
+        try manager.saveCredentials(
+            for: browser.id,
+            credentials: ProfileCredentials(
+                claudeSessionKey: "browser",
+                organizationId: "org"
+            ),
+            acceptingSessionOnly: true,
+            browserCredentialSave: true
+        )
+        try manager.saveCredentials(
+            for: api.id,
+            credentials: ProfileCredentials(
+                apiSessionKey: "api",
+                apiOrganizationId: "api-org"
+            ),
+            acceptingSessionOnly: true
+        )
+        try manager.saveCredentials(
+            for: cli.id,
+            credentials: ProfileCredentials(
+                cliCredentialsJSON:
+                    #"{"claudeAiOauth":{"accessToken":"cli"}}"#
+            ),
+            acceptingSessionOnly: true
+        )
+        try manager.saveCredentials(
+            for: otherBrowser.id,
+            credentials: ProfileCredentials(
+                claudeSessionKey: "other-browser",
+                organizationId: "other-org"
+            ),
+            acceptingSessionOnly: true,
+            browserCredentialSave: true
+        )
+
+        XCTAssertEqual(
+            manager.sessionOnlyCredentialProfileIDs,
+            [browser.id, api.id, cli.id, otherBrowser.id]
+        )
+        XCTAssertEqual(
+            manager.sessionOnlyClaudeAICredentialProfileIDs,
+            [browser.id, otherBrowser.id]
+        )
         XCTAssertTrue(
             ClaudeAccountView.showsBrowserCredentialNotSavedWarning(
-                profileID: displayed,
-                sessionOnlyProfileIDs: [displayed, other]
+                profileID: browser.id,
+                browserSessionOnlyProfileIDs:
+                    manager.sessionOnlyClaudeAICredentialProfileIDs
             )
         )
         XCTAssertFalse(
             ClaudeAccountView.showsBrowserCredentialNotSavedWarning(
-                profileID: displayed,
-                sessionOnlyProfileIDs: [other]
+                profileID: api.id,
+                browserSessionOnlyProfileIDs:
+                    manager.sessionOnlyClaudeAICredentialProfileIDs
+            )
+        )
+        XCTAssertFalse(
+            ClaudeAccountView.showsBrowserCredentialNotSavedWarning(
+                profileID: cli.id,
+                browserSessionOnlyProfileIDs:
+                    manager.sessionOnlyClaudeAICredentialProfileIDs
+            )
+        )
+        XCTAssertFalse(
+            ClaudeAccountView.showsBrowserCredentialNotSavedWarning(
+                profileID: UUID(),
+                browserSessionOnlyProfileIDs: [otherBrowser.id]
             )
         )
     }
@@ -440,6 +515,7 @@ final class ClaudeSetupStateTests: HostedAppTestCase {
 private final class RetryableBrowserSecretStore: ProfileSecretStore {
     enum Refusal: Error { case expected }
     var refusesWrites = false
+    var refusedFields: Set<ProfileSecretField> = []
     private var values: [ProfileSecretLocator: String] = [:]
 
     func read(
@@ -449,7 +525,9 @@ private final class RetryableBrowserSecretStore: ProfileSecretStore {
     }
 
     func write(_ value: String, to locator: ProfileSecretLocator) throws {
-        if refusesWrites { throw Refusal.expected }
+        if refusesWrites || refusedFields.contains(locator.field) {
+            throw Refusal.expected
+        }
         values[locator] = value
     }
 

@@ -199,6 +199,13 @@ class ProfileManager: ObservableObject {
     /// refused it. These are lost at quit, so the UI has to say so — see the
     /// popover banner, the Settings status card, and the quit-time guard.
     @Published private(set) var sessionOnlyCredentialProfileIDs: Set<UUID> = []
+    /// Browser credentials held only in memory. Unlike the aggregate set
+    /// above, this drives only the browser-specific Settings warning.
+    @Published private(set) var sessionOnlyClaudeAICredentialProfileIDs:
+        Set<UUID> = []
+    /// Whether the most recent profile load fully resolved every Claude
+    /// credential locator and can safely commit the one-time 4.1 cohort.
+    @Published private(set) var profileLoadIsAuthoritativeForUpgradeClassification = false
     /// The synchronous credential-state snapshot consumed by account UI.
     /// It changes in the same main-actor transaction as `profiles`, so a
     /// refresh captured before a repair cannot reintroduce stale setup UI.
@@ -213,6 +220,10 @@ class ProfileManager: ObservableObject {
     private let lifecycleEventSink: ProfileLifecycleEventSink
     private let postClaudeCreationMigration: (UUID) throws -> Profile
     private let now: () -> Date
+    private var classifyClaudeAccountsForUpgrade:
+        (([Profile], Bool, Bool) -> Void)?
+    private var startupMigrationsAllowUpgradeClassification = true
+    private var profileLoadHasAuthoritativeIdentitySet = false
 
     private var switchingSemaphore = false
 
@@ -246,14 +257,48 @@ class ProfileManager: ObservableObject {
         self.now = now
 
         let store = self.profileStore
-        sessionOnlyCredentialProfileIDs =
-            store.profilesWithSessionOnlyCredentials
-        store.sessionOnlySecretsDidChange = { [weak self] held in
+        synchronizeSessionOnlyCredentialProfileIDs()
+        store.sessionOnlySecretsDidChange = { [weak self] held, browserHeld in
             guard let self else { return }
             Task { @MainActor in
                 self.sessionOnlyCredentialProfileIDs = held
+                self.sessionOnlyClaudeAICredentialProfileIDs = browserHeld
             }
         }
+    }
+
+    private func loadProfilesFromStore() -> [Profile] {
+        let outcome = profileStore.loadProfilesWithOutcome()
+        profileLoadHasAuthoritativeIdentitySet =
+            outcome.isProfileIdentitySetAuthoritative
+        profileLoadIsAuthoritativeForUpgradeClassification =
+            outcome.isAuthoritativeForUpgradeClassification
+        return outcome.profiles
+    }
+
+    private func synchronizeSessionOnlyCredentialProfileIDs() {
+        sessionOnlyCredentialProfileIDs =
+            profileStore.profilesWithSessionOnlyCredentials
+        sessionOnlyClaudeAICredentialProfileIDs =
+            profileStore.profilesWithSessionOnlyClaudeAICredentials
+    }
+
+    func configureClaudeAccountUpgradeClassification(
+        startupMigrationsSucceeded: Bool,
+        classifier: @escaping ([Profile], Bool, Bool) -> Void
+    ) {
+        startupMigrationsAllowUpgradeClassification =
+            startupMigrationsSucceeded
+        classifyClaudeAccountsForUpgrade = classifier
+    }
+
+    private func classifyClaudeAccountsForUpgradeAfterLoad() {
+        classifyClaudeAccountsForUpgrade?(
+            profiles,
+            profileLoadHasAuthoritativeIdentitySet,
+            startupMigrationsAllowUpgradeClassification
+                && profileLoadIsAuthoritativeForUpgradeClassification
+        )
     }
 
     /// Re-attempts secure storage for held credentials. Returns true when
@@ -266,8 +311,7 @@ class ProfileManager: ObservableObject {
         let cleared = profileStore.retrySessionOnlyPersistence(
             profileID: profileID
         )
-        sessionOnlyCredentialProfileIDs =
-            profileStore.profilesWithSessionOnlyCredentials
+        synchronizeSessionOnlyCredentialProfileIDs()
         let remainingBrowserTargets =
             profileStore.profilesWithSessionOnlyClaudeAICredentials
         for id in browserTargets where !remainingBrowserTargets.contains(id) {
@@ -279,10 +323,10 @@ class ProfileManager: ObservableObject {
     // MARK: - Initialization
 
     func loadProfiles() {
-        profiles = profileStore.loadProfiles()
+        profiles = loadProfilesFromStore()
         synchronizeClaudeSetupStateSnapshots()
-        sessionOnlyCredentialProfileIDs =
-            profileStore.profilesWithSessionOnlyCredentials
+        synchronizeSessionOnlyCredentialProfileIDs()
+        classifyClaudeAccountsForUpgradeAfterLoad()
 
         // A pre-upgrade install has only the single legacy slot. Both
         // providers get a chance to claim it against their own candidates —
@@ -796,7 +840,7 @@ class ProfileManager: ObservableObject {
         } catch {
             // Rollback recovery may have completed forward on relaunch. Reload
             // the authoritative metadata before surfacing the failure.
-            profiles = profileStore.loadProfiles()
+            profiles = loadProfilesFromStore()
             if let activeID = activeProfile?.id {
                 activeProfile = profiles.first(where: { $0.id == activeID })
             }
@@ -1178,7 +1222,7 @@ class ProfileManager: ObservableObject {
                 try activationClaudeEffects
                     .resyncBeforeSwitching(currentProfile.id)
                 // Reload profiles to get the updated data in memory
-                profiles = profileStore.loadProfiles()
+                profiles = loadProfilesFromStore()
                 LoggingService.shared.log("✓ Re-synced current profile before switching")
             } catch {
                 LoggingService.shared.logError("Failed to re-sync current profile (non-fatal)", error: error)
@@ -1186,7 +1230,7 @@ class ProfileManager: ObservableObject {
         }
 
         // Reload profiles from disk to get latest data (including any resyncs from other profiles)
-        profiles = profileStore.loadProfiles()
+        profiles = loadProfilesFromStore()
 
         // Get the updated target profile from the reloaded data
         guard let updatedProfile = profiles.first(where: { $0.id == id }) else {
@@ -1283,8 +1327,7 @@ class ProfileManager: ObservableObject {
                 credentials: credentials
             )
         }
-        sessionOnlyCredentialProfileIDs =
-            profileStore.profilesWithSessionOnlyCredentials
+        synchronizeSessionOnlyCredentialProfileIDs()
 
         profiles[index].claudeSessionKey = credentials.claudeSessionKey
         profiles[index].organizationId = credentials.organizationId

@@ -76,7 +76,7 @@ final class ProfileKeychainDomainMigrationServiceTests: HostedAppTestCase {
             access: access
         )
 
-        service.migrateIfNeeded()
+        XCTAssertTrue(service.migrateIfNeeded())
 
         XCTAssertEqual(
             access.value(
@@ -116,7 +116,7 @@ final class ProfileKeychainDomainMigrationServiceTests: HostedAppTestCase {
             defaults: defaults
         )
 
-        service.migrateIfNeeded()
+        XCTAssertFalse(service.migrateIfNeeded())
 
         XCTAssertNil(
             access.value(
@@ -140,6 +140,14 @@ final class ProfileKeychainDomainMigrationServiceTests: HostedAppTestCase {
                 forKey: "profileCredentialDataProtectionMigrationCompleted_v1"
             ),
             "A locator that failed must not let the migration mark itself complete"
+        )
+
+        access.refuseFileReads = false
+        XCTAssertTrue(service.migrateIfNeeded())
+        XCTAssertTrue(
+            defaults.bool(
+                forKey: "profileCredentialDataProtectionMigrationCompleted_v1"
+            )
         )
     }
 

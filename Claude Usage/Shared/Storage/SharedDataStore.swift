@@ -24,6 +24,8 @@ class SharedDataStore {
         static let hasShownCLIShellIntegration = "hasShownCLIShellIntegration"
         static let didClassifyClaudeAccountUpgrade =
             "didClassifyClaudeAccountUpgradeV41"
+        static let claudeAccountUpgradeBoundaryProfileIDs =
+            "claudeAccountUpgradeBoundaryProfileIDsV41"
         static let terminalOnlyClaudeAccountUpgradeProfileIDs =
             "terminalOnlyClaudeAccountUpgradeProfileIDsV41"
 
@@ -122,17 +124,40 @@ class SharedDataStore {
     /// explanation. Later sign-in changes never rewrite this historical set.
     @discardableResult
     func classifyClaudeAccountsForUpgradeOnce(
-        _ profiles: [Profile]
+        _ profiles: [Profile],
+        isProfileIdentitySetAuthoritative: Bool = true,
+        isAuthoritative: Bool = true
     ) -> Set<UUID> {
         if defaults.bool(
             forKey: Keys.didClassifyClaudeAccountUpgrade
         ) {
             return terminalOnlyClaudeAccountUpgradeProfileIDs()
         }
+        let boundaryProfileIDs: Set<UUID>
+        if let storedBoundary = defaults.stringArray(
+            forKey: Keys.claudeAccountUpgradeBoundaryProfileIDs
+        ) {
+            boundaryProfileIDs = Set(
+                storedBoundary.compactMap(UUID.init(uuidString:))
+            )
+        } else {
+            guard isProfileIdentitySetAuthoritative else {
+                return []
+            }
+            boundaryProfileIDs = Set(profiles.map(\.id))
+            defaults.set(
+                boundaryProfileIDs.map(\.uuidString).sorted(),
+                forKey: Keys.claudeAccountUpgradeBoundaryProfileIDs
+            )
+        }
+        guard isAuthoritative else {
+            return []
+        }
         let profileIDs = Set(
             profiles.lazy
                 .filter {
-                    $0.providerID == .claude
+                    boundaryProfileIDs.contains($0.id)
+                        && $0.providerID == .claude
                         && ClaudeSetupState.of($0) == .terminalOnly
                 }
                 .map(\.id)

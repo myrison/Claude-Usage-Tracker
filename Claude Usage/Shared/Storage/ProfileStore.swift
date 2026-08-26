@@ -73,6 +73,12 @@ enum ProfileStoreError: Error, LocalizedError {
     }
 }
 
+struct ProfileLoadOutcome {
+    let profiles: [Profile]
+    let isProfileIdentitySetAuthoritative: Bool
+    let isAuthoritativeForUpgradeClassification: Bool
+}
+
 /// Manages profile metadata in preferences and credentials in app-owned,
 /// per-profile secure storage.
 class ProfileStore {
@@ -152,10 +158,13 @@ class ProfileStore {
     /// Called whenever the session-only set changes, so an observable layer
     /// can republish it. A direct callback rather than a notification: this
     /// file posts nothing today and the coupling is one-to-one.
-    var sessionOnlySecretsDidChange: ((Set<UUID>) -> Void)?
+    var sessionOnlySecretsDidChange: ((Set<UUID>, Set<UUID>) -> Void)?
 
     private func notifySessionOnlyChange() {
-        sessionOnlySecretsDidChange?(profilesWithSessionOnlyCredentials)
+        sessionOnlySecretsDidChange?(
+            profilesWithSessionOnlyCredentials,
+            profilesWithSessionOnlyClaudeAICredentials
+        )
     }
 
     /// Re-attempts secure storage for credentials being held in memory.
@@ -342,8 +351,18 @@ class ProfileStore {
     }
 
     func loadProfiles() -> [Profile] {
+        loadProfilesWithOutcome().profiles
+    }
+
+    func loadProfilesWithOutcome() -> ProfileLoadOutcome {
         do {
-            return try loadProfilesWithVerifiedMigration()
+            let profiles = try loadProfilesWithVerifiedMigration()
+            return ProfileLoadOutcome(
+                profiles: profiles,
+                isProfileIdentitySetAuthoritative: true,
+                isAuthoritativeForUpgradeClassification:
+                    isAuthoritativeForUpgradeClassification(profiles)
+            )
         } catch {
             LoggingService.shared.logStorageError("loadProfiles", error: error)
 
@@ -351,15 +370,40 @@ class ProfileStore {
             // look like a first launch. The previous bytes were restored, so
             // return their backward-compatible decode and retry next load.
             do {
-                return try decodeStoredProfilesMaskingPendingUnlinks()
+                return ProfileLoadOutcome(
+                    profiles: try decodeStoredProfilesMaskingPendingUnlinks(),
+                    isProfileIdentitySetAuthoritative: true,
+                    isAuthoritativeForUpgradeClassification: false
+                )
             } catch {
                 LoggingService.shared.logStorageError(
                     "decodeMaskedRestoredProfiles",
                     error: error
                 )
-                return []
+                return ProfileLoadOutcome(
+                    profiles: [],
+                    isProfileIdentitySetAuthoritative: false,
+                    isAuthoritativeForUpgradeClassification: false
+                )
             }
         }
+    }
+
+    private func isAuthoritativeForUpgradeClassification(
+        _ profiles: [Profile]
+    ) -> Bool {
+        !profiles.lazy
+            .filter { $0.providerID == .claude }
+            .contains { profile in
+                ProfileSecretField.allCases.contains { field in
+                    unresolvedLocators.contains(
+                        ProfileSecretLocator(
+                            profileID: profile.id,
+                            field: field
+                        )
+                    )
+                }
+            }
     }
 
     /// Loads, hydrates, and verifies any per-field plaintext migration rewrite.

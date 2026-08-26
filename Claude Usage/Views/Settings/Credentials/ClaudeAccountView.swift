@@ -184,8 +184,8 @@ struct ClaudeAccountView: View {
 
                     if Self.showsBrowserCredentialNotSavedWarning(
                         profileID: profile.id,
-                        sessionOnlyProfileIDs:
-                            profileManager.sessionOnlyCredentialProfileIDs
+                        browserSessionOnlyProfileIDs: profileManager
+                            .sessionOnlyClaudeAICredentialProfileIDs
                     ) {
                         browserCredentialNotSavedCard(profileID: profile.id)
                     }
@@ -530,9 +530,9 @@ struct ClaudeAccountView: View {
 
     static func showsBrowserCredentialNotSavedWarning(
         profileID: UUID,
-        sessionOnlyProfileIDs: Set<UUID>
+        browserSessionOnlyProfileIDs: Set<UUID>
     ) -> Bool {
-        sessionOnlyProfileIDs.contains(profileID)
+        browserSessionOnlyProfileIDs.contains(profileID)
     }
 
     private func removeBrowserSignIn(_ profileID: UUID) {

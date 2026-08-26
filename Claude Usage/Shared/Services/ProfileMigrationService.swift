@@ -44,11 +44,14 @@ class ProfileMigrationService {
         self.legacySettings = legacySettings
     }
 
-    func migrateIfNeeded() {
+    @discardableResult
+    func migrateIfNeeded() -> Bool {
         do {
             try migrateIfNeededThrowing()
+            return true
         } catch {
             LoggingService.shared.logError("Profile migration failed; it will retry", error: error)
+            return false
         }
     }
 

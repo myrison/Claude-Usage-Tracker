@@ -50,20 +50,25 @@ final class ProfileKeychainDomainMigrationService {
     /// every launch: it returns immediately once flagged, and the flag is
     /// only ever set after every locator this pass looked at either had
     /// nothing to migrate or was copied and verified.
-    func migrateIfNeeded() {
+    @discardableResult
+    func migrateIfNeeded() -> Bool {
         guard !defaults.bool(forKey: migrationCompletedKey) else {
-            return
+            return true
         }
 
         // Nothing to migrate to yet. Leave the flag unset so this retries on
         // a future launch — e.g. once a properly signed, entitled build is
         // installed over an ad-hoc one.
         guard resolver.domain == .dataProtection else {
-            return
+            return true
         }
 
+        let loadOutcome = profileStore.loadProfilesWithOutcome()
+        guard loadOutcome.isAuthoritativeForUpgradeClassification else {
+            return false
+        }
         var allLocatorsSucceeded = true
-        for profile in profileStore.loadProfiles() {
+        for profile in loadOutcome.profiles {
             for field in ProfileSecretField.allCases {
                 let locator = ProfileSecretLocator(
                     profileID: profile.id,
@@ -76,9 +81,10 @@ final class ProfileKeychainDomainMigrationService {
         }
 
         guard allLocatorsSucceeded else {
-            return
+            return false
         }
         defaults.set(true, forKey: migrationCompletedKey)
+        return defaults.bool(forKey: migrationCompletedKey)
     }
 
     /// Returns `false` only when this locator needs another attempt later: an
