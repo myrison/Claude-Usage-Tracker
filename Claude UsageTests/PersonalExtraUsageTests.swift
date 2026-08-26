@@ -2313,6 +2313,254 @@ final class PersonalExtraUsageTests: XCTestCase {
         XCTAssertEqual(outcome, .failed(.expired))
     }
 
+    // MARK: - Terminal-only usage renewal
+
+    func testTerminalOnlyRefreshRenewsPersistsAndCapturesTheNewToken()
+        async throws
+    {
+        let expired = Self.credentialsJSON(expiresAt: 1_000)
+        let profile = terminalOnlyProfile(credentialsJSON: expired)
+        let store = makeIsolatedProfileStore()
+        try seedProfilesForTesting([profile], in: store)
+        try store.saveCLIProfileCredential(expired, for: profile.id)
+        let manager = ProfileManager(profileStore: store)
+        manager.profiles = [profile]
+        let renewals = RenewedCredentialRecorder()
+        let keychain = TerminalRenewalSecurityRunner(holding: expired)
+        let cliSync = ClaudeCodeSyncService(
+            profileStore: store,
+            systemCredentialsReader: { expired },
+            securityRunner: keychain
+        )
+        let service = ClaudeAPIService(
+            profileManager: manager,
+            systemCredentialsReader: { nil },
+            renewedCredentialWriter: { renewal, profileID in
+                renewals.record(
+                    renewal.credentialsJSON,
+                    rotatedFrom: renewal.rotatedFrom,
+                    for: profileID
+                )
+                try cliSync.saveRefreshedCredentials(
+                    renewal.credentialsJSON,
+                    for: profileID,
+                    rotatedFrom: renewal.rotatedFrom
+                )
+            }
+        )
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID
+        )
+
+        let request = try await service
+            .captureUsageRequestPreparingTerminalSignIn(for: profile)
+        let usage = try await service.fetchUsageData(using: request)
+
+        XCTAssertEqual(request.source, .profileCLI)
+        XCTAssertTrue(request.capturesOAuthToken("renewed-access"))
+        XCTAssertTrue(
+            try XCTUnwrap(
+                store.loadProfileCredentials(profile.id).cliCredentialsJSON
+            ).contains(#""accessToken":"renewed-access""#)
+        )
+        XCTAssertEqual(renewals.writes.count, 1)
+        XCTAssertEqual(renewals.writes.first?.rotatedFrom, expired)
+        let accountDirectory = ClaudeCodeSyncService
+            .configurationDirectory(forAccountNamed: "fixture-account")
+        let accountService = ClaudeCodeSyncService.serviceName(
+            forConfigurationDirectory: accountDirectory.path
+        )
+        let keychainWrite = try XCTUnwrap(keychain.invocations.last)
+        XCTAssertEqual(keychainWrite.first, "add-generic-password")
+        XCTAssertTrue(keychainWrite.contains(accountService))
+        XCTAssertFalse(keychainWrite.contains("Claude Code-credentials"))
+        XCTAssertTrue(
+            keychainWrite.contains { $0.contains("renewed-access") }
+        )
+        XCTAssertEqual(usage.sessionPercentage, 0)
+    }
+
+    func testTerminalOnlyRefreshAdoptsLiveLoginAfterInvalidGrant()
+        async throws
+    {
+        let expired = Self.credentialsJSON(expiresAt: 1_000)
+        let live = Self.liveLoginJSON(
+            expiresAt: Date().addingTimeInterval(8 * 3_600)
+                .timeIntervalSince1970 * 1_000
+        )
+        let profile = terminalOnlyProfile(credentialsJSON: expired)
+        let store = makeIsolatedProfileStore()
+        try seedProfilesForTesting([profile], in: store)
+        try store.saveCLIProfileCredential(expired, for: profile.id)
+        let manager = ProfileManager(profileStore: store)
+        manager.profiles = [profile]
+        var liveReads = 0
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            systemCredentials: {
+                liveReads += 1
+                return live
+            }
+        )
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            tokenRefreshStatusCode: 400
+        )
+
+        let first = try await service
+            .captureUsageRequestPreparingTerminalSignIn(for: profile)
+        _ = try await service.fetchUsageData(using: first)
+        let second = try await service
+            .captureUsageRequestPreparingTerminalSignIn(for: profile)
+
+        XCTAssertEqual(first.source, .profileCLI)
+        XCTAssertTrue(first.capturesOAuthToken("live-access-token"))
+        XCTAssertTrue(second.capturesOAuthToken("live-access-token"))
+        XCTAssertEqual(liveReads, 1)
+        XCTAssertTrue(
+            try XCTUnwrap(
+                store.loadProfileCredentials(profile.id).cliCredentialsJSON
+            ).contains(#""accessToken":"live-access-token""#)
+        )
+    }
+
+    func testLiveRefreshRuntimePreparesTerminalOnlyLoginBeforeFetching()
+        async throws
+    {
+        let expired = Self.credentialsJSON(expiresAt: 1_000)
+        let profile = terminalOnlyProfile(credentialsJSON: expired)
+        let store = makeIsolatedProfileStore()
+        try seedProfilesForTesting([profile], in: store)
+        try store.saveCLIProfileCredential(expired, for: profile.id)
+        let manager = ProfileManager(profileStore: store)
+        manager.profiles = [profile]
+        manager.activeProfile = profile
+        let renewals = RenewedCredentialRecorder()
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            renewals: renewals
+        )
+        let completed = expectation(description: "live refresh completed")
+        let runtime = UsageRefreshRuntime.live(
+            profileManager: manager,
+            apiService: service,
+            statusService: ClaudeStatusService(),
+            featureAvailability: .testing(),
+            batchObserver: { _ in completed.fulfill() }
+        )
+        runtime.activate(
+            profiles: [profile],
+            focusedProfileID: profile.id,
+            visibleProfileIDs: [profile.id],
+            epoch: 1
+        )
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID
+        )
+
+        _ = await runtime.refresh(
+            profiles: [profile],
+            trigger: .manual
+        ).value
+        await fulfillment(of: [completed], timeout: 2)
+
+        XCTAssertEqual(
+            StubClaudeEndpointsURLProtocol.requestedURLs.filter {
+                $0 == ClaudeCLITokenRefresher.tokenEndpoint
+            }.count,
+            1
+        )
+        XCTAssertTrue(
+            renewals.carriesAccessToken("renewed-access", for: profile.id)
+        )
+        let snapshot = try XCTUnwrap(
+            runtime.presentationStore.snapshot(for: profile.id)
+        )
+        XCTAssertNotNil(snapshot.report)
+        XCTAssertNil(snapshot.currentFailure)
+        await runtime.shutdownAndWait(profiles: [profile])
+    }
+
+    func testTerminalOnlyDeadLoginFailsAndIsNotRenewedAgainNextCycle()
+        async throws
+    {
+        let expired = Self.credentialsJSON(expiresAt: 1_000)
+        let profile = terminalOnlyProfile(credentialsJSON: expired)
+        let store = makeIsolatedProfileStore()
+        try seedProfilesForTesting([profile], in: store)
+        try store.saveCLIProfileCredential(expired, for: profile.id)
+        let manager = ProfileManager(profileStore: store)
+        manager.profiles = [profile]
+        var liveReads = 0
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store,
+            systemCredentials: {
+                liveReads += 1
+                return nil
+            }
+        )
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID,
+            tokenRefreshStatusCode: 400
+        )
+
+        for _ in 0..<2 {
+            do {
+                _ = try await service
+                    .captureUsageRequestPreparingTerminalSignIn(for: profile)
+                XCTFail("a settled dead login must remain unauthenticated")
+            } catch let error as AppError {
+                XCTAssertEqual(error.code, .sessionKeyNotFound)
+            }
+        }
+
+        XCTAssertEqual(
+            StubClaudeEndpointsURLProtocol.requestedURLs.filter {
+                $0 == ClaudeCLITokenRefresher.tokenEndpoint
+            }.count,
+            1
+        )
+        XCTAssertEqual(liveReads, 1)
+    }
+
+    func testBrowserBackedRefreshDoesNotEnterTerminalRenewalPath()
+        async throws
+    {
+        let profile = Profile(
+            id: UUID(),
+            name: "Browser fixture",
+            claudeSessionKey: "sk-ant-sid01-fixture-session-key-value",
+            organizationId: teamOrganizationID,
+            cliCredentialsJSON: Self.credentialsJSON(expiresAt: 1_000),
+            hasCliAccount: true,
+            cliAccountName: "fixture-account"
+        )
+        let store = makeIsolatedProfileStore()
+        try seedProfilesForTesting([profile], in: store)
+        let manager = ProfileManager(profileStore: store)
+        manager.profiles = [profile]
+        let service = makeIsolatedClaudeAPIService(
+            profileManager: manager,
+            store: store
+        )
+        StubClaudeEndpointsURLProtocol.install(
+            cliOrganizationID: teamOrganizationID
+        )
+
+        let request = try await service
+            .captureUsageRequestPreparingTerminalSignIn(for: profile)
+
+        XCTAssertEqual(request.source, .claudeAI(checkOverage: true))
+        XCTAssertFalse(
+            StubClaudeEndpointsURLProtocol.requestedURLs.contains(
+                ClaudeCLITokenRefresher.tokenEndpoint
+            )
+        )
+    }
+
     // MARK: - Catalog
 
     func testEnglishCatalogCarriesEveryPersonalUsageMessage() throws {
@@ -3170,6 +3418,18 @@ final class PersonalExtraUsageTests: XCTestCase {
         """
     }
 
+    private func terminalOnlyProfile(credentialsJSON: String) -> Profile {
+        Profile(
+            id: UUID(),
+            name: "Terminal-only fixture",
+            claudeSessionKey: nil,
+            organizationId: nil,
+            cliCredentialsJSON: credentialsJSON,
+            hasCliAccount: true,
+            cliAccountName: "fixture-account"
+        )
+    }
+
     private func seedProfile(
         id: UUID,
         organizationID: String,
@@ -3237,6 +3497,25 @@ final class PersonalExtraUsageTests: XCTestCase {
     }
 
     private var retained: [AnyObject] = []
+}
+
+private final class TerminalRenewalSecurityRunner: SecurityCommandRunning {
+    private(set) var invocations: [[String]] = []
+    private let heldCredential: String
+
+    init(holding heldCredential: String) {
+        self.heldCredential = heldCredential
+    }
+
+    func run(_ arguments: [String]) throws -> SecurityCommandResult {
+        invocations.append(arguments)
+        let isRead = arguments.first == "find-generic-password"
+        return SecurityCommandResult(
+            exitCode: 0,
+            standardOutput: isRead ? heldCredential : "",
+            standardError: ""
+        )
+    }
 }
 
 /// Serves the whole set of endpoints one usage refresh touches, so no test
@@ -3325,6 +3604,16 @@ private nonisolated final class StubClaudeEndpointsURLProtocol: URLProtocol {
                           """.utf8
                 )
             ),
+            "https://api.anthropic.com/v1/messages": (
+                200,
+                Data("{}".utf8)
+            ),
+            "https://status.claude.com/api/v2/status.json": (
+                200,
+                Data(
+                    #"{"status":{"indicator":"none","description":"Operational"}}"#.utf8
+                )
+            ),
             "https://platform.claude.com/v1/oauth/token": (
                 tokenRefreshStatusCode,
                 Data(
@@ -3366,7 +3655,8 @@ private nonisolated final class StubClaudeEndpointsURLProtocol: URLProtocol {
         return [
             "claude.ai",
             "api.anthropic.com",
-            "platform.claude.com"
+            "platform.claude.com",
+            "status.claude.com"
         ].contains(host)
     }
 

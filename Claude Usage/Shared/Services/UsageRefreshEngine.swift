@@ -1140,15 +1140,9 @@ final class UsageRefreshRuntime {
         )
         let registry = UsageProviderRegistry(
             claudeRequestCapture: { profile in
-                let coreRequest = Result {
-                    try apiService.captureUsageRequest(for: profile)
-                }
                 let apiRequest = apiService.captureAPIUsageRequest(
                     for: profile
                 )
-                if apiRequest == nil {
-                    _ = try coreRequest.get()
-                }
                 let apiFetch: ProviderAPIFetch?
                 if let apiRequest {
                     apiFetch = { @Sendable in
@@ -1158,6 +1152,28 @@ final class UsageRefreshRuntime {
                     }
                 } else {
                     apiFetch = nil
+                }
+
+                if profile.claudeSessionKey == nil {
+                    return CapturedClaudeProviderRequest(
+                        coreFetch: {
+                            let coreRequest = try await apiService
+                                .captureUsageRequestPreparingTerminalSignIn(
+                                    for: profile
+                                )
+                            return try await apiService.fetchUsageData(
+                                using: coreRequest
+                            )
+                        },
+                        apiFetch: apiFetch
+                    )
+                }
+
+                let coreRequest = Result {
+                    try apiService.captureUsageRequest(for: profile)
+                }
+                if apiRequest == nil {
+                    _ = try coreRequest.get()
                 }
                 return CapturedClaudeProviderRequest(
                     coreFetch: {

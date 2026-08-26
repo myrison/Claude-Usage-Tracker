@@ -1042,7 +1042,8 @@ class ClaudeAPIService: APIServiceProtocol {
     /// it was.
     private func usableCLICredential(
         for profile: Profile,
-        credentialsJSON: String
+        credentialsJSON: String,
+        logNoBrowserRenewal: Bool = false
     ) async -> (credentialsJSON: String, accessToken: String)? {
         let sync = ClaudeCodeSyncService.shared
         if !sync.isTokenExpired(credentialsJSON),
@@ -1085,6 +1086,13 @@ class ClaudeAPIService: APIServiceProtocol {
             return nil
         }
         expiredCLILogins.remove(fingerprint)
+
+        if logNoBrowserRenewal {
+            LoggingService.shared.log(
+                "Renewed the terminal sign-in for profile "
+                + "'\(profile.name)' without a browser sign-in."
+            )
+        }
 
         do {
             // `credentialsJSON` is the credential whose refresh token was
@@ -1947,6 +1955,65 @@ class ClaudeAPIService: APIServiceProtocol {
             code: .sessionKeyNotFound,
             message: "Missing credentials for the selected profile",
             isRecoverable: false
+        )
+    }
+
+    /// Captures a terminal-only profile after giving its stored login the
+    /// same renewal and live-login recovery opportunity used by the member
+    /// extra-usage path. Browser-backed profiles deliberately never enter
+    /// this method from the refresh engine, so their existing request and
+    /// renewal sequence stays unchanged.
+    func captureUsageRequestPreparingTerminalSignIn(
+        for profile: Profile
+    ) async throws -> CapturedUsageRequest {
+        guard profile.claudeSessionKey == nil else {
+            return try captureUsageRequest(for: profile)
+        }
+
+        let presented: String
+        let sourceWhenUnchanged: CapturedUsageFetchSource
+        if let renewal = renewedCLICredentials[profile.id],
+           renewal.base == profile.cliCredentialsJSON?.hashValue {
+            presented = renewal.credentialsJSON
+            sourceWhenUnchanged = .profileCLI
+        } else if let stored = profile.cliCredentialsJSON {
+            renewedCLICredentials[profile.id] = nil
+            presented = stored
+            sourceWhenUnchanged = .profileCLI
+        } else if let live = try systemCredentialsReader(
+            profile.cliAccountName
+        ) {
+            presented = live
+            sourceWhenUnchanged = .systemCLI
+        } else {
+            throw AppError(
+                code: .sessionKeyNotFound,
+                message: "Missing credentials for the selected profile",
+                isRecoverable: false
+            )
+        }
+
+        forgetRenewalFailures(for: profile.id, nowPresenting: presented)
+        guard let usable = await usableCLICredential(
+            for: profile,
+            credentialsJSON: presented,
+            logNoBrowserRenewal: true
+        ) else {
+            throw AppError(
+                code: .sessionKeyNotFound,
+                message: "Missing credentials for the selected profile",
+                isRecoverable: false
+            )
+        }
+
+        return CapturedUsageRequest(
+            source: usable.credentialsJSON == presented
+                ? sourceWhenUnchanged
+                : .profileCLI,
+            sessionKey: nil,
+            organizationID: nil,
+            oauthAccessToken: usable.accessToken,
+            profileID: profile.id
         )
     }
 
