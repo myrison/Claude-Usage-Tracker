@@ -518,7 +518,14 @@ final class CodexProfileSetupTests: HostedAppTestCase {
             !navigation.isResolvingProfile
         }
         XCTAssertNil(navigation.selectedProfileID)
-        XCTAssertEqual(navigation.selectedSection, .claudeAI)
+        XCTAssertEqual(navigation.selectedSection, .claudeAccount)
+        XCTAssertEqual(context.manager.activeProfile?.id, claude.id)
+
+        controller.navigate(
+            to: .claudeAccount(profileID: claude.id)
+        )
+        await waitUntil { !navigation.isResolvingProfile }
+        XCTAssertEqual(navigation.selectedSection, .claudeAccount)
         XCTAssertEqual(context.manager.activeProfile?.id, claude.id)
     }
 
@@ -566,7 +573,7 @@ final class CodexProfileSetupTests: HostedAppTestCase {
         XCTAssertTrue(navigation.isResolvingProfile)
         await waitUntil { !navigation.isResolvingProfile }
         XCTAssertNil(navigation.selectedProfileID)
-        XCTAssertEqual(navigation.selectedSection, .claudeAI)
+        XCTAssertEqual(navigation.selectedSection, .claudeAccount)
         XCTAssertEqual(context.manager.activeProfile?.id, claude.id)
     }
 

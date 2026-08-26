@@ -50,6 +50,9 @@ enum MenuBarAttentionSignal {
         /// The Claude Code CLI sign-in. It produces exactly one thing: the
         /// member's own extra-usage figure. Everything else keeps working.
         case claudeCode
+        /// A legacy terminal-only profile will go silent when that sign-in
+        /// lapses because no browser sign-in exists to renew it.
+        case setupIncomplete
     }
 
     /// - Parameters:
@@ -68,7 +71,8 @@ enum MenuBarAttentionSignal {
     static func attention(
         cliSignInIssue: ClaudeUsage.PersonalExtraUsageIssue?,
         hasCredentialError: Bool,
-        healthStatus: ProviderHealthStatus?
+        healthStatus: ProviderHealthStatus?,
+        setupState: ClaudeSetupState? = nil
     ) -> Credential? {
         // claude.ai first, so that when both credentials are broken at once
         // the mark drawn and the words spoken both name the bigger loss.
@@ -78,6 +82,10 @@ enum MenuBarAttentionSignal {
         // Two surfaces disagreeing about which failure matters more would be
         // worse than either ordering.
         if hasCredentialError { return .claudeAI }
+
+        if setupState == .terminalOnly {
+            return .setupIncomplete
+        }
 
         // Exhaustive on purpose, with no `default:`, matching the discipline
         // in `ClaudeUsageProviderAdapter.accountHealth`: a newly added status

@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import UsageCore
 
 /// Manages app-wide settings that are shared across all profiles
 class SharedDataStore {
@@ -21,6 +22,10 @@ class SharedDataStore {
         static let hasCompletedSetup = "hasCompletedSetup"
         static let hasShownWizardOnce = "hasShownWizardOnce"
         static let hasShownCLIShellIntegration = "hasShownCLIShellIntegration"
+        static let didClassifyClaudeAccountUpgrade =
+            "didClassifyClaudeAccountUpgradeV41"
+        static let terminalOnlyClaudeAccountUpgradeProfileIDs =
+            "terminalOnlyClaudeAccountUpgradeProfileIDsV41"
 
         // GitHub Star Tracking
         static let firstLaunchDate = "firstLaunchDate"
@@ -111,6 +116,48 @@ class SharedDataStore {
 
     func markCLIShellIntegrationShown() {
         defaults.set(true, forKey: Keys.hasShownCLIShellIntegration)
+    }
+
+    /// Captures only the profiles that need the one-time 4.1 upgrade
+    /// explanation. Later sign-in changes never rewrite this historical set.
+    @discardableResult
+    func classifyClaudeAccountsForUpgradeOnce(
+        _ profiles: [Profile]
+    ) -> Set<UUID> {
+        if defaults.bool(
+            forKey: Keys.didClassifyClaudeAccountUpgrade
+        ) {
+            return terminalOnlyClaudeAccountUpgradeProfileIDs()
+        }
+        let profileIDs = Set(
+            profiles.lazy
+                .filter {
+                    $0.providerID == .claude
+                        && ClaudeSetupState.of($0) == .terminalOnly
+                }
+                .map(\.id)
+        )
+        defaults.set(
+            profileIDs.map(\.uuidString).sorted(),
+            forKey: Keys.terminalOnlyClaudeAccountUpgradeProfileIDs
+        )
+        defaults.set(
+            true,
+            forKey: Keys.didClassifyClaudeAccountUpgrade
+        )
+        return profileIDs
+    }
+
+    func terminalOnlyClaudeAccountUpgradeProfileIDs() -> Set<UUID> {
+        Set(
+            (defaults.stringArray(
+                forKey: Keys.terminalOnlyClaudeAccountUpgradeProfileIDs
+            ) ?? []).compactMap(UUID.init(uuidString:))
+        )
+    }
+
+    func wasTerminalOnlyAtClaudeAccountUpgrade(_ profileID: UUID) -> Bool {
+        terminalOnlyClaudeAccountUpgradeProfileIDs().contains(profileID)
     }
 
     // MARK: - GitHub Star Prompt Tracking

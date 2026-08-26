@@ -1,5 +1,5 @@
 //
-//  PersonalUsageView.swift
+//  ClaudeBrowserSignInSheet.swift
 //  Claude Usage - Claude.ai Personal Usage Tracking
 //
 //  Created by Claude Code on 2025-12-20.
@@ -73,78 +73,20 @@ private enum PersonalUsageAttemptGate {
     }
 }
 
-/// Claude.ai personal usage tracking (free tier)
-struct PersonalUsageView: View {
+/// Reusable browser sign-in flow for one Claude profile.
+struct ClaudeBrowserSignInSheet: View {
     @StateObject private var profileManager = ProfileManager.shared
     @State private var wizardState = WizardState()
-    @State private var currentCredentials: ProfileCredentials?
+    let targetProfileID: UUID
+    let onCompletion: () -> Void
     private let apiService = ClaudeAPIService()
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.section) {
-                // Page Header
                 SettingsPageHeader(
-                    title: "personal.title".localized,
-                    subtitle: "personal.subtitle".localized
-                )
-
-                // Professional Status Card
-                HStack(spacing: DesignTokens.Spacing.medium) {
-                    Circle()
-                        .fill(statusDotColor)
-                        .frame(width: DesignTokens.StatusDot.standard, height: DesignTokens.StatusDot.standard)
-
-                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.extraSmall) {
-                        Text(statusTitle)
-                            .font(DesignTokens.Typography.bodyMedium)
-
-                        if let creds = currentCredentials, creds.hasClaudeAI {
-                            Text(
-                                isActiveCredentialSessionOnly
-                                    ? "personal.session_key_validated".localized
-                                    : "personal.session_key_stored".localized
-                            )
-                                .font(DesignTokens.Typography.captionMono)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-
-                    Spacer()
-
-                    // The credential works but is not in the Keychain, so it
-                    // is lost at quit unless this succeeds.
-                    if isActiveCredentialSessionOnly {
-                        Button(action: retryCredentialSave) {
-                            Text("personal.retry_save".localized)
-                                .font(DesignTokens.Typography.body)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.regular)
-                    }
-
-                    // Remove button integrated into status card
-                    if currentCredentials?.hasClaudeAI == true {
-                        Button(action: removeCredentials) {
-                            HStack(spacing: DesignTokens.Spacing.extraSmall) {
-                                Image(systemName: "trash")
-                                    .font(.system(size: DesignTokens.Icons.small))
-                                Text("common.remove".localized)
-                                    .font(DesignTokens.Typography.body)
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.regular)
-                        .foregroundColor(.red)
-                    }
-                }
-                .padding(DesignTokens.Spacing.medium)
-                .background(DesignTokens.Colors.cardBackground)
-                .cornerRadius(DesignTokens.Radius.card)
-                .overlay(
-                    RoundedRectangle(cornerRadius: DesignTokens.Radius.card)
-                        .strokeBorder(DesignTokens.Colors.cardBorder, lineWidth: 1)
+                    title: "claude_account.browser_sheet.title".localized,
+                    subtitle: "claude_account.browser_sheet.subtitle".localized
                 )
 
                 // Configuration Card Container
@@ -210,7 +152,7 @@ struct PersonalUsageView: View {
                             ConfirmStep(
                                 wizardState: $wizardState,
                                 apiService: apiService,
-                                onSave: { loadCurrentCredentials() }
+                                onSave: onCompletion
                             )
                         }
                     }
@@ -230,15 +172,6 @@ struct PersonalUsageView: View {
         }
         .onAppear {
             loadExistingConfiguration()
-            loadCurrentCredentials()
-        }
-        .onChange(of: profileManager.activeClaudeProfile?.id) { _, _ in
-            // Reload when profile changes
-            loadExistingConfiguration()
-            loadCurrentCredentials()
-
-            // Reset wizard state
-            wizardState = WizardState()
         }
     }
 
@@ -252,7 +185,9 @@ struct PersonalUsageView: View {
     }
 
     private func loadExistingConfiguration() {
-        guard let profile = profileManager.activeClaudeProfile else { return }
+        guard let profile = profileManager.profiles.first(where: {
+            $0.id == targetProfileID && $0.providerID == .claude
+        }) else { return }
 
         // Load existing credentials for comparison
         if let creds = try? ProfileStore.shared.loadProfileCredentials(profile.id) {
@@ -261,69 +196,6 @@ struct PersonalUsageView: View {
         }
     }
 
-    private func loadCurrentCredentials() {
-        guard let profile = profileManager.activeClaudeProfile else { return }
-        currentCredentials = try? ProfileStore.shared.loadProfileCredentials(profile.id)
-    }
-
-    /// True when the active Claude profile's credential is being held in
-    /// memory because secure storage refused it.
-    private var isActiveCredentialSessionOnly: Bool {
-        guard let id = profileManager.activeClaudeProfile?.id else {
-            return false
-        }
-        return profileManager.sessionOnlyCredentialProfileIDs.contains(id)
-    }
-
-    private var statusDotColor: Color {
-        guard currentCredentials?.hasClaudeAI == true else {
-            return Color.secondary.opacity(0.4)
-        }
-        return isActiveCredentialSessionOnly ? .orange : .green
-    }
-
-    private var statusTitle: String {
-        guard currentCredentials?.hasClaudeAI == true else {
-            return "general.not_connected".localized
-        }
-        return isActiveCredentialSessionOnly
-            ? "personal.connected_not_saved".localized
-            : "general.connected".localized
-    }
-
-    private func retryCredentialSave() {
-        profileManager.retrySessionOnlyCredentialSave(
-            profileID: profileManager.activeClaudeProfile?.id
-        )
-    }
-
-    private func removeCredentials() {
-        guard let profileId = profileManager.activeClaudeProfile?.id else {
-            LoggingService.shared.logError("PersonalUsageView: No active profile for removal")
-            return
-        }
-
-        LoggingService.shared.log("PersonalUsageView: Starting credential removal for profile \(profileId)")
-
-        do {
-            // Use ProfileManager's shared removal method
-            try profileManager.removeClaudeAICredentials(for: profileId)
-
-            // Reload UI to update the view
-            loadCurrentCredentials()
-
-            // Reset wizard
-            wizardState = WizardState()
-
-            LoggingService.shared.log("PersonalUsageView: Successfully removed Claude.ai credentials")
-
-        } catch {
-            let appError = AppError.wrap(error)
-            ErrorLogger.shared.log(appError, severity: .error)
-            ErrorPresenter.shared.showAlert(for: appError)
-            LoggingService.shared.logError("PersonalUsageView: Failed to remove credentials - \(appError.message)")
-        }
-    }
 }
 
 // MARK: - Step 1: Enter Key
@@ -1060,6 +932,9 @@ struct ConfirmStep: View {
 // MARK: - Previews
 
 #Preview {
-    PersonalUsageView()
+    ClaudeBrowserSignInSheet(
+        targetProfileID: UUID(),
+        onCompletion: {}
+    )
         .frame(width: 520, height: 600)
 }

@@ -194,6 +194,7 @@ final class SetupWizardLocalizationFitTests: XCTestCase {
         ]
         let statusKeys = [
             "claude_account.summary.status.working",
+            "claude_account.summary.status.working_not_renewable",
             "claude_account.summary.status.not_linked",
             "claude_account.summary.status.missing"
         ]

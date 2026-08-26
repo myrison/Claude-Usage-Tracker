@@ -1139,8 +1139,8 @@ private final class UITestMenuStatusController:
             action = "settings.account"
         case .appearance:
             action = "settings.appearance"
-        case .cliAccount:
-            action = "settings.cli_account"
+        case .claudeAccount:
+            action = "settings.claude_account"
         case .manageProfiles:
             action = "settings.profiles"
         case .defaultView:

@@ -311,7 +311,7 @@ struct ProviderCapturedTargetActionRouter {
         case activate
         case providerAccount
         case appearance
-        case cliAccount
+        case claudeAccount
         case manageProfiles
         case legacySettings
         case popoverSettings
@@ -343,7 +343,7 @@ struct ProviderCapturedTargetActionRouter {
         for target: ProviderStatusItemIdentity
     ) -> SettingsNavigationDestination {
         target.providerID == .claude
-            ? .defaultView
+            ? .claudeAccount(profileID: target.profileID)
             : .providerAccount(profileID: target.profileID)
     }
 
@@ -387,9 +387,9 @@ struct ProviderCapturedTargetActionRouter {
                 target,
                 profile
             )
-        case .cliAccount:
+        case .claudeAccount:
             sinks.settings(
-                .cliAccount(profileID: target.profileID),
+                .claudeAccount(profileID: target.profileID),
                 target,
                 profile
             )

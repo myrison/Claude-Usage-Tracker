@@ -13,15 +13,25 @@ struct ClaudeSignInSummaryView: View {
     let state: ClaudeSetupState
     let browserDetail: String
     let terminalDetail: String
+    let browserAction: ClaudeSignInSummaryAction?
+    let terminalAction: ClaudeSignInSummaryAction?
+    let terminalWorkingButNotRenewable: Bool
 
     init(
         state: ClaudeSetupState,
         browserDetail: String,
-        terminalDetail: String
+        terminalDetail: String,
+        browserAction: ClaudeSignInSummaryAction? = nil,
+        terminalAction: ClaudeSignInSummaryAction? = nil,
+        terminalWorkingButNotRenewable: Bool = false
     ) {
         self.state = state
         self.browserDetail = browserDetail
         self.terminalDetail = terminalDetail
+        self.browserAction = browserAction
+        self.terminalAction = terminalAction
+        self.terminalWorkingButNotRenewable =
+            terminalWorkingButNotRenewable
     }
 
     var body: some View {
@@ -126,6 +136,9 @@ struct ClaudeSignInSummaryView: View {
     }
 
     private var terminalStatus: Status {
+        if terminalWorkingButNotRenewable {
+            return .workingNotRenewable
+        }
         switch state {
         case .complete, .terminalOnly:
             return .working
@@ -181,6 +194,7 @@ private struct Verdict {
 
 private enum Status {
     case working
+    case workingNotRenewable
     case notLinked
     case missing
 
@@ -188,6 +202,8 @@ private enum Status {
         switch self {
         case .working:
             return "claude_account.summary.status.working"
+        case .workingNotRenewable:
+            return "claude_account.summary.status.working_not_renewable"
         case .notLinked:
             return "claude_account.summary.status.not_linked"
         case .missing:
@@ -199,6 +215,8 @@ private enum Status {
         switch self {
         case .working:
             return SettingsColors.success
+        case .workingNotRenewable:
+            return SettingsColors.error
         case .notLinked:
             return SettingsColors.secondary
         case .missing:

@@ -365,8 +365,6 @@
 /* ==================== */
 /* MARK: - Personal Usage (Additional) */
 /* ==================== */
-"personal.title" = "個人使用";
-"personal.subtitle" = "Claude.aiの使用状況とセッションを追跡";
 "personal.label_session_key" = "セッションキー";
 "personal.placeholder_session_key" = "sk-ant-sid-...";
 "personal.help_session_key" = "claude.ai DevToolsからのsessionKey Cookieを貼り付け";
@@ -645,12 +643,8 @@
 "section.settings" = "設定";
 "section.app" = "アプリ";
 
-"section.claudeai_title" = "Claude.ai";
-"section.claudeai_desc" = "Claude.ai認証情報";
 "section.api_console_title" = "APIコンソール";
 "section.api_console_desc" = "APIコンソール認証情報";
-"section.cli_account_title" = "CLIアカウント";
-"section.cli_account_desc" = "CLIアカウント同期";
 "section.appearance_title" = "外観";
 "section.appearance_desc" = "メニューバーの外観";
 "section.general_title" = "一般";
@@ -691,8 +685,6 @@
 /* ==================== */
 /* MARK: - CLI Account Sync */
 /* ==================== */
-"cli.title" = "CLIアカウント";
-"cli.subtitle" = "ログイン済みのClaude Codeアカウントを同期";
 "cli.synced" = "CLIアカウント同期済み";
 "cli.not_synced" = "未同期";
 "cli.account_details" = "アカウント詳細";
@@ -920,8 +912,6 @@
 "popover.banner.credentials_not_saved" = "認証情報が保存されていません (%d)";
 "popover.banner.credentials_not_saved.detail" = "このセッションのみ保存されています。終了すると失われます。";
 "popover.banner.credentials_not_saved.retry" = "保存を再試行";
-"personal.connected_not_saved" = "接続済み — 未保存";
-"personal.retry_save" = "保存を再試行";
 "quit.credentials_unsaved.title" = "認証情報を保存できませんでした";
 "quit.credentials_unsaved.body" = "終了すると再入力が必要になります。";
 "quit.credentials_unsaved.quit" = "終了する";
@@ -1288,7 +1278,6 @@
 "chrome_assisted.profile_changed" = "アクティブな Claude プロファイルが変更されました。設定をやり直してください。";
 "chrome_assisted.confirm_context" = "Chrome プロファイル %@ が RevvyTach プロファイル %@ に使用するコンテキストであることを確認しました。これは API で検証されていません。";
 "chrome_assisted.new_claude_profile" = "新しい Claude プロファイル";
-"personal.session_key_stored" = "セッションキーを保存しました";
 "personal.session_key_validated" = "セッションキーを検証しました";
 "menubar.overage_balance" = "クレジット残高";
 "menubar.overage_balance_organization" = "クレジット残高 · 組織";
@@ -1310,7 +1299,6 @@
 "popover.extra_usage.absent.cli_other_organization" = "ご自身の追加使用量は表示されません。連携されている Claude Code アカウントは別の組織に属しています。";
 "popover.extra_usage.absent.claude_account_unresolved" = "ご自身の追加使用量をこの組織と照合できませんでした。「設定 → Claude.ai」でアカウントを再接続してください。";
 "popover.extra_usage.organization_lookup_failed" = "ご自身の追加使用量を今回読み取れませんでした。更新して再試行してください。";
-"cli.connect_extra_usage_hint" = "自分の追加使用を表示するには Claude Code アカウントを接続してください。管理者の場合は、既定で組織の分が表示されます。";
 
 // Claude アカウント設定の概要
 "claude_account.summary.verdict.complete" = "設定完了 — 両方のサインインがリンクされています。RevvyTach はターミナルのサインインを自動更新します。";
@@ -1347,3 +1335,33 @@
 "wizard.review.terminal_linked_detail" = "検出されたターミナルのサインインは設定完了時にリンクされます。";
 "wizard.review.terminal_not_linked_detail" = "未リンクです。後で「設定 → Claude アカウント」から追加できます。";
 "wizard.start_tracking" = "追跡を開始";
+"section.claude_account_title" = "Claude アカウント";
+"section.claude_account_desc" = "2 つのサインイン、状態、同期";
+"claude_account.title" = "Claude アカウント";
+"claude_account.subtitle" = "2 つのサインインがレポートを維持します。ブラウザーと連携している場合のみ、RevvyTach はターミナルを更新できます。";
+"claude_account.incomplete_badge" = "未完了";
+"claude_account.browser_sheet.title" = "ブラウザーサインイン (claude.ai)";
+"claude_account.browser_sheet.subtitle" = "このプロファイルを claude.ai 組織に接続します。";
+"claude_account.browser.sign_in_again" = "再サインイン…";
+"claude_account.browser.sign_in" = "Claude.ai にサインイン…";
+"claude_account.browser.missing_detail" = "未連携 — 使用状況レポート用のブラウザーサインインを追加します。";
+"claude_account.browser.detail" = "claude.ai · %@ · セッションキーを %@ に保存";
+"claude_account.terminal.resync" = "再同期";
+"claude_account.terminal.link" = "Claude Code を連携…";
+"claude_account.terminal.not_linked_detail" = "未連携 — この組織で使う Claude Code アカウントを連携します。";
+"claude_account.terminal.nonrenewable_detail" = "Claude Code アカウント %@ · 残り %@";
+"claude_account.terminal.detail" = "Claude Code アカウント %@ · %@ に更新 · Claude Code へ書き戻し済み";
+"claude_account.terminal.link_sheet.title" = "ターミナルサインイン (Claude Code)";
+"claude_account.terminal.link_sheet.subtitle" = "ディレクトリを作成し、Claude Code にサインインして確認します。";
+"claude_account.summary.status.working_not_renewable" = "動作中、更新不可";
+"claude_account.sync.title" = "Claude Code 同期";
+"claude_account.sync.subtitle" = "MCP サーバー、スキル、シェル統合を同期します。";
+"claude_account.upgrade_banner.message" = "バージョン 4.1 以降、Claude プロファイルの維持にはブラウザーサインインが必要です。このプロファイルはターミナルだけで設定されました。一度ブラウザーを追加すれば、以後は RevvyTach が両方を管理します。";
+"claude_account.why_both.button" = "なぜ 2 つ？";
+"claude_account.why_both.title" = "2 つのサインインが必要な理由";
+"claude_account.why_both.subtitle" = "それぞれ RevvyTach の別の機能を動かします。";
+"claude_account.why_both.browser" = "すべての使用量を取得し、プロファイルを claude.ai 組織に紐付けます。";
+"claude_account.why_both.terminal" = "自分の追加使用量を表示し、Claude Code アカウントを切り替えます。";
+"claude_account.why_both.renewal" = "ブラウザーサインインのみがターミナルを更新し Claude Code へ書き戻せます。";
+"popover.banner.setup_incomplete" = "設定未完了 — Claude Code のサインイン切れでレポートが停止します。設定 → Claude アカウントで完了してください。";
+"menubar.accessibility.state.setup_incomplete" = "設定未完了: ブラウザーサインインを追加";

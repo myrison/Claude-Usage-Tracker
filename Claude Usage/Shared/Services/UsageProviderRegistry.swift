@@ -85,6 +85,7 @@ nonisolated struct CapturedProviderRefreshJob: @unchecked Sendable {
     let capabilities: ProviderCapabilities
     let coreFetch: ProviderCoreFetch
     let apiFetch: ProviderAPIFetch?
+    var claudeSetupState: ClaudeSetupState? = nil
 }
 
 /// Request-scoped Claude operations produced synchronously from a profile.
@@ -295,7 +296,8 @@ nonisolated struct UsageProviderRegistry: Sendable {
                     claudeUsage: usage
                 )
             },
-            apiFetch: apiFetch
+            apiFetch: apiFetch,
+            claudeSetupState: ClaudeSetupState.of(profile)
         )
     }
 
@@ -375,7 +377,8 @@ nonisolated struct UsageProviderRegistry: Sendable {
                 )
                 return ProviderFetchResult(report: report)
             },
-            apiFetch: nil
+            apiFetch: nil,
+            claudeSetupState: nil
         )
     }
 

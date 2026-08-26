@@ -2104,12 +2104,6 @@ class MenuBarManager: NSObject, ObservableObject {
                     target: self.popoverActionTarget()
                 )
             },
-            onClaudeAIAccount: { [weak self] in
-                guard let self else { return }
-                self.openPopoverClaudeAIAccount(
-                    target: self.popoverActionTarget()
-                )
-            },
             onCredentialsBannerTap: { [weak self] profileID in
                 guard let self else { return }
                 self.openPopoverClaudeAIAccount(
@@ -2247,22 +2241,18 @@ class MenuBarManager: NSObject, ObservableObject {
     ) {
         guard let target else { return }
         capturedTargetRouter().route(
-            .cliAccount,
+            .claudeAccount,
             target: target
         )
     }
 
-    /// Settings → Claude.ai. Routes through the generic `.providerAccount`
-    /// action, which `SettingsCoordinator.navigate` resolves to the
-    /// `.claudeAI` section for a Claude profile — the remedy for
-    /// `.claudeAccountUnresolved`, which is about the claude.ai link rather
-    /// than the Claude Code one that `.cliAccount` opens.
+    /// Both Claude sign-in remedies now land on the combined account page.
     private func openPopoverClaudeAIAccount(
         target: ProviderStatusItemIdentity?
     ) {
         guard let target else { return }
         capturedTargetRouter().route(
-            .providerAccount,
+            .claudeAccount,
             target: target
         )
     }
@@ -2967,12 +2957,17 @@ class MenuBarManager: NSObject, ObservableObject {
         for profile: Profile
     ) -> MenuBarAttentionSignal.Credential? {
         let snapshot = profileUsagePresentations[profile.id]
+        let liveSetupState = ClaudeSetupState.of(profile)
+        let setupState = snapshot?.claudeSetupState == liveSetupState
+            ? snapshot?.claudeSetupState
+            : liveSetupState
         return MenuBarAttentionSignal.attention(
             cliSignInIssue: (snapshot?.claudeUsage ?? profile.claudeUsage)?
                 .personalExtraUsageIssue,
             hasCredentialError:
                 snapshot?.currentFailure?.isCredentialFailure ?? false,
-            healthStatus: snapshot?.report?.health.status
+            healthStatus: snapshot?.report?.health.status,
+            setupState: setupState
         )
     }
 
@@ -4528,9 +4523,6 @@ extension MenuBarManager: NSPopoverDelegate {
                     },
                     onCLIAccount: { [weak self] in
                         self?.openPopoverCLIAccount(target: target)
-                    },
-                    onClaudeAIAccount: { [weak self] in
-                        self?.openPopoverClaudeAIAccount(target: target)
                     },
                     onCredentialsBannerTap: { [weak self] profileID in
                         guard let self else { return }

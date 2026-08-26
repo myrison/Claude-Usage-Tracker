@@ -37,4 +37,45 @@ final class ClaudeSetupStateTests: HostedAppTestCase {
 
         XCTAssertEqual(ClaudeSetupState.of(profile), .none)
     }
+
+    func testOnlyTerminalOnlyClaudeProfilesNeedPersistentAttention() {
+        let terminalOnly = Profile(
+            name: "Terminal",
+            cliCredentialsJSON: "{}",
+            hasCliAccount: true
+        )
+        let browserOnly = Profile(
+            name: "Browser",
+            claudeSessionKey: "session",
+            organizationId: "org"
+        )
+        let complete = Profile(
+            name: "Complete",
+            claudeSessionKey: "session",
+            organizationId: "org",
+            cliCredentialsJSON: "{}",
+            hasCliAccount: true
+        )
+        let codex = Profile(
+            name: "Codex",
+            providerConfiguration: .codex(
+                CodexProfileConfiguration(linkedHome: nil)
+            ),
+            cliCredentialsJSON: "{}",
+            hasCliAccount: true
+        )
+
+        XCTAssertTrue(
+            ClaudeAccountAttention.isSetupIncomplete(terminalOnly)
+        )
+        XCTAssertFalse(
+            ClaudeAccountAttention.isSetupIncomplete(browserOnly)
+        )
+        XCTAssertFalse(
+            ClaudeAccountAttention.isSetupIncomplete(complete)
+        )
+        XCTAssertFalse(
+            ClaudeAccountAttention.isSetupIncomplete(codex)
+        )
+    }
 }

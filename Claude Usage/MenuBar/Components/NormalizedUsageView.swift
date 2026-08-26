@@ -930,6 +930,11 @@ struct ProviderPopoverHeader: View {
                         "popover.normalized.health.claude_code_sign_in_problem",
                         default: "Claude Code sign-in needs attention"
                     )
+                case .setupIncomplete:
+                    return NormalizedUsageStrings.localized(
+                        "menubar.accessibility.state.setup_incomplete",
+                        default: "Setup incomplete: add the browser sign-in"
+                    )
                 case nil:
                     return NormalizedUsageStrings.localized(
                         "popover.normalized.health.sign_in_problem",

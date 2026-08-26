@@ -325,12 +325,8 @@
 "section.settings" = "설정";
 "section.app" = "앱";
 
-"section.claudeai_title" = "Claude.ai";
-"section.claudeai_desc" = "Claude.ai 인증 정보";
 "section.api_console_title" = "API 콘솔";
 "section.api_console_desc" = "API 콘솔 인증 정보";
-"section.cli_account_title" = "CLI 계정";
-"section.cli_account_desc" = "CLI 계정 동기화";
 "section.appearance_title" = "외형";
 "section.appearance_desc" = "메뉴 바 외형";
 "section.general_title" = "일반";
@@ -369,8 +365,6 @@
 /* ==================== */
 /* MARK: - Personal Usage */
 /* ==================== */
-"personal.title" = "개인 사용량";
-"personal.subtitle" = "Claude.ai 무료 티어 모니터링";
 "personal.label_session_key" = "세션 키";
 "personal.placeholder_session_key" = "세션 키를 입력하세요";
 "personal.help_session_key" = "Claude.ai에서 세션 키를 추출해야 합니다";
@@ -670,8 +664,6 @@
 /* ==================== */
 /* MARK: - CLI Account Sync */
 /* ==================== */
-"cli.title" = "CLI 계정";
-"cli.subtitle" = "로그인된 Claude Code 계정 동기화";
 "cli.synced" = "CLI 계정 동기화됨";
 "cli.not_synced" = "동기화되지 않음";
 "cli.account_details" = "계정 세부정보";
@@ -898,8 +890,6 @@
 "popover.banner.credentials_not_saved" = "자격 증명이 저장되지 않음 (%d)";
 "popover.banner.credentials_not_saved.detail" = "이 세션에만 저장됩니다. 종료하면 사라집니다.";
 "popover.banner.credentials_not_saved.retry" = "저장 다시 시도";
-"personal.connected_not_saved" = "연결됨 — 저장되지 않음";
-"personal.retry_save" = "저장 다시 시도";
 "quit.credentials_unsaved.title" = "자격 증명을 저장하지 못했습니다";
 "quit.credentials_unsaved.body" = "종료하면 다시 입력해야 합니다.";
 "quit.credentials_unsaved.quit" = "그래도 종료";
@@ -1264,7 +1254,6 @@
 "chrome_assisted.profile_changed" = "활성 Claude 프로필이 변경되었습니다. 이 설정을 다시 시작하세요.";
 "chrome_assisted.confirm_context" = "Chrome 프로필 %@이(가) RevvyTach 프로필 %@에 사용할 컨텍스트임을 확인했습니다. 이는 API로 검증되지 않았습니다.";
 "chrome_assisted.new_claude_profile" = "새 Claude 프로필";
-"personal.session_key_stored" = "세션 키가 저장되었습니다";
 "personal.session_key_validated" = "세션 키가 확인되었습니다";
 "menubar.overage_balance" = "크레딧 잔액";
 "menubar.overage_balance_organization" = "크레딧 잔액 · 조직";
@@ -1286,7 +1275,6 @@
 "popover.extra_usage.absent.cli_other_organization" = "본인의 추가 사용량이 표시되지 않습니다. 연결된 Claude Code 계정이 다른 조직에 속해 있습니다.";
 "popover.extra_usage.absent.claude_account_unresolved" = "본인의 추가 사용량을 이 조직과 연결할 수 없었습니다. 설정 → Claude.ai에서 계정을 다시 연결하세요.";
 "popover.extra_usage.organization_lookup_failed" = "지금은 본인의 추가 사용량을 읽지 못했습니다. 새로 고쳐 다시 시도하세요.";
-"cli.connect_extra_usage_hint" = "본인의 추가 사용량을 보려면 Claude Code 계정을 연결하세요. 관리자인 경우 기본적으로 조직의 사용량이 표시됩니다.";
 
 // Claude 계정 설정 요약
 "claude_account.summary.verdict.complete" = "설정 완료 — 두 로그인이 모두 연결되었습니다. RevvyTach가 터미널 로그인을 자동으로 갱신합니다.";
@@ -1323,3 +1311,33 @@
 "wizard.review.terminal_linked_detail" = "감지된 터미널 로그인은 설정 완료 시 연결됩니다.";
 "wizard.review.terminal_not_linked_detail" = "연결되지 않았습니다. 나중에 설정 → Claude 계정에서 추가할 수 있습니다.";
 "wizard.start_tracking" = "추적 시작";
+"section.claude_account_title" = "Claude 계정";
+"section.claude_account_desc" = "두 로그인, 상태 및 동기화";
+"claude_account.title" = "Claude 계정";
+"claude_account.subtitle" = "두 로그인이 프로필 보고를 유지합니다. 브라우저가 연결된 경우에만 RevvyTach가 터미널 로그인을 갱신합니다.";
+"claude_account.incomplete_badge" = "미완료";
+"claude_account.browser_sheet.title" = "브라우저 로그인 (claude.ai)";
+"claude_account.browser_sheet.subtitle" = "프로필을 claude.ai 조직에 연결합니다.";
+"claude_account.browser.sign_in_again" = "다시 로그인…";
+"claude_account.browser.sign_in" = "Claude.ai에 로그인…";
+"claude_account.browser.missing_detail" = "연결 안 됨 — 사용량 보고용 브라우저 로그인을 추가하세요.";
+"claude_account.browser.detail" = "claude.ai · %@ · 세션 키 %@ 저장";
+"claude_account.terminal.resync" = "다시 동기화";
+"claude_account.terminal.link" = "Claude Code 연결…";
+"claude_account.terminal.not_linked_detail" = "연결 안 됨 — 이 조직의 Claude Code 계정을 연결하세요.";
+"claude_account.terminal.nonrenewable_detail" = "Claude Code 계정 %@ · %@ 후 만료";
+"claude_account.terminal.detail" = "Claude Code 계정 %@ · %@ 갱신 · Claude Code에 기록됨";
+"claude_account.terminal.link_sheet.title" = "터미널 로그인 (Claude Code)";
+"claude_account.terminal.link_sheet.subtitle" = "디렉터리를 만들고 Claude Code에 로그인한 뒤 확인하세요.";
+"claude_account.summary.status.working_not_renewable" = "작동 중, 갱신 불가";
+"claude_account.sync.title" = "Claude Code 동기화";
+"claude_account.sync.subtitle" = "MCP 서버, 스킬, 셰 통합을 맞춥니다.";
+"claude_account.upgrade_banner.message" = "4.1부터 Claude 프로필 유지에 브라우저 로그인이 필요합니다. 이 프로필은 터미널만 설정됐습니다. 브라우저를 한 번 추가하면 RevvyTach가 두 로그인을 관리합니다.";
+"claude_account.why_both.button" = "왜 둘 다 필요할까요?";
+"claude_account.why_both.title" = "두 로그인이 필요한 이유";
+"claude_account.why_both.subtitle" = "각 로그인이 RevvyTach의 다른 기능을 작동시킵니다.";
+"claude_account.why_both.browser" = "모든 사용량을 가져오고 프로필을 claude.ai 조직에 연결합니다.";
+"claude_account.why_both.terminal" = "본인의 추가 사용량을 보여 주고 Claude Code 계정을 전환합니다.";
+"claude_account.why_both.renewal" = "브라우저 로그인만 터미널을 갱신하여 Claude Code에 기록할 수 있습니다.";
+"popover.banner.setup_incomplete" = "설정 미완료 — Claude Code 로그인이 만료되면 보고가 멈춥니다. 설정 → Claude 계정에서 완료하세요.";
+"menubar.accessibility.state.setup_incomplete" = "설정 미완료: 브라우저 로그인 추가";

@@ -349,8 +349,6 @@
 /* ==================== */
 /* MARK: - Personal Usage (Additional) */
 /* ==================== */
-"personal.title" = "Uso Pessoal";
-"personal.subtitle" = "Rastreie seu uso e sessões do Claude.ai";
 "personal.label_session_key" = "Chave de Sessão";
 "personal.placeholder_session_key" = "sk-ant-sid-...";
 "personal.help_session_key" = "Cole seu cookie sessionKey do DevTools do claude.ai";
@@ -643,12 +641,8 @@
 "section.settings" = "CONFIGURAÇÕES";
 "section.app" = "APLICATIVO";
 
-"section.claudeai_title" = "Claude.ai";
-"section.claudeai_desc" = "Credenciais Claude.ai";
 "section.api_console_title" = "Console API";
 "section.api_console_desc" = "Credenciais do Console API";
-"section.cli_account_title" = "Conta CLI";
-"section.cli_account_desc" = "Sincronização de conta CLI";
 "section.appearance_title" = "Aparência";
 "section.appearance_desc" = "Aparência da barra de menu";
 "section.general_title" = "Geral";
@@ -689,8 +683,6 @@
 /* ==================== */
 /* MARK: - CLI Account Sync */
 /* ==================== */
-"cli.title" = "Conta CLI";
-"cli.subtitle" = "Sincronize sua conta Claude Code conectada";
 "cli.synced" = "Conta CLI Sincronizada";
 "cli.not_synced" = "Não Sincronizada";
 "cli.account_details" = "Detalhes da Conta";
@@ -918,8 +910,6 @@
 "popover.banner.credentials_not_saved" = "Credenciais não salvas (%d)";
 "popover.banner.credentials_not_saved.detail" = "Salvas apenas nesta sessão — serão perdidas ao sair.";
 "popover.banner.credentials_not_saved.retry" = "Tentar salvar novamente";
-"personal.connected_not_saved" = "Conectado — não salvo";
-"personal.retry_save" = "Tentar salvar novamente";
 "quit.credentials_unsaved.title" = "Não foi possível salvar as credenciais";
 "quit.credentials_unsaved.body" = "Ao sair, será necessário inseri-las novamente.";
 "quit.credentials_unsaved.quit" = "Sair mesmo assim";
@@ -1288,7 +1278,6 @@
 "chrome_assisted.profile_changed" = "O perfil Claude ativo foi alterado. Inicie esta configuração novamente.";
 "chrome_assisted.confirm_context" = "Confirmo que o perfil do Chrome %@ é o contexto que pretendo usar para o perfil do RevvyTach %@. Isso não é verificado pela API.";
 "chrome_assisted.new_claude_profile" = "novo perfil Claude";
-"personal.session_key_stored" = "Chave de sessão armazenada";
 "personal.session_key_validated" = "Chave de sessão validada";
 "menubar.overage_balance" = "Saldo de Créditos";
 "menubar.overage_balance_organization" = "Saldo de Créditos · Organização";
@@ -1310,7 +1299,6 @@
 "popover.extra_usage.absent.cli_other_organization" = "O seu uso adicional não é mostrado: a conta do Claude Code vinculada pertence a outra organização.";
 "popover.extra_usage.absent.claude_account_unresolved" = "Não foi possível associar o seu uso adicional a esta organização — reconecte a sua conta em Configurações → Claude.ai.";
 "popover.extra_usage.organization_lookup_failed" = "Não foi possível ler o seu uso adicional agora. Atualize para tentar novamente.";
-"cli.connect_extra_usage_hint" = "Conecte a sua conta do Claude Code para ver o seu próprio uso extra. Se você for administrador, verá o da sua organização por padrão.";
 
 // Resumo da configuração da conta Claude
 "claude_account.summary.verdict.complete" = "Configuração completa — Ambos os inícios de sessão estão vinculados. O RevvyTach renova automaticamente o início de sessão do terminal.";
@@ -1347,3 +1335,33 @@
 "wizard.review.terminal_linked_detail" = "O início de sessão do terminal detetado será vinculado no fim.";
 "wizard.review.terminal_not_linked_detail" = "Não vinculado. Pode adicioná-lo depois em Definições → Conta Claude.";
 "wizard.start_tracking" = "Iniciar";
+"section.claude_account_title" = "Conta Claude";
+"section.claude_account_desc" = "Ambos os inícios, estado e sincronização";
+"claude_account.title" = "Conta Claude";
+"claude_account.subtitle" = "Dois inícios mantêm os relatórios do perfil. O RevvyTach só mantém o terminal ativo se o navegador também estiver associado.";
+"claude_account.incomplete_badge" = "Incompleto";
+"claude_account.browser_sheet.title" = "Início no navegador (claude.ai)";
+"claude_account.browser_sheet.subtitle" = "Associe este perfil à organização claude.ai.";
+"claude_account.browser.sign_in_again" = "Entrar novamente…";
+"claude_account.browser.sign_in" = "Entrar no Claude.ai…";
+"claude_account.browser.missing_detail" = "Não associado — Adicione o navegador que fornece os relatórios.";
+"claude_account.browser.detail" = "claude.ai · %@ · chave de sessão salva %@";
+"claude_account.terminal.resync" = "Ressincronizar";
+"claude_account.terminal.link" = "Associar Claude Code…";
+"claude_account.terminal.not_linked_detail" = "Não associado — Associe a conta Claude Code usada nesta organização.";
+"claude_account.terminal.nonrenewable_detail" = "Conta Claude Code %@ · expira em %@";
+"claude_account.terminal.detail" = "Conta Claude Code %@ · renovada %@ · gravada no Claude Code";
+"claude_account.terminal.link_sheet.title" = "Início no terminal (Claude Code)";
+"claude_account.terminal.link_sheet.subtitle" = "Crie o diretório, entre com Claude Code e verifique o início.";
+"claude_account.summary.status.working_not_renewable" = "Funciona, não renovável";
+"claude_account.sync.title" = "Sincronização Claude Code";
+"claude_account.sync.subtitle" = "Alinhe servidores MCP, habilidades e integração shell.";
+"claude_account.upgrade_banner.message" = "Desde a versão 4.1, um perfil Claude precisa do navegador. Este perfil tinha apenas o terminal. Adicione o navegador uma vez e o RevvyTach cuidará dos dois.";
+"claude_account.why_both.button" = "Por que ambos?";
+"claude_account.why_both.title" = "Por que este perfil tem dois inícios";
+"claude_account.why_both.subtitle" = "Cada início alimenta uma parte diferente do RevvyTach.";
+"claude_account.why_both.browser" = "Produz todos os números de uso e liga o perfil à organização claude.ai.";
+"claude_account.why_both.terminal" = "Adiciona seu uso extra e permite alternar contas do Claude Code.";
+"claude_account.why_both.renewal" = "Só o navegador permite renovar o terminal e gravá-lo no Claude Code.";
+"popover.banner.setup_incomplete" = "Configuração incompleta — o perfil deixará de informar quando Claude Code expirar. Conclua em Ajustes → Conta Claude.";
+"menubar.accessibility.state.setup_incomplete" = "Configuração incompleta: adicione o início no navegador";

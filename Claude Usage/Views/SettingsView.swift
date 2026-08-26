@@ -181,11 +181,12 @@ final class SettingsNavigationModel: ObservableObject {
         }
         if case .providerAccount = destination,
            targetProfile.providerID == .claude {
-            selectedSection = .claudeAI
+            selectedSection = .claudeAccount
         }
         let needsActivation: Bool
         switch destination {
-        case .providerAccount, .appearance, .general, .history, .cliAccount:
+        case .providerAccount, .appearance, .general, .history,
+             .claudeAccount:
             needsActivation = true
             isResolvingProfile = true
         case .defaultView, .manageProfiles:
@@ -286,9 +287,9 @@ final class SettingsNavigationModel: ObservableObject {
             selectedProfileID = profileID
             selectedSection = .history
             isResolvingProfile = true
-        case .cliAccount(let profileID):
+        case .claudeAccount(let profileID):
             selectedProfileID = profileID
-            selectedSection = .cliAccount
+            selectedSection = .claudeAccount
             isResolvingProfile = true
         case .manageProfiles:
             selectedProfileID = nil
@@ -302,14 +303,13 @@ final class SettingsNavigationModel: ObservableObject {
     ) {
         switch providerID {
         case .codex:
-            if selectedSection == .claudeAI
-                || selectedSection == .apiConsole
-                || selectedSection == .cliAccount {
+            if selectedSection == .claudeAccount
+                || selectedSection == .apiConsole {
                 selectedSection = .providerAccount
             }
         case .claude:
             if selectedSection == .providerAccount {
-                selectedSection = .claudeAI
+                selectedSection = .claudeAccount
             }
         default:
             if selectedSection.isCredential {
@@ -563,12 +563,10 @@ struct SettingsView: View {
                 } else {
                     switch navigation.selectedSection {
                 // Credentials
-                case .claudeAI:
-                    PersonalUsageView()
+                case .claudeAccount:
+                    ClaudeAccountView()
                 case .apiConsole:
                     APIBillingView()
-                case .cliAccount:
-                    CLIAccountView()
                 case .providerAccount:
                     ProviderAccountSettingsView(
                         profileID:
@@ -703,6 +701,17 @@ struct ProfileSectionContainer: View {
                             )
                         HStack {
                             Text(profile.name)
+                            if ClaudeAccountAttention.isSetupIncomplete(
+                                profile
+                            ) {
+                                Text("!")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.red)
+                                    .accessibilityLabel(
+                                        "claude_account.incomplete_badge"
+                                            .localized
+                                    )
+                            }
                             Spacer()
                             Label(
                                 presentation.detailText,
@@ -905,9 +914,8 @@ struct BottomBarSection: View {
 
 enum SettingsSection: String, CaseIterable {
     // Credentials (not shown in sidebar)
-    case claudeAI
+    case claudeAccount
     case apiConsole
-    case cliAccount
     case providerAccount
 
     // Profile Settings
@@ -928,9 +936,9 @@ enum SettingsSection: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .claudeAI: return "section.claudeai_title".localized
+        case .claudeAccount:
+            return "section.claude_account_title".localized
         case .apiConsole: return "section.api_console_title".localized
-        case .cliAccount: return "section.cli_account_title".localized
         case .providerAccount:
             return ProviderUILocalization.text(
                 "section.provider_account_title",
@@ -953,9 +961,8 @@ enum SettingsSection: String, CaseIterable {
 
     var icon: String {
         switch self {
-        case .claudeAI: return "key.fill"
+        case .claudeAccount: return "person.badge.key.fill"
         case .apiConsole: return "dollarsign.circle.fill"
-        case .cliAccount: return "terminal.fill"
         case .providerAccount:
             return "person.crop.circle.badge.checkmark"
         case .appearance: return "paintbrush.fill"
@@ -975,9 +982,9 @@ enum SettingsSection: String, CaseIterable {
 
     var description: String {
         switch self {
-        case .claudeAI: return "section.claudeai_desc".localized
+        case .claudeAccount:
+            return "section.claude_account_desc".localized
         case .apiConsole: return "section.api_console_desc".localized
-        case .cliAccount: return "section.cli_account_desc".localized
         case .providerAccount:
             return ProviderUILocalization.text(
                 "section.provider_account_desc",
@@ -1009,7 +1016,7 @@ enum SettingsSection: String, CaseIterable {
 
     var isCredential: Bool {
         switch self {
-        case .claudeAI, .apiConsole, .cliAccount, .providerAccount:
+        case .claudeAccount, .apiConsole, .providerAccount:
             return true
         default:
             return false
@@ -1129,19 +1136,27 @@ struct ProfileCredentialCardsRow: View {
                         for: .claude
                     )
                 )
-                // Claude.ai Card
+                // One account surface for both Claude sign-ins.
                 Button {
-                    selectedSection = .claudeAI
+                    selectedSection = .claudeAccount
                 } label: {
                     CredentialMiniCard(
-                        icon: "key.fill",
-                        title: "Claude.ai",
+                        icon: "person.badge.key.fill",
+                        title: "section.claude_account_title".localized,
                         isConnected:
                             credentials?.hasClaudeAI ?? false,
-                        isSelected: selectedSection == .claudeAI
+                        isSelected: selectedSection == .claudeAccount,
+                        badgeText: profileManager.activeClaudeProfile.map {
+                            ClaudeAccountAttention.isSetupIncomplete($0)
+                                ? "claude_account.incomplete_badge".localized
+                                : nil
+                        } ?? nil
                     )
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier(
+                    "settings.section.claudeAccount"
+                )
 
                 if surfacePolicy.supports(.apiBilling) {
                     // API Console Card
@@ -1160,22 +1175,6 @@ struct ProfileCredentialCardsRow: View {
                     .buttonStyle(.plain)
                 }
 
-                if surfacePolicy.supports(.cliAccountSync) {
-                    // CLI Account Card
-                    Button {
-                        selectedSection = .cliAccount
-                    } label: {
-                        CredentialMiniCard(
-                            icon: "terminal.fill",
-                            title: "CLI Account",
-                            isConnected: profileManager.activeClaudeProfile?
-                                .hasCliAccount ?? false,
-                            isSelected:
-                                selectedSection == .cliAccount
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
             }
         }
         .onAppear {
@@ -1202,6 +1201,7 @@ struct CredentialMiniCard: View {
     let title: String
     let isConnected: Bool
     let isSelected: Bool
+    var badgeText: String? = nil
     @State private var isHovered = false
 
     var body: some View {
@@ -1219,10 +1219,21 @@ struct CredentialMiniCard: View {
 
             Spacer()
 
+            if let badgeText {
+                Text(badgeText)
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.red.opacity(0.12), in: Capsule())
+            }
+
             // Status indicator
-            Circle()
-                .fill(isSelected ? Color.white.opacity(0.9) : (isConnected ? Color.green : Color.gray.opacity(0.3)))
-                .frame(width: 5, height: 5)
+            if badgeText == nil {
+                Circle()
+                    .fill(isSelected ? Color.white.opacity(0.9) : (isConnected ? Color.green : Color.gray.opacity(0.3)))
+                    .frame(width: 5, height: 5)
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)

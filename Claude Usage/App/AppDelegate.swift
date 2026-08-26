@@ -151,6 +151,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Load profiles into ProfileManager (synchronously)
         providerUICompositionRoot.profileManager.loadProfiles()
+        SharedDataStore.shared.classifyClaudeAccountsForUpgradeOnce(
+            providerUICompositionRoot.profileManager.profiles
+        )
 
         // Restore the live CODEX_HOME pointer for the active Codex profile,
         // now that profiles (and their persisted `linkedHome`) are loaded.

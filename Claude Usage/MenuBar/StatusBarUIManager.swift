@@ -222,6 +222,10 @@ final class StatusBarUIManager {
         isActive: Bool,
         attention: MenuBarAttentionSignal.Credential? = nil
     ) -> String {
+        if attention == .setupIncomplete {
+            return baseLabel + " · "
+                + attentionStateText(.setupIncomplete)
+        }
         let label = String(
             format: ProviderUILocalization.text(
                 isActive
@@ -252,6 +256,11 @@ final class StatusBarUIManager {
             return ProviderUILocalization.text(
                 "menubar.accessibility.state.claude_code_sign_in_attention",
                 fallback: "Claude Code sign-in needs attention"
+            )
+        case .setupIncomplete:
+            return ProviderUILocalization.text(
+                "menubar.accessibility.state.setup_incomplete",
+                fallback: "Setup incomplete: add the browser sign-in"
             )
         }
     }

@@ -91,7 +91,7 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
         ] {
             XCTAssertEqual(
                 LegacyPopoverBanner.cliSignInBroken(problem).action,
-                .cliAccount
+                .claudeAccount
             )
             XCTAssertNotEqual(
                 LegacyPopoverBanner.cliSignInBroken(problem).action,
@@ -99,9 +99,85 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
             )
             XCTAssertNotEqual(
                 LegacyPopoverBanner.cliSignInBroken(problem).action,
-                .claudeAIAccount
+                .preferences
             )
         }
+    }
+
+    func testSetupIncompleteBannerUsesRequiredPrecedence() {
+        let now = Date()
+        XCTAssertEqual(
+            LegacyPopoverBanner.resolve(
+                hasCredentialError: false,
+                setupState: .terminalOnly,
+                cliSignInIssue: .signInExpired,
+                consecutiveRefreshFailures: 4,
+                lastSuccessfulRefreshTime:
+                    now.addingTimeInterval(-600),
+                now: now
+            ),
+            .setupIncomplete
+        )
+        XCTAssertEqual(
+            LegacyPopoverBanner.resolve(
+                hasCredentialError: true,
+                setupState: .terminalOnly,
+                consecutiveRefreshFailures: 0,
+                lastSuccessfulRefreshTime: now,
+                now: now
+            ),
+            .credentialError
+        )
+        for state: ClaudeSetupState in [.browserOnly, .complete] {
+            XCTAssertNil(
+                LegacyPopoverBanner.resolve(
+                    hasCredentialError: false,
+                    setupState: state,
+                    consecutiveRefreshFailures: 0,
+                    lastSuccessfulRefreshTime: now,
+                    now: now
+                )
+            )
+        }
+        XCTAssertEqual(
+            LegacyPopoverBanner.setupIncomplete.action,
+            .claudeAccount
+        )
+    }
+
+    func testSetupIncompleteMenuAttentionClearsWithBrowserSignIn() {
+        XCTAssertEqual(
+            MenuBarAttentionSignal.attention(
+                cliSignInIssue: nil,
+                hasCredentialError: false,
+                healthStatus: .healthy,
+                setupState: .terminalOnly
+            ),
+            .setupIncomplete
+        )
+        for state: ClaudeSetupState in [.browserOnly, .complete] {
+            XCTAssertNil(
+                MenuBarAttentionSignal.attention(
+                    cliSignInIssue: nil,
+                    hasCredentialError: false,
+                    healthStatus: .healthy,
+                    setupState: state
+                )
+            )
+        }
+        XCTAssertEqual(
+            StatusBarUIManager.attentionStateText(.setupIncomplete),
+            "menubar.accessibility.state.setup_incomplete".localized
+        )
+        XCTAssertEqual(
+            StatusBarUIManager.profileAccessibilityLabel(
+                "Legacy profile",
+                isActive: true,
+                attention: .setupIncomplete
+            ),
+            "Legacy profile · "
+                + "menubar.accessibility.state.setup_incomplete".localized
+        )
     }
 
     /// Each of the three says something different, and each resolves to a
@@ -619,7 +695,7 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
         let plain = render(attention: nil, manager: manager)
 
         for credential: MenuBarAttentionSignal.Credential in [
-            .claudeAI, .claudeCode
+            .claudeAI, .claudeCode, .setupIncomplete
         ] {
             let marked = render(attention: credential, manager: manager)
             XCTAssertEqual(
@@ -880,7 +956,7 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
         monochrome.showPaceMarker = false
 
         for credential: MenuBarAttentionSignal.Credential in [
-            .claudeAI, .claudeCode
+            .claudeAI, .claudeCode, .setupIncomplete
         ] {
             for isActive in [false, true] {
                 let marked = render(
@@ -1027,7 +1103,7 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
             return XCTFail("expected a status item for the profile")
         }
         for credential: MenuBarAttentionSignal.Credential in [
-            .claudeAI, .claudeCode
+            .claudeAI, .claudeCode, .setupIncomplete
         ] {
             let fragment = StatusBarUIManager.attentionStateText(credential)
             XCTAssertFalse(
@@ -1071,7 +1147,7 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
         let active = render(attention: nil, isActive: true, manager: manager)
 
         for credential: MenuBarAttentionSignal.Credential in [
-            .claudeAI, .claudeCode
+            .claudeAI, .claudeCode, .setupIncomplete
         ] {
             let activeMarked = render(
                 attention: credential,
@@ -1223,7 +1299,7 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
         for metricType in MenuBarMetricType.allCases {
             let label = singleProfileLabel(for: metricType)
             for credential: MenuBarAttentionSignal.Credential in [
-                .claudeAI, .claudeCode
+                .claudeAI, .claudeCode, .setupIncomplete
             ] {
                 XCTAssertFalse(
                     label.contains(

@@ -129,6 +129,23 @@ final class PopoverHeaderLocalizationFitTests: XCTestCase {
         }
     }
 
+    func testSetupIncompleteBannerFitsItsFourLineSurface() throws {
+        let budget = Self.bannerTextWidth * 4 * 0.9
+        for locale in Self.locales {
+            let message = try string(
+                "popover.banner.setup_incomplete",
+                locale
+            )
+            let measured = width(message, size: 11, weight: .medium)
+            XCTAssertLessThanOrEqual(
+                measured,
+                budget,
+                "\(locale) truncates setup-incomplete banner — "
+                    + "\(Int(measured))pt in \(Int(budget))pt"
+            )
+        }
+    }
+
     func testAccountHealthRowFitsInEveryLocale() throws {
         for locale in Self.locales {
             let label = try string(
@@ -150,6 +167,28 @@ final class PopoverHeaderLocalizationFitTests: XCTestCase {
                         + "\(Int(total))pt in \(Int(Self.availableWidth))pt"
                 )
             }
+        }
+    }
+
+    func testClaudeAccountSidebarBadgeFitsInEveryLocale() throws {
+        // 190pt sidebar less the outer/card insets. Reserve the leading icon,
+        // the trailing status dot, the capsule's padding, and row gaps.
+        let textBudget: CGFloat = 142
+        for locale in Self.locales {
+            let title = try string("section.claude_account_title", locale)
+            let badge = try string(
+                "claude_account.incomplete_badge",
+                locale
+            )
+            let measured = width(title, size: 11)
+                + width(badge, size: 8, weight: .semibold)
+                + 10
+            XCTAssertLessThanOrEqual(
+                measured,
+                textBudget,
+                "\(locale) truncates Claude Account + Incomplete — "
+                    + "\(Int(measured))pt in \(Int(textBudget))pt"
+            )
         }
     }
 

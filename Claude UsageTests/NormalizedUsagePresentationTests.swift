@@ -335,7 +335,7 @@ final class NormalizedUsagePresentationTests: HostedAppTestCase {
         // because re-syncing the CLI can never clear a claude.ai 401.
         XCTAssertEqual(
             LegacyPopoverBanner.credentialError.action,
-            .claudeAIAccount
+            .claudeAccount
         )
         XCTAssertNotEqual(
             LegacyPopoverBanner.credentialError.action,
@@ -1297,22 +1297,18 @@ final class NormalizedUsagePresentationTests: HostedAppTestCase {
             preferences: {
                 routed.append("preferences")
             },
-            cliAccount: {
-                routed.append("cli-account")
-            },
-            claudeAIAccount: {
-                routed.append("claude-ai-account")
+            claudeAccount: {
+                routed.append("claude-account")
             }
         )
 
         actions.manageProfiles()
         actions.preferences()
-        actions.cliAccount()
-        actions.claudeAIAccount()
+        actions.claudeAccount()
 
         XCTAssertEqual(
             routed,
-            ["profiles", "preferences", "cli-account", "claude-ai-account"]
+            ["profiles", "preferences", "claude-account"]
         )
     }
 
