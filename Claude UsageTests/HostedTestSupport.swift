@@ -35,6 +35,99 @@ class HostedAppTestCase: XCTestCase {
     }
 }
 
+/// Owns the temporary `UserDefaults` domains used by hosted tests.
+///
+/// A domain is unique to the current test process, so concurrent `xcodebuild`
+/// runs cannot read or overwrite one another. Within that process, a class
+/// reuses its domain and resets it between methods. Reset explicitly evicts
+/// the suite before unlinking its backing plist. A single process-exit pass
+/// repeats the unlink after `cfprefsd`'s final flush; it is not an XCTest
+/// observer, and every filesystem failure is caught and logged.
+enum HostedTestDefaults {
+    enum Error: Swift.Error {
+        case couldNotCreateSuite(String)
+    }
+
+    private static let processSalt = UUID().uuidString
+    private static let suiteNamesLock = NSLock()
+    private static var suiteNames: Set<String> = []
+    private static let processExitCleanup: Void = {
+        atexit(removeHostedTestDefaultsBackingsAtProcessExit)
+    }()
+
+    /// Returns a unique defaults object for this call in this test process.
+    ///
+    /// CFPreferences can corrupt a named domain when a test host reuses it
+    /// across test methods on older macOS runtimes. The per-process salt keeps
+    /// concurrent test hosts isolated, while the per-call UUID prevents any
+    /// domain from being reused inside one host.
+    static func defaults(_ prefix: String) throws -> (UserDefaults, String) {
+        let name = "\(prefix).\(processSalt).\(UUID().uuidString)"
+        _ = processExitCleanup
+        suiteNamesLock.lock()
+        defer { suiteNamesLock.unlock() }
+        suiteNames.insert(name)
+        guard let defaults = UserDefaults(suiteName: name) else {
+            throw Error.couldNotCreateSuite(name)
+        }
+        return (defaults, name)
+    }
+
+    static func reset(_ defaults: UserDefaults, suiteName: String) {
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    /// Clears a test domain and then removes its backing file after the test
+    /// has finished using that domain. This must not run during setup: deleting
+    /// a live CFPreferences backing file immediately before writing can corrupt
+    /// the domain on older macOS runtimes.
+    static func finish(_ defaults: UserDefaults, suiteName: String) {
+        reset(defaults, suiteName: suiteName)
+        // Wait for cfprefsd to apply the removal before unlinking. Otherwise it
+        // can apply a queued write after the file is gone and recreate it.
+        _ = defaults.synchronize()
+        removeBackingFile(suiteName: suiteName)
+    }
+
+    fileprivate static func removeBackingFilesAtProcessExit() {
+        suiteNamesLock.lock()
+        let names = suiteNames
+        suiteNamesLock.unlock()
+
+        let preferences = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences")
+        for name in names {
+            removeBackingFile(suiteName: name, preferences: preferences)
+        }
+    }
+
+    private static func removeBackingFile(
+        suiteName: String,
+        preferences: URL? = nil
+    ) {
+        let preferences = preferences
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Preferences")
+        let preferenceFile = preferences
+            .appendingPathComponent("\(suiteName).plist")
+        if FileManager.default.fileExists(atPath: preferenceFile.path) {
+            do {
+                try FileManager.default.removeItem(at: preferenceFile)
+            } catch {
+                NSLog(
+                    "Hosted test cleanup could not remove %@: %@",
+                    preferenceFile.path,
+                    String(describing: error)
+                )
+            }
+        }
+    }
+}
+
+private func removeHostedTestDefaultsBackingsAtProcessExit() {
+    HostedTestDefaults.removeBackingFilesAtProcessExit()
+}
+
 final class FaultingProfileDefaults: ProfileDefaultsStore {
     var storage: [String: Any] = [:]
     var corruptNextProfileWrite = false
@@ -117,6 +210,8 @@ final class IsolatedProfileSecrets: ProfileSecretStore {
 final class IsolatedProfileUsageFiles: ProfileCurrentUsageFileStoring {
     private var usage: [UUID: ProfileCurrentUsage] = [:]
 
+    nonisolated init() {}
+
     func loadCurrentUsage(for profileID: UUID) throws -> ProfileCurrentUsage? {
         usage[profileID]
     }
@@ -174,6 +269,25 @@ func makeIsolatedProfileStore(
         defaults: defaults,
         secretStore: secrets,
         usageFileStore: usageFiles ?? IsolatedProfileUsageFiles()
+    )
+}
+
+/// Builds a profile store from test-specific metadata and credential fakes.
+///
+/// Direct `ProfileStore(...)` construction is unsafe in hosted tests unless
+/// every optional dependency is supplied: omitting `usageFileStore` silently
+/// selects the real Application Support directory. This overload preserves
+/// each test's purpose-built defaults and secret doubles while ensuring that
+/// omitted usage files stay in memory.
+func makeIsolatedProfileStore(
+    defaults: any ProfileDefaultsStore,
+    secretStore: any ProfileSecretStore,
+    usageFileStore: (any ProfileCurrentUsageFileStoring)? = nil
+) -> ProfileStore {
+    ProfileStore(
+        defaults: defaults,
+        secretStore: secretStore,
+        usageFileStore: usageFileStore ?? IsolatedProfileUsageFiles()
     )
 }
 

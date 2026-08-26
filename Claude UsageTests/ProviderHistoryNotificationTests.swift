@@ -19,10 +19,12 @@ final class ProviderHistoryNotificationTests: HostedAppTestCase {
     /// master switch would silently change migration from off-by-default to
     /// on-by-default for installs that never touched the old toggle. The two
     /// concerns therefore use two keys with two different defaults.
-    func testMasterSwitchAndLegacyMigrationKeysHaveIndependentDefaults() {
-        let suiteName = "test.notification.keys.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removeSuite(named: suiteName) }
+    func testMasterSwitchAndLegacyMigrationKeysHaveIndependentDefaults()
+        throws {
+        let (defaults, suiteName) = try HostedTestDefaults.defaults(
+            "test.notification.keys"
+        )
+        defer { HostedTestDefaults.finish(defaults, suiteName: suiteName) }
 
         XCTAssertTrue(
             DataStore.masterSwitchEnabled(in: defaults),
@@ -2581,12 +2583,10 @@ final class ProviderHistoryNotificationTests: HostedAppTestCase {
         defaults: UserDefaults,
         rootURL: URL
     ) {
-        let suiteName =
-            "ProviderHistoryNotificationTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(
-            UserDefaults(suiteName: suiteName)
+        let (defaults, suiteName) = try HostedTestDefaults.defaults(
+            "ProviderHistoryNotificationTests"
         )
-        defaults.removePersistentDomain(forName: suiteName)
+        HostedTestDefaults.reset(defaults, suiteName: suiteName)
         let rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(
                 "ProviderHistoryNotificationTests-"
@@ -2597,7 +2597,7 @@ final class ProviderHistoryNotificationTests: HostedAppTestCase {
             withIntermediateDirectories: true
         )
         addTeardownBlock {
-            defaults.removePersistentDomain(forName: suiteName)
+            HostedTestDefaults.finish(defaults, suiteName: suiteName)
             try? FileManager.default.removeItem(at: rootURL)
         }
         return (defaults, rootURL)

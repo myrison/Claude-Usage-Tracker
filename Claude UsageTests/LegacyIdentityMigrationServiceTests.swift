@@ -23,14 +23,18 @@ final class LegacyIdentityMigrationServiceTests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
 
-        currentSuiteName =
-            "LegacyIdentityMigrationServiceTests.current.\(UUID().uuidString)"
-        legacySuiteName =
-            "LegacyIdentityMigrationServiceTests.legacy.\(UUID().uuidString)"
-        defaults = try XCTUnwrap(UserDefaults(suiteName: currentSuiteName))
-        legacyDefaults = try XCTUnwrap(UserDefaults(suiteName: legacySuiteName))
-        defaults.removePersistentDomain(forName: currentSuiteName)
-        legacyDefaults.removePersistentDomain(forName: legacySuiteName)
+        let (currentDefaults, currentName) = try HostedTestDefaults.defaults(
+            "LegacyIdentityMigrationServiceTests.current"
+        )
+        let (testLegacyDefaults, legacyName) = try HostedTestDefaults.defaults(
+            "LegacyIdentityMigrationServiceTests.legacy"
+        )
+        currentSuiteName = currentName
+        legacySuiteName = legacyName
+        defaults = currentDefaults
+        legacyDefaults = testLegacyDefaults
+        HostedTestDefaults.reset(defaults, suiteName: currentSuiteName)
+        HostedTestDefaults.reset(legacyDefaults, suiteName: legacySuiteName)
 
         applicationSupportURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -44,9 +48,14 @@ final class LegacyIdentityMigrationServiceTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        defaults.removePersistentDomain(forName: currentSuiteName)
-        legacyDefaults.removePersistentDomain(forName: legacySuiteName)
+        HostedTestDefaults.finish(defaults, suiteName: currentSuiteName)
+        HostedTestDefaults.finish(legacyDefaults, suiteName: legacySuiteName)
+        defaults = nil
+        legacyDefaults = nil
+        currentSuiteName = nil
+        legacySuiteName = nil
         try? FileManager.default.removeItem(at: applicationSupportURL)
+        applicationSupportURL = nil
 
         try super.tearDownWithError()
     }

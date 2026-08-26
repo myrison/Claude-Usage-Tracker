@@ -23,15 +23,19 @@ final class KeychainOwnershipAdoptionServiceTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        suiteName =
-            "KeychainOwnershipAdoptionServiceTests.\(UUID().uuidString)"
-        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defaults.removePersistentDomain(forName: suiteName)
+        let (testDefaults, testSuiteName) = try HostedTestDefaults.defaults(
+            "KeychainOwnershipAdoptionServiceTests"
+        )
+        suiteName = testSuiteName
+        defaults = testDefaults
+        HostedTestDefaults.reset(defaults, suiteName: suiteName)
         store = FakeAdoptionStore()
     }
 
     override func tearDownWithError() throws {
-        defaults.removePersistentDomain(forName: suiteName)
+        HostedTestDefaults.finish(defaults, suiteName: suiteName)
+        defaults = nil
+        suiteName = nil
         try super.tearDownWithError()
     }
 

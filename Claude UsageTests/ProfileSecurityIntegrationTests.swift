@@ -7,13 +7,16 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        suiteName = "ClaudeUsageTests.ProfileSecurity.\(UUID().uuidString)"
-        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defaults.removePersistentDomain(forName: suiteName)
+        let (testDefaults, testSuiteName) = try HostedTestDefaults.defaults(
+            "ClaudeUsageTests.ProfileSecurity"
+        )
+        suiteName = testSuiteName
+        defaults = testDefaults
+        HostedTestDefaults.reset(defaults, suiteName: suiteName)
     }
 
     override func tearDownWithError() throws {
-        defaults.removePersistentDomain(forName: suiteName)
+        HostedTestDefaults.finish(defaults, suiteName: suiteName)
         defaults = nil
         suiteName = nil
         try super.tearDownWithError()
@@ -100,7 +103,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
             cli: "SUCCESS_CLI_FIXTURE"
         )
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
 
         let profiles = try store.loadProfilesWithVerifiedMigration()
 
@@ -127,7 +130,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         )
         let secrets = MockProfileSecretStore()
         secrets.writeErrors[.apiSessionKey] = TestError.expected
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
 
         let profiles = try store.loadProfilesWithVerifiedMigration()
 
@@ -162,7 +165,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         )
         let secrets = MockProfileSecretStore()
         secrets.writeErrors[.apiSessionKey] = TestError.expected
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         _ = try store.loadProfilesWithVerifiedMigration()
 
         secrets.writeErrors.removeValue(forKey: .apiSessionKey)
@@ -184,14 +187,14 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
         secrets.values[locator(profileID, .claudeSessionKey)] = "READ_FAILURE_FIXTURE"
-        let setupStore = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let setupStore = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         try seedProfilesForTesting(
             [Profile(id: profileID, name: "Before")],
             in: setupStore
         )
 
         secrets.readErrors[.claudeSessionKey] = TestError.expected
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         var loaded = store.loadProfiles()
         XCTAssertNil(loaded.first?.claudeSessionKey)
         loaded[0].name = "After"
@@ -213,7 +216,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     func testExplicitCredentialDeletionFailureRemainsRetryable() throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         try seedProfilesForTesting(
             [Profile(id: profileID, name: "Delete")],
             in: store
@@ -236,7 +239,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let secondID = UUID()
         let expiry = Date(timeIntervalSinceReferenceDate: 654_321)
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         try seedProfilesForTesting([
             Profile(id: firstID, name: "First", cliAccountName: "first-link"),
             Profile(id: secondID, name: "Second", cliAccountName: "second-link")
@@ -269,7 +272,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     func testCredentialAndMetadataUpdatePersistsCompleteIncomingProfile() throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         let original = Profile(
             id: profileID,
             name: "Before",
@@ -293,7 +296,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         try manager.updateProfileThrowing(updated)
 
         let relaunchedStore = retain(
-            ProfileStore(defaults: defaults, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
         )
         let reloaded = try XCTUnwrap(
             relaunchedStore.loadProfiles().first(where: { $0.id == profileID })
@@ -329,7 +332,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         // transaction that follows must make NEW authoritative.
         secrets.writeErrorCounts[.claudeSessionKey] = 1
         let store = retain(
-            ProfileStore(
+            makeIsolatedProfileStore(
                 defaults: defaults,
                 secretStore: secrets
             )
@@ -350,7 +353,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
             "NEW_EXPLICIT"
         )
         let relaunched = retain(
-            ProfileStore(
+            makeIsolatedProfileStore(
                 defaults: defaults,
                 secretStore: secrets
             )
@@ -393,7 +396,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         // then succeeds and must remove only the stale CLI retry.
         secrets.writeErrorCounts[.cliCredentialsJSON] = 1
         let store = retain(
-            ProfileStore(
+            makeIsolatedProfileStore(
                 defaults: defaults,
                 secretStore: secrets
             )
@@ -435,7 +438,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         )
 
         let relaunched = retain(
-            ProfileStore(
+            makeIsolatedProfileStore(
                 defaults: defaults,
                 secretStore: secrets
             )
@@ -464,7 +467,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
             defaults.removePersistentDomain(forName: suiteName)
             let profileID = UUID()
             let secrets = MockProfileSecretStore()
-            let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+            let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
             try seedProfilesForTesting([
                 Profile(
                     id: profileID,
@@ -514,7 +517,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let backing = FaultingProfileDefaults()
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: backing, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: backing, secretStore: secrets))
         try seedProfilesForTesting([
             Profile(
                 id: profileID,
@@ -560,7 +563,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     func testThrowingCLIProfileUpdateDoesNotDeleteUnresolvedUnrelatedSecret() throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let setupStore = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let setupStore = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         try seedProfilesForTesting([
             Profile(id: profileID, name: "CLI")
         ], in: setupStore)
@@ -569,7 +572,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         secrets.values[locator(profileID, .cliCredentialsJSON)] = "OLD_CLI"
         secrets.readErrors[.claudeSessionKey] = TestError.expected
 
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         let loaded = store.loadProfiles()
         let manager = retain(ProfileManager(profileStore: store))
         manager.profiles = loaded
@@ -602,7 +605,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     func testThrowingCLIProfileUpdateSurfacesCredentialWriteFailure() throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         let original = Profile(
             id: profileID,
             name: "CLI",
@@ -636,7 +639,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     func testThrowingCLIProfileUpdateSurfacesCredentialDeletionFailure() throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         let original = Profile(
             id: profileID,
             name: "CLI",
@@ -674,7 +677,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let backing = FaultingProfileDefaults()
         let profileID = UUID()
         let store = retain(
-            ProfileStore(
+            makeIsolatedProfileStore(
                 defaults: backing,
                 secretStore: MockProfileSecretStore()
             )
@@ -698,7 +701,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     func testProfileManagerInvalidatesEveryChangedRequestInputExactlyOnce() throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         let original = Profile(
             id: profileID,
             name: "Requests",
@@ -766,7 +769,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let backing = FaultingProfileDefaults()
         let profileID = UUID()
         let store = retain(
-            ProfileStore(
+            makeIsolatedProfileStore(
                 defaults: backing,
                 secretStore: MockProfileSecretStore()
             )
@@ -804,7 +807,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         let original = Profile(
             id: profileID,
             name: "Complete set",
@@ -874,7 +877,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     func testDirectCLISyncWritersInvalidateOnlyChangedSuccessfulMutations() throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         try seedProfilesForTesting([
             Profile(id: profileID, name: "Direct CLI")
         ], in: store)
@@ -924,7 +927,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     func testFailedDirectCLISyncAndRemovalDoNotInvalidate() throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         try seedProfilesForTesting([
             Profile(id: profileID, name: "Direct CLI")
         ], in: store)
@@ -987,7 +990,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         let original = Profile(
             id: profileID,
             name: "Claude",
@@ -1029,7 +1032,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     func testSessionKeyReplacementPropagatesCredentialReadFailure() throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let setupStore = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let setupStore = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         try seedProfilesForTesting([
             Profile(
                 id: profileID,
@@ -1044,7 +1047,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         secrets.values[locator(profileID, .cliCredentialsJSON)] = "UNRELATED_CLI"
         secrets.readErrors[.apiSessionKey] = TestError.expected
 
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         let loaded = store.loadProfiles()
         let manager = retain(ProfileManager(profileStore: store))
         manager.profiles = loaded
@@ -1082,7 +1085,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let profileID = UUID()
         let oldSyncDate = Date(timeIntervalSinceReferenceDate: 30)
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: backing, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: backing, secretStore: secrets))
         try seedProfilesForTesting([
             Profile(
                 id: profileID,
@@ -1116,7 +1119,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     func testFailedProfileReadbackRestoresPreviousBlob() throws {
         let backing = FaultingProfileDefaults()
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: backing, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: backing, secretStore: secrets))
         try seedProfilesForTesting(
             [Profile(name: "Before")],
             in: store
@@ -1134,7 +1137,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     func testLegacySourceCleanupWaitsForVerifiedTargetAndMigrationIsIdempotent() throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         try seedProfilesForTesting(
             [Profile(id: profileID, name: "Migration")],
             in: store
@@ -1171,7 +1174,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     func testExistingV3MarkerStillMigratesFileAndGlobalLegacySources() throws {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
         try seedProfilesForTesting(
             [Profile(id: profileID, name: "Existing")],
             in: store
@@ -1219,7 +1222,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
             secrets.values[locator(secondID, field)] = "SECOND_\(field.rawValue)"
         }
         secrets.deleteErrors[.apiSessionKey] = TestError.expected
-        let store = retain(ProfileStore(defaults: defaults, secretStore: secrets))
+        let store = retain(makeIsolatedProfileStore(defaults: defaults, secretStore: secrets))
 
         XCTAssertThrowsError(try store.deleteProfileSecrets(for: firstID))
         XCTAssertNotNil(secrets.values[locator(firstID, .apiSessionKey)])
@@ -1264,7 +1267,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         )
         let secrets = MockProfileSecretStore()
         let store = retain(
-            ProfileStore(defaults: defaults, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
         )
 
         let profiles = try store.loadProfilesWithVerifiedMigration()
@@ -1300,7 +1303,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let secrets = MockProfileSecretStore()
         secrets.writeErrors[.claudeSessionKey] = TestError.expected
         let store = retain(
-            ProfileStore(defaults: defaults, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
         )
 
         _ = try store.loadProfilesWithVerifiedMigration()
@@ -1339,7 +1342,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         backing.storage["profiles_v3"] = defaults.data(forKey: "profiles_v3")
         backing.corruptNextProfileWrite = true
         let interrupted = retain(
-            ProfileStore(defaults: backing, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: backing, secretStore: secrets)
         )
 
         // The rewrite is corrupted, so the launch cannot complete.
@@ -1356,7 +1359,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         // Next launch, with secure storage working again.
         secrets.writeErrors.removeAll()
         let relaunched = retain(
-            ProfileStore(defaults: backing, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: backing, secretStore: secrets)
         )
         let recovered = try XCTUnwrap(
             relaunched.loadProfilesWithVerifiedMigration().first
@@ -1390,7 +1393,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let backing = FaultingProfileDefaults()
         backing.storage["profiles_v3"] = defaults.data(forKey: "profiles_v3")
         let store = retain(
-            ProfileStore(defaults: backing, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: backing, secretStore: secrets)
         )
 
         // Decoded here, not via the store: calling loadProfiles first would
@@ -1428,7 +1431,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
         let store = retain(
-            ProfileStore(defaults: defaults, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
         )
         try seedProfilesForTesting(
             [Profile(id: profileID, name: "Wizard")],
@@ -1464,7 +1467,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
         let store = retain(
-            ProfileStore(defaults: defaults, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
         )
         try seedProfilesForTesting(
             [Profile(id: profileID, name: "Unreadable")],
@@ -1497,7 +1500,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let secrets = MockProfileSecretStore()
         let backing = FaultingProfileDefaults()
         let store = retain(
-            ProfileStore(defaults: backing, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: backing, secretStore: secrets)
         )
         try seedProfilesForTesting(
             [Profile(id: profileID, name: "Wizard")],
@@ -1527,7 +1530,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
     func testOptInSaveStillThrowsForNonStorageFailures() throws {
         let secrets = MockProfileSecretStore()
         let store = retain(
-            ProfileStore(defaults: defaults, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
         )
         try seedProfilesForTesting([], in: store)
 
@@ -1558,7 +1561,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
         let store = retain(
-            ProfileStore(defaults: defaults, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
         )
         var profile = Profile(id: profileID, name: "Replace")
         profile.claudeSessionKey = "OLD_VALUE"
@@ -1594,7 +1597,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let secrets = MockProfileSecretStore()
         let backing = FaultingProfileDefaults()
         let store = retain(
-            ProfileStore(defaults: backing, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: backing, secretStore: secrets)
         )
         try seedProfilesForTesting(
             [Profile(id: profileID, name: "Rollback")],
@@ -1633,7 +1636,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let secrets = MockProfileSecretStore()
         let backing = FaultingProfileDefaults()
         let store = retain(
-            ProfileStore(defaults: backing, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: backing, secretStore: secrets)
         )
         try seedProfilesForTesting(
             [Profile(id: profileID, name: "Rollback")],
@@ -1680,7 +1683,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
         let store = retain(
-            ProfileStore(defaults: defaults, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
         )
         try seedProfilesForTesting(
             [Profile(id: profileID, name: "Held")],
@@ -1723,7 +1726,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
         let store = retain(
-            ProfileStore(defaults: defaults, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
         )
         var profile = Profile(id: profileID, name: "Held")
         profile.organizationId = "org"
@@ -1768,7 +1771,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let secrets = MockProfileSecretStore()
         let backing = FaultingProfileDefaults()
         let store = retain(
-            ProfileStore(defaults: backing, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: backing, secretStore: secrets)
         )
         var profile = Profile(id: profileID, name: "Held")
         profile.organizationId = "org"
@@ -1806,7 +1809,7 @@ final class ProfileSecurityIntegrationTests: HostedAppTestCase {
         let profileID = UUID()
         let secrets = MockProfileSecretStore()
         let store = retain(
-            ProfileStore(defaults: defaults, secretStore: secrets)
+            makeIsolatedProfileStore(defaults: defaults, secretStore: secrets)
         )
         try seedProfilesForTesting(
             [Profile(id: profileID, name: "Held")],

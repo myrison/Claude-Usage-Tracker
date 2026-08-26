@@ -9,13 +9,16 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        suiteName = "ClaudeUsageTests.CurrentUsage.\(UUID().uuidString)"
-        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defaults.removePersistentDomain(forName: suiteName)
+        let (testDefaults, testSuiteName) = try HostedTestDefaults.defaults(
+            "ClaudeUsageTests.CurrentUsage"
+        )
+        suiteName = testSuiteName
+        defaults = testDefaults
+        HostedTestDefaults.reset(defaults, suiteName: suiteName)
     }
 
     override func tearDownWithError() throws {
-        defaults.removePersistentDomain(forName: suiteName)
+        HostedTestDefaults.finish(defaults, suiteName: suiteName)
         defaults = nil
         suiteName = nil
         try super.tearDownWithError()
@@ -472,7 +475,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
         let currentURL = try usageFiles.fileURL(for: profileID, kind: .currentUsage)
         try Data("not-json".utf8).write(to: currentURL)
         let store = retain(
-            ProfileStore(
+            makeIsolatedProfileStore(
                 defaults: defaults,
                 secretStore: MockSecretStore(),
                 usageFileStore: usageFiles
@@ -733,7 +736,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
                 apiUsage: apiUsage
             )
             let store = retain(
-                ProfileStore(
+                makeIsolatedProfileStore(
                     defaults: backing,
                     secretStore: secrets,
                     usageFileStore: usageFiles
@@ -847,7 +850,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
                 apiUsage: apiUsage
             )
             let store = retain(
-                ProfileStore(
+                makeIsolatedProfileStore(
                     defaults: backing,
                     secretStore: secrets,
                     usageFileStore: usageFiles
@@ -1022,7 +1025,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
 
             usageFiles.saveError = nil
             let relaunchedStore = retain(
-                ProfileStore(
+                makeIsolatedProfileStore(
                     defaults: backing,
                     secretStore: secrets,
                     usageFileStore: usageFiles
@@ -1097,7 +1100,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
             )
             let secrets = MockSecretStore()
             let store = retain(
-                ProfileStore(
+                makeIsolatedProfileStore(
                     defaults: backing,
                     secretStore: secrets,
                     usageFileStore: usageFiles
@@ -1192,7 +1195,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
             usageFiles.values[profileID] = usageRetry
             let secrets = MockSecretStore()
             let store = retain(
-                ProfileStore(
+                makeIsolatedProfileStore(
                     defaults: backing,
                     secretStore: secrets,
                     usageFileStore: usageFiles
@@ -1357,7 +1360,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
             usageFiles.values[profileID] = usageRetry
             let secrets = MockSecretStore()
             let store = retain(
-                ProfileStore(
+                makeIsolatedProfileStore(
                     defaults: backing,
                     secretStore: secrets,
                     usageFileStore: usageFiles
@@ -1455,7 +1458,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
             }
 
             let relaunched = retain(
-                ProfileStore(
+                makeIsolatedProfileStore(
                     defaults: backing,
                     secretStore: secrets,
                     usageFileStore: usageFiles
@@ -1548,7 +1551,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
                 apiUsage: makeAPIUsage(spend: 42)
             )
             let store = retain(
-                ProfileStore(
+                makeIsolatedProfileStore(
                     defaults: backing,
                     secretStore: secrets,
                     usageFileStore: usageFiles
@@ -1588,7 +1591,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
             )
 
             let relaunchedStore = retain(
-                ProfileStore(
+                makeIsolatedProfileStore(
                     defaults: backing,
                     secretStore: secrets,
                     usageFileStore: usageFiles
@@ -1728,7 +1731,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
         let usageFiles = MockCurrentUsageFileStore()
         usageFiles.values[deletedID] = ProfileCurrentUsage(claudeUsage: usage)
         let store = retain(
-            ProfileStore(
+            makeIsolatedProfileStore(
                 defaults: backing,
                 secretStore: secrets,
                 usageFileStore: usageFiles
@@ -1879,7 +1882,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
         usageFiles: MockCurrentUsageFileStore,
         secrets: MockSecretStore = MockSecretStore()
     ) -> ProfileStore {
-        ProfileStore(
+        makeIsolatedProfileStore(
             defaults: defaults,
             secretStore: secrets,
             usageFileStore: usageFiles
@@ -1970,7 +1973,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
         let profileDefaults: any ProfileDefaultsStore =
             faultingDefaults ?? defaults
         let store = retain(
-            ProfileStore(
+            makeIsolatedProfileStore(
                 defaults: profileDefaults,
                 secretStore: secrets,
                 usageFileStore: usageFiles
@@ -2040,7 +2043,7 @@ final class ProfileCurrentUsageIntegrationTests: HostedAppTestCase {
         secrets.readErrors.removeAll()
         usageFiles.updateError = nil
         let relaunchedStore = retain(
-            ProfileStore(
+            makeIsolatedProfileStore(
                 defaults: profileDefaults,
                 secretStore: secrets,
                 usageFileStore: usageFiles
