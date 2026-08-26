@@ -70,6 +70,21 @@ final class PopoverHeaderLocalizationFitTests: XCTestCase {
         ).width
     }
 
+    private func wrappedHeight(
+        _ text: String,
+        width: CGFloat,
+        size: CGFloat,
+        weight: NSFont.Weight = .regular
+    ) -> CGFloat {
+        (text as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [
+                .font: NSFont.systemFont(ofSize: size, weight: weight)
+            ]
+        ).height
+    }
+
     /// Every health verdict the account row can carry.
     private static let healthKeys = [
         "popover.normalized.health.healthy",
@@ -130,18 +145,26 @@ final class PopoverHeaderLocalizationFitTests: XCTestCase {
     }
 
     func testSetupIncompleteBannerFitsItsFourLineSurface() throws {
-        let budget = Self.bannerTextWidth * 4 * 0.9
+        let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        let fourLineHeight = ceil(font.ascender - font.descender
+            + font.leading) * 4
         for locale in Self.locales {
             let message = try string(
                 "popover.banner.setup_incomplete",
                 locale
             )
-            let measured = width(message, size: 11, weight: .medium)
+            let measured = wrappedHeight(
+                message,
+                width: Self.bannerTextWidth,
+                size: 11,
+                weight: .medium
+            )
             XCTAssertLessThanOrEqual(
                 measured,
-                budget,
+                fourLineHeight,
                 "\(locale) truncates setup-incomplete banner — "
-                    + "\(Int(measured))pt in \(Int(budget))pt"
+                    + "\(Int(measured))pt high against a four-line "
+                    + "\(Int(fourLineHeight))pt limit"
             )
         }
     }
@@ -180,12 +203,13 @@ final class PopoverHeaderLocalizationFitTests: XCTestCase {
         // its own 5pt capsule inset on each side.
         let sidebarWidth: CGFloat = 190
         let containerInsets: CGFloat = 2 * 12
+        let rowInsets: CGFloat = 2 * 8
         let cardOuterInsets: CGFloat = 2 * 4
         let cardInnerInsets: CGFloat = 2 * 8
         let iconWidth: CGFloat = 12
         let hStackGaps: CGFloat = 2 * 8
         let badgeInsets: CGFloat = 2 * 5
-        let leadingColumnWidth = sidebarWidth - containerInsets
+        let leadingColumnWidth = sidebarWidth - containerInsets - rowInsets
             - cardOuterInsets - cardInnerInsets - iconWidth - hStackGaps
         let badgeTextWidth = leadingColumnWidth - badgeInsets
         for locale in Self.locales {

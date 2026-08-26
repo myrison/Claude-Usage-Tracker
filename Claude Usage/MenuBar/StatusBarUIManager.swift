@@ -220,10 +220,11 @@ final class StatusBarUIManager {
     static func profileAccessibilityLabel(
         _ baseLabel: String,
         isActive: Bool,
-        attention: MenuBarAttentionSignal.Credential? = nil
+        attention: MenuBarAttentionSignal.Credential? = nil,
+        profileName: String? = nil
     ) -> String {
         if attention == .setupIncomplete {
-            return baseLabel + " · "
+            return (profileName ?? baseLabel) + " · "
                 + attentionStateText(.setupIncomplete)
         }
         let label = String(
@@ -410,7 +411,8 @@ final class StatusBarUIManager {
         return profileAccessibilityLabel(
             base,
             isActive: true,
-            attention: attention
+            attention: attention,
+            profileName: profileName
         )
     }
 
@@ -434,7 +436,8 @@ final class StatusBarUIManager {
         return profileAccessibilityLabel(
             base,
             isActive: true,
-            attention: attention
+            attention: attention,
+            profileName: profileName
         )
     }
 
@@ -1794,7 +1797,8 @@ final class StatusBarUIManager {
             let label = Self.profileAccessibilityLabel(
                 baseLabel,
                 isActive: isActive,
-                attention: attention[profile.id]
+                attention: attention[profile.id],
+                profileName: profile.name
             )
             button.setAccessibilityLabel(label)
             button.toolTip = label

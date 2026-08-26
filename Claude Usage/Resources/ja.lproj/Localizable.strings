@@ -1347,11 +1347,12 @@
 "claude_account.browser.sign_in" = "Claude.ai にサインイン…";
 "claude_account.browser.missing_detail" = "未連携 — 使用状況レポート用のブラウザーサインインを追加します。";
 "claude_account.browser.detail" = "claude.ai · %@ · セッションキーを %@ に保存";
-"claude_account.browser.detail_without_saved_time" = "claude.ai · %@";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@ · 保存日は記録されていません";
 "claude_account.terminal.resync" = "再同期";
 "claude_account.terminal.link" = "Claude Code を連携…";
 "claude_account.terminal.not_linked_detail" = "未連携 — この組織で使う Claude Code アカウントを連携します。";
 "claude_account.terminal.nonrenewable_detail" = "Claude Code アカウント %@ · 残り %@";
+"claude_account.terminal.expiry_unknown_detail" = "Claude Code アカウント %@ · 有効期限不明";
 "claude_account.terminal.detail" = "Claude Code アカウント %@ · %@ に更新 · Claude Code へ書き戻し済み";
 "claude_account.terminal.link_sheet.title" = "ターミナルサインイン (Claude Code)";
 "claude_account.terminal.link_sheet.subtitle" = "ディレクトリを作成し、Claude Code にサインインして確認します。";

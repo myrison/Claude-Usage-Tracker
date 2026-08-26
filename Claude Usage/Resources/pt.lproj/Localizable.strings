@@ -1347,11 +1347,12 @@
 "claude_account.browser.sign_in" = "Entrar no Claude.ai…";
 "claude_account.browser.missing_detail" = "Não associado — Adicione o navegador que fornece os relatórios.";
 "claude_account.browser.detail" = "claude.ai · %@ · chave de sessão salva %@";
-"claude_account.browser.detail_without_saved_time" = "claude.ai · %@";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@ · data de armazenamento não registrada";
 "claude_account.terminal.resync" = "Ressincronizar";
 "claude_account.terminal.link" = "Associar Claude Code…";
 "claude_account.terminal.not_linked_detail" = "Não associado — Associe a conta Claude Code usada nesta organização.";
 "claude_account.terminal.nonrenewable_detail" = "Conta Claude Code %@ · expira em %@";
+"claude_account.terminal.expiry_unknown_detail" = "Conta Claude Code %@ · validade desconhecida";
 "claude_account.terminal.detail" = "Conta Claude Code %@ · renovada %@ · gravada no Claude Code";
 "claude_account.terminal.link_sheet.title" = "Início no terminal (Claude Code)";
 "claude_account.terminal.link_sheet.subtitle" = "Crie o diretório, entre com Claude Code e verifique o início.";

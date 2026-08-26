@@ -1323,11 +1323,12 @@
 "claude_account.browser.sign_in" = "Claude.ai에 로그인…";
 "claude_account.browser.missing_detail" = "연결 안 됨 — 사용량 보고용 브라우저 로그인을 추가하세요.";
 "claude_account.browser.detail" = "claude.ai · %@ · 세션 키 %@ 저장";
-"claude_account.browser.detail_without_saved_time" = "claude.ai · %@";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@ · 저장 날짜 기록 안 됨";
 "claude_account.terminal.resync" = "다시 동기화";
 "claude_account.terminal.link" = "Claude Code 연결…";
 "claude_account.terminal.not_linked_detail" = "연결 안 됨 — 이 조직의 Claude Code 계정을 연결하세요.";
 "claude_account.terminal.nonrenewable_detail" = "Claude Code 계정 %@ · %@ 후 만료";
+"claude_account.terminal.expiry_unknown_detail" = "Claude Code 계정 %@ · 만료일 알 수 없음";
 "claude_account.terminal.detail" = "Claude Code 계정 %@ · %@ 갱신 · Claude Code에 기록됨";
 "claude_account.terminal.link_sheet.title" = "터미널 로그인 (Claude Code)";
 "claude_account.terminal.link_sheet.subtitle" = "디렉터리를 만들고 Claude Code에 로그인한 뒤 확인하세요.";

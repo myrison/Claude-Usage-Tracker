@@ -131,6 +131,36 @@ final class ClaudeTerminalLinkVerifierTests: XCTestCase {
         }
         XCTAssertFalse(readFile)
     }
+
+    func testOnlyVerifiedSourcesRenderTheReadyVerdict() {
+        XCTAssertFalse(ClaudeTerminalLinkVerificationState.unverified.isReady)
+        XCTAssertFalse(ClaudeTerminalLinkVerificationState.failed.isReady)
+        XCTAssertTrue(
+            ClaudeTerminalLinkVerificationState.ready(.keychain).isReady
+        )
+        XCTAssertTrue(
+            ClaudeTerminalLinkVerificationState.ready(
+                .linkedAccountFile
+            ).isReady
+        )
+    }
+
+    func testValidCredentialWithoutLinkedDirectoryOffersLinkNotResync() {
+        let profile = Profile(
+            name: "Detected login",
+            cliCredentialsJSON: valid,
+            hasCliAccount: true,
+            cliAccountName: nil
+        )
+
+        XCTAssertEqual(
+            ClaudeTerminalAccountActions.forProfile(profile),
+            ClaudeTerminalAccountActions(
+                primary: .link,
+                canUnlink: false
+            )
+        )
+    }
 }
 
 final class ClaudeAccountFrozenTargetTests: XCTestCase {

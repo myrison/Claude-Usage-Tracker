@@ -97,10 +97,6 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
                 LegacyPopoverBanner.cliSignInBroken(problem).action,
                 .preferences
             )
-            XCTAssertNotEqual(
-                LegacyPopoverBanner.cliSignInBroken(problem).action,
-                .preferences
-            )
         }
     }
 
@@ -236,6 +232,52 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
                 .credentialsNotSaved(count: 2)
             )
         }
+        XCTAssertEqual(
+            LegacyPopoverBanner.resolve(
+                sessionOnlyCredentialCount: 1,
+                hasCredentialError: true,
+                setupState: .terminalOnly,
+                cliSignInIssue: .signInExpired,
+                consecutiveRefreshFailures: 8,
+                lastSuccessfulRefreshTime: now.addingTimeInterval(-3_000),
+                now: now
+            ),
+            .credentialsNotSaved(count: 1)
+        )
+    }
+
+    func testAPIConsoleOnlyProfileNeverRaisesSetupIncomplete() {
+        let profile = Profile(
+            name: "API only",
+            apiSessionKey: "api-session",
+            apiOrganizationId: "api-org"
+        )
+        let state = ClaudeSetupState.of(profile)
+
+        XCTAssertEqual(state, .none)
+        XCTAssertFalse(
+            ClaudeAccountAttention.isSetupIncomplete(
+                profile,
+                snapshot: state
+            )
+        )
+        XCTAssertNil(
+            LegacyPopoverBanner.resolve(
+                hasCredentialError: false,
+                setupState: state,
+                consecutiveRefreshFailures: 0,
+                lastSuccessfulRefreshTime: now,
+                now: now
+            )
+        )
+        XCTAssertNil(
+            MenuBarAttentionSignal.attention(
+                cliSignInIssue: nil,
+                hasCredentialError: false,
+                healthStatus: .healthy,
+                setupState: state
+            )
+        )
     }
 
     /// And it outranks what used to sit directly below the claude.ai banner,
@@ -1415,11 +1457,30 @@ final class BrokenSignInVisibilityTests: HostedAppTestCase {
             attention: .setupIncomplete
         )
 
-        XCTAssertTrue(
-            label.contains(
-                StatusBarUIManager.attentionStateText(.setupIncomplete)
+        XCTAssertEqual(
+            label,
+            "Terminal only · "
+                + StatusBarUIManager.attentionStateText(.setupIncomplete)
+        )
+    }
+
+    func testMetricAndMultiProfileUseExactSetupIncompleteLabel() {
+        let suffix = StatusBarUIManager.attentionStateText(.setupIncomplete)
+        XCTAssertEqual(
+            singleProfileLabel(
+                for: .session,
+                attention: .setupIncomplete
             ),
-            label
+            "Work · \(suffix)"
+        )
+        XCTAssertEqual(
+            StatusBarUIManager.profileAccessibilityLabel(
+                "Claude, Work, no usage data",
+                isActive: true,
+                attention: .setupIncomplete,
+                profileName: "Work"
+            ),
+            "Work · \(suffix)"
         )
     }
 

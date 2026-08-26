@@ -1,4 +1,5 @@
 import XCTest
+import UsageCore
 @testable import Claude_Usage
 
 final class ClaudeSetupStateTests: HostedAppTestCase {
@@ -157,6 +158,7 @@ final class ClaudeSetupStateTests: HostedAppTestCase {
         let activityTime = Date(timeIntervalSinceReferenceDate: 7_700)
         let legacy = Profile(
             name: "Legacy",
+            claudeSessionKey: "session",
             organizationId: "org",
             lastUsedAt: activityTime
         )
@@ -165,6 +167,168 @@ final class ClaudeSetupStateTests: HostedAppTestCase {
         XCTAssertEqual(detail.organization, "org")
         XCTAssertNil(detail.savedAt)
         XCTAssertNotEqual(detail.savedAt, legacy.lastUsedAt)
+        XCTAssertEqual(
+            ClaudeAccountView.browserDetail(legacy),
+            String(
+                format: "claude_account.browser.detail_without_saved_time"
+                    .localized,
+                "org"
+            )
+        )
+    }
+
+    func testBrowserDetailIncludesActualSavedDateWhenRecorded() {
+        let savedAt = Date(timeIntervalSinceReferenceDate: 7_000)
+        let now = savedAt.addingTimeInterval(60)
+        let profile = Profile(
+            name: "New",
+            claudeSessionKey: "session",
+            organizationId: "org",
+            claudeBrowserCredentialSavedAt: savedAt
+        )
+        let detail = ClaudeAccountView.browserDetail(profile, now: now)
+
+        XCTAssertTrue(detail.contains("org"), detail)
+        XCTAssertTrue(detail.contains("session key stored"), detail)
+        XCTAssertNotEqual(
+            detail,
+            String(
+                format: "claude_account.browser.detail_without_saved_time"
+                    .localized,
+                "org"
+            )
+        )
+    }
+
+    func testTerminalOnlyDetailDistinguishesKnownAndUnknownExpiry() {
+        let now = Date()
+        let futureMilliseconds = now.addingTimeInterval(7_200)
+            .timeIntervalSince1970 * 1_000
+        let known = Profile(
+            name: "Known",
+            cliCredentialsJSON:
+                #"{"claudeAiOauth":{"accessToken":"working","expiresAt":\#(futureMilliseconds)}}"#,
+            hasCliAccount: true,
+            cliAccountName: "work"
+        )
+        let unknown = Profile(
+            name: "Unknown",
+            cliCredentialsJSON:
+                #"{"claudeAiOauth":{"accessToken":"working"}}"#,
+            hasCliAccount: true,
+            cliAccountName: "work"
+        )
+
+        let knownDetail = ClaudeAccountView.terminalDetail(
+            known,
+            setupState: .terminalOnly,
+            now: now
+        )
+        let unknownDetail = ClaudeAccountView.terminalDetail(
+            unknown,
+            setupState: .terminalOnly,
+            now: now
+        )
+        XCTAssertTrue(knownDetail.contains("expires in"), knownDetail)
+        XCTAssertEqual(
+            unknownDetail,
+            String(
+                format: "claude_account.terminal.expiry_unknown_detail"
+                    .localized,
+                "work"
+            )
+        )
+        XCTAssertFalse(unknownDetail.contains("written back"), unknownDetail)
+    }
+
+    @MainActor
+    func testCredentialRepairSynchronizesEverySetupIncompleteConsumer()
+        throws
+    {
+        var terminalOnly = Profile(
+            name: "Repair me",
+            cliCredentialsJSON:
+                #"{"claudeAiOauth":{"accessToken":"working"}}"#,
+            hasCliAccount: true
+        )
+        let profileStore = retain(makeIsolatedProfileStore())
+        try seedProfilesForTesting([terminalOnly], in: profileStore)
+        let manager = retain(ProfileManager(profileStore: profileStore))
+        manager.loadProfiles()
+        let presentationStore = retain(UsagePresentationStore())
+        let context = UsagePresentationContext(
+            epoch: 1,
+            focusedProfileID: terminalOnly.id,
+            visibleProfileIDs: [terminalOnly.id]
+        )
+        let stale = PresentationSnapshot(
+            profileID: terminalOnly.id,
+            profileName: terminalOnly.name,
+            providerID: .claude,
+            providerRevision: terminalOnly.providerRevision,
+            presentationEpoch: 1,
+            capabilities: ProviderCapabilities([:]),
+            configurationState: .ready,
+            report: nil,
+            claudeUsage: nil,
+            claudeAPIUsage: nil,
+            activity: .refreshing(
+                requestID: UUID(),
+                trigger: .manual,
+                startedAt: Date()
+            ),
+            lastSuccessfulAt: nil,
+            currentFailure: nil,
+            claudeSetupState: .terminalOnly
+        )
+        presentationStore.activate(context, hydrated: [terminalOnly.id: stale])
+
+        try manager.saveCredentials(
+            for: terminalOnly.id,
+            credentials: ProfileCredentials(
+                claudeSessionKey: "browser",
+                organizationId: "org",
+                cliCredentialsJSON: terminalOnly.cliCredentialsJSON
+            ),
+            browserCredentialSave: true
+        )
+        terminalOnly = try XCTUnwrap(manager.profiles.first)
+        let repairedState = try XCTUnwrap(
+            manager.claudeSetupState(for: terminalOnly)
+        )
+        presentationStore.synchronizeClaudeSetupState(
+            repairedState,
+            profileID: terminalOnly.id
+        )
+        XCTAssertTrue(presentationStore.publish(stale, expected: context))
+        let snapshotState = presentationStore.snapshot(
+            for: terminalOnly.id
+        )?.claudeSetupState
+
+        XCTAssertEqual(snapshotState, .complete)
+        XCTAssertFalse(
+            ClaudeAccountAttention.isSetupIncomplete(
+                terminalOnly,
+                snapshot: snapshotState
+            )
+        )
+        XCTAssertNil(
+            LegacyPopoverBanner.resolve(
+                hasCredentialError: false,
+                setupState: snapshotState,
+                consecutiveRefreshFailures: 0,
+                lastSuccessfulRefreshTime: Date(),
+                now: Date()
+            )
+        )
+        XCTAssertNil(
+            MenuBarAttentionSignal.attention(
+                cliSignInIssue: nil,
+                hasCredentialError: false,
+                healthStatus: .healthy,
+                setupState: snapshotState
+            )
+        )
     }
 
     func testSessionOnlyWarningIsScopedToDisplayedProfile() {

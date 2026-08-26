@@ -529,6 +529,53 @@ final class CodexProfileSetupTests: HostedAppTestCase {
         XCTAssertEqual(context.manager.activeProfile?.id, claude.id)
     }
 
+    func testEveryFormerClaudeAccountRouteUsesTheCombinedPage() {
+        let profileID = UUID()
+        let target = ProviderStatusItemIdentity(
+            profileID: profileID,
+            providerID: .claude,
+            providerRevision: 0,
+            metricID: nil
+        )
+        let routes: [(String, SettingsNavigationDestination)] = [
+            (
+                "former Claude.ai direct route",
+                .claudeAccount(profileID: profileID)
+            ),
+            (
+                "former CLI Account popover route",
+                MenuBarManager.popoverSettingsDestination(for: target)
+            ),
+            (
+                "Claude provider account route",
+                .providerAccount(profileID: profileID)
+            )
+        ]
+
+        for (name, destination) in routes {
+            let navigation = retain(
+                SettingsNavigationModel(destination: destination)
+            )
+            let resolved = SettingsNavigationModel
+                .normalizedCredentialSection(
+                    navigation.selectedSection,
+                    for: .claude
+                )
+            XCTAssertEqual(
+                resolved,
+                .claudeAccount,
+                name
+            )
+            XCTAssertEqual(
+                UITestSettingsRoute.recordedAction(
+                    for: .claudeAccount(profileID: profileID)
+                ),
+                "settings.claude_account",
+                "\(name) must use the UI-test bootstrap's combined-page path"
+            )
+        }
+    }
+
     func testManualProfileSwitchWaitsForActivationThenNormalizesCredentials()
         async throws
     {

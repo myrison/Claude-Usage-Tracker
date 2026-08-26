@@ -466,7 +466,11 @@ struct PopoverContentView: View {
                 sessionOnlyCredentialCount:
                     profileManager.sessionOnlyCredentialProfileIDs.count,
                 hasCredentialError: manager.hasCredentialError,
-                setupState: displayedProfile.map(ClaudeSetupState.of),
+                setupState: displayedProfile.flatMap {
+                    manager.profileUsagePresentations[$0.id]?
+                        .claudeSetupState
+                        ?? profileManager.claudeSetupState(for: $0)
+                },
                 cliSignInIssue: presentation.legacyClaudeUsage?
                     .personalExtraUsageIssue,
                 consecutiveRefreshFailures:

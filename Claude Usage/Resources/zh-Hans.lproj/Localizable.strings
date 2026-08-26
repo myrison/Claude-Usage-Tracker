@@ -1344,11 +1344,12 @@
 "claude_account.browser.sign_in" = "登录 Claude.ai…";
 "claude_account.browser.missing_detail" = "未关联 — 添加用于使用量报告的浏览器登录。";
 "claude_account.browser.detail" = "claude.ai · %@ · 会话密钥已于 %@ 存储";
-"claude_account.browser.detail_without_saved_time" = "claude.ai · %@";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@ · 未记录存储日期";
 "claude_account.terminal.resync" = "重新同步";
 "claude_account.terminal.link" = "关联 Claude Code…";
 "claude_account.terminal.not_linked_detail" = "未关联 — 关联此组织使用的 Claude Code 帐户。";
 "claude_account.terminal.nonrenewable_detail" = "Claude Code 帐户 %@ · %@ 后过期";
+"claude_account.terminal.expiry_unknown_detail" = "Claude Code 帐户 %@ · 到期时间未知";
 "claude_account.terminal.detail" = "Claude Code 帐户 %@ · %@ 续期 · 已写回 Claude Code";
 "claude_account.terminal.link_sheet.title" = "终端登录 (Claude Code)";
 "claude_account.terminal.link_sheet.subtitle" = "创建帐户目录，登录 Claude Code，然后检查登录。";

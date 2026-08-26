@@ -199,6 +199,11 @@ class ProfileManager: ObservableObject {
     /// refused it. These are lost at quit, so the UI has to say so — see the
     /// popover banner, the Settings status card, and the quit-time guard.
     @Published private(set) var sessionOnlyCredentialProfileIDs: Set<UUID> = []
+    /// The synchronous credential-state snapshot consumed by account UI.
+    /// It changes in the same main-actor transaction as `profiles`, so a
+    /// refresh captured before a repair cannot reintroduce stale setup UI.
+    @Published private(set) var claudeSetupStateSnapshots:
+        [UUID: ClaudeSetupState] = [:]
 
     private let profileStore: ProfileStore
     private let historyService: any ProfileHistoryDeleting
@@ -275,6 +280,7 @@ class ProfileManager: ObservableObject {
 
     func loadProfiles() {
         profiles = profileStore.loadProfiles()
+        synchronizeClaudeSetupStateSnapshots()
         sessionOnlyCredentialProfileIDs =
             profileStore.profilesWithSessionOnlyCredentials
 
@@ -854,6 +860,7 @@ class ProfileManager: ObservableObject {
         }
 
         profiles[index] = profile
+        synchronizeClaudeSetupStateSnapshot(for: profile)
 
         if activeProfile?.id == profile.id {
             activeProfile = profile
@@ -1300,6 +1307,7 @@ class ProfileManager: ObservableObject {
         if activeProfile?.id == profileId {
             activeProfile = profiles[index]
         }
+        synchronizeClaudeSetupStateSnapshot(for: profiles[index])
         if requestInputsChanged {
             postCredentialChange(profileID: profileId, component: .all)
         }
@@ -1426,6 +1434,30 @@ class ProfileManager: ObservableObject {
         if activeProfile?.id == profileID {
             activeProfile = profiles[index]
         }
+        synchronizeClaudeSetupStateSnapshot(for: profiles[index])
+    }
+
+    func claudeSetupState(for profile: Profile) -> ClaudeSetupState? {
+        guard profile.providerID == .claude else { return nil }
+        return claudeSetupStateSnapshots[profile.id]
+            ?? ClaudeSetupState.of(profile)
+    }
+
+    private func synchronizeClaudeSetupStateSnapshot(for profile: Profile) {
+        if profile.providerID == .claude {
+            claudeSetupStateSnapshots[profile.id] = ClaudeSetupState.of(profile)
+        } else {
+            claudeSetupStateSnapshots.removeValue(forKey: profile.id)
+        }
+    }
+
+    private func synchronizeClaudeSetupStateSnapshots() {
+        claudeSetupStateSnapshots = Dictionary(
+            uniqueKeysWithValues: profiles.compactMap { profile in
+                guard profile.providerID == .claude else { return nil }
+                return (profile.id, ClaudeSetupState.of(profile))
+            }
+        )
     }
 
     private func postCredentialChange(

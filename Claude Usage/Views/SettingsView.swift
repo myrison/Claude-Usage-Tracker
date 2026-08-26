@@ -301,6 +301,17 @@ final class SettingsNavigationModel: ObservableObject {
     private func normalizeCredentialSection(
         for providerID: ProviderID
     ) {
+        selectedSection = Self.normalizedCredentialSection(
+            selectedSection,
+            for: providerID
+        )
+    }
+
+    static func normalizedCredentialSection(
+        _ section: SettingsSection,
+        for providerID: ProviderID
+    ) -> SettingsSection {
+        var selectedSection = section
         switch providerID {
         case .codex:
             if selectedSection == .claudeAccount
@@ -316,6 +327,7 @@ final class SettingsNavigationModel: ObservableObject {
                 selectedSection = .general
             }
         }
+        return selectedSection
     }
 
     private func normalizeSection(
@@ -702,7 +714,10 @@ struct ProfileSectionContainer: View {
                         HStack {
                             Text(profile.name)
                             if ClaudeAccountAttention.isSetupIncomplete(
-                                profile
+                                profile,
+                                snapshot: profileManager.claudeSetupState(
+                                    for: profile
+                                )
                             ) {
                                 Text("!")
                                     .font(.system(size: 10, weight: .bold))
@@ -1147,7 +1162,12 @@ struct ProfileCredentialCardsRow: View {
                             credentials?.hasClaudeAI ?? false,
                         isSelected: selectedSection == .claudeAccount,
                         badgeText: profileManager.activeClaudeProfile.map {
-                            ClaudeAccountAttention.isSetupIncomplete($0)
+                            ClaudeAccountAttention.isSetupIncomplete(
+                                $0,
+                                snapshot: profileManager.claudeSetupState(
+                                    for: $0
+                                )
+                            )
                                 ? "claude_account.incomplete_badge".localized
                                 : nil
                         } ?? nil

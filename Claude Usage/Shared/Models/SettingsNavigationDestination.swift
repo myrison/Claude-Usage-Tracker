@@ -16,3 +16,22 @@ enum SettingsNavigationDestination: Equatable, Hashable, Sendable {
     case claudeAccount(profileID: UUID)
     case manageProfiles
 }
+
+/// Shared with the UI-test bootstrap so its routing switch is covered by the
+/// ordinary unit-test target even though the bootstrap file is compiled only
+/// in UI-testing configurations.
+enum UITestSettingsRoute {
+    static func recordedAction(
+        for destination: SettingsNavigationDestination
+    ) -> String {
+        switch destination {
+        case .providerAccount: return "settings.account"
+        case .appearance: return "settings.appearance"
+        case .claudeAccount: return "settings.claude_account"
+        case .manageProfiles: return "settings.profiles"
+        case .defaultView: return "settings.default"
+        case .general: return "settings.general"
+        case .history: return "settings.history"
+        }
+    }
+}

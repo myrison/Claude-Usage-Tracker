@@ -1327,11 +1327,12 @@
 "claude_account.browser.sign_in" = "Se connecter à Claude.ai…";
 "claude_account.browser.missing_detail" = "Non liée — Ajoutez la connexion navigateur qui alimente les rapports.";
 "claude_account.browser.detail" = "claude.ai · %@ · clé de session stockée %@";
-"claude_account.browser.detail_without_saved_time" = "claude.ai · %@";
+"claude_account.browser.detail_without_saved_time" = "claude.ai · %@ · date d’enregistrement non consignée";
 "claude_account.terminal.resync" = "Resynchroniser";
 "claude_account.terminal.link" = "Lier Claude Code…";
 "claude_account.terminal.not_linked_detail" = "Non liée — Liez le compte Claude Code utilisé pour cette organisation.";
 "claude_account.terminal.nonrenewable_detail" = "Compte Claude Code %@ · expire dans %@";
+"claude_account.terminal.expiry_unknown_detail" = "Compte Claude Code %@ · expiration inconnue";
 "claude_account.terminal.detail" = "Compte Claude Code %@ · renouvelé %@ · réécrit dans Claude Code";
 "claude_account.terminal.link_sheet.title" = "Connexion terminal (Claude Code)";
 "claude_account.terminal.link_sheet.subtitle" = "Créez le dossier, connectez Claude Code, puis vérifiez la connexion.";

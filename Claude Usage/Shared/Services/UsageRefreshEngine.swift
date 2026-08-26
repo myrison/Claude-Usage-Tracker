@@ -221,6 +221,8 @@ final class UsagePresentationStore: ObservableObject {
     private var activityInvocationOrders: [UUID: UInt64] = [:]
     private var activityRequestIDs: [UUID: UUID] = [:]
     private var completedActivityRequestIDs: [UUID: UUID] = [:]
+    private var synchronizedClaudeSetupStates:
+        [UUID: ClaudeSetupState] = [:]
     private var claudeStatusInvocationOrder: UInt64 = 0
     private var claudeStatusCompletedInvocationOrder: UInt64 = 0
     private var terminalProfileIDs: Set<UUID> = []
@@ -335,8 +337,30 @@ final class UsagePresentationStore: ObservableObject {
                 forKey: snapshot.profileID
             )
         }
-        snapshots[snapshot.profileID] = snapshot
+        var accepted = snapshot
+        if let synchronized =
+            synchronizedClaudeSetupStates[snapshot.profileID] {
+            accepted.claudeSetupState = synchronized
+            if snapshot.claudeSetupState == synchronized {
+                synchronizedClaudeSetupStates.removeValue(
+                    forKey: snapshot.profileID
+                )
+            }
+        }
+        snapshots[snapshot.profileID] = accepted
         return true
+    }
+
+    func synchronizeClaudeSetupState(
+        _ state: ClaudeSetupState,
+        profileID: UUID
+    ) {
+        guard !isShutdown, var snapshot = snapshots[profileID] else {
+            return
+        }
+        snapshot.claudeSetupState = state
+        snapshots[profileID] = snapshot
+        synchronizedClaudeSetupStates[profileID] = state
     }
 
     func registerActivityInvocation(
@@ -423,6 +447,7 @@ final class UsagePresentationStore: ObservableObject {
 
     func purge(profileID: UUID) {
         snapshots.removeValue(forKey: profileID)
+        synchronizedClaudeSetupStates.removeValue(forKey: profileID)
         activityInvocationOrders.removeValue(forKey: profileID)
         activityRequestIDs.removeValue(forKey: profileID)
         completedActivityRequestIDs.removeValue(forKey: profileID)

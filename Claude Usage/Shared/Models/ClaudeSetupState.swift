@@ -29,8 +29,11 @@ enum ClaudeSetupState: Equatable, Sendable {
 }
 
 enum ClaudeAccountAttention {
-    static func isSetupIncomplete(_ profile: Profile) -> Bool {
+    static func isSetupIncomplete(
+        _ profile: Profile,
+        snapshot: ClaudeSetupState? = nil
+    ) -> Bool {
         profile.providerID == .claude
-            && ClaudeSetupState.of(profile) == .terminalOnly
+            && (snapshot ?? ClaudeSetupState.of(profile)) == .terminalOnly
     }
 }

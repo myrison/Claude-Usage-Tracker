@@ -2238,16 +2238,6 @@ class MenuBarManager: NSObject, ObservableObject {
         )
     }
 
-    private func openPopoverCLIAccount(
-        target: ProviderStatusItemIdentity?
-    ) {
-        guard let target else { return }
-        capturedTargetRouter().route(
-            .claudeAccount,
-            target: target
-        )
-    }
-
     /// Both Claude sign-in remedies now land on the combined account page.
     private func openPopoverClaudeAIAccount(
         target: ProviderStatusItemIdentity?
@@ -2959,10 +2949,8 @@ class MenuBarManager: NSObject, ObservableObject {
         for profile: Profile
     ) -> MenuBarAttentionSignal.Credential? {
         let snapshot = profileUsagePresentations[profile.id]
-        let liveSetupState = ClaudeSetupState.of(profile)
-        let setupState = snapshot?.claudeSetupState == liveSetupState
-            ? snapshot?.claudeSetupState
-            : liveSetupState
+        let setupState = snapshot?.claudeSetupState
+            ?? profileManager.claudeSetupState(for: profile)
         return MenuBarAttentionSignal.attention(
             cliSignInIssue: (snapshot?.claudeUsage ?? profile.claudeUsage)?
                 .personalExtraUsageIssue,
@@ -3284,6 +3272,19 @@ class MenuBarManager: NSObject, ObservableObject {
                     isMultiProfileMode:
                         self.profileManager.displayMode == .multi
                 )
+                if let profileID = changedProfileID,
+                   let profile = self.profileManager.profiles.first(where: {
+                       $0.id == profileID && $0.providerID == .claude
+                   }),
+                   let state = self.profileManager.claudeSetupState(
+                       for: profile
+                   ) {
+                    self.refreshRuntime.presentationStore
+                        .synchronizeClaudeSetupState(
+                            state,
+                            profileID: profileID
+                        )
+                }
                 switch routing.invalidation {
                 case .profile(let profileID):
                     self.refreshRuntime.invalidate(profileID: profileID)
