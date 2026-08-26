@@ -533,7 +533,7 @@
 "general.autostart_subtitle" = "必要に応じて自動的に新しいセッションを開始";
 "general.autostart_toggle" = "新しいセッションを自動開始";
 "general.autostart_description" = "セッションがリセットされたときに自動的にメッセージを送信";
-"general.autostart_requirement" = "• 認証情報 → Claude.aiタブでセッションキーが構成されている";
+"general.autostart_requirement" = "• 「設定 → Claude アカウント」でセッションキーが構成されている";
 "general.notifications_title" = "通知";
 "general.notifications_subtitle" = "使用状況のマイルストーンについて通知を受け取る";
 "general.connected" = "接続済み";
@@ -879,7 +879,7 @@
 "feedback.role_other" = "その他";
 
 // MARK: - Status Banners
-"popover.banner.credentials_expired" = "claude.ai がセッションキーを拒否しました。「設定 → Claude.ai」で更新。";
+"popover.banner.credentials_expired" = "セッションキーが拒否されました。設定 → Claude アカウント。";
 "popover.banner.cli_sign_in_expired" = "Claude Code のサインインが期限切れです。再度サインインしてください。";
 "popover.banner.cli_signed_out" = "ここにリンクされたアカウントで Claude Code がサインアウトされています。";
 "popover.banner.cli_sign_in_unusable" = "このアカウントの Claude Code のサインインが機能していません。";
@@ -1290,14 +1290,14 @@
 "cli.login_expired_explain" = "再同期では解決しません。再同期はこのアカウントのサインインを複製するもので、そのサインイン自体が期限切れです。ターミナルで次を実行して再度サインインしてください。";
 "cli.login_expired_then_resync" = "サインインが完了したら、ここに戻って「再同期」を押してください。";
 "popover.extra_usage.cli_other_organization" = "これは組織全体の合計です。連携されている Claude Code アカウントは別の組織に属しているため、その使用量はここには表示されません。";
-"popover.extra_usage.claude_account_unresolved" = "これは組織全体の合計です。ご自身の使用量をこの組織と照合できませんでした。「設定 → Claude.ai」でアカウントを再接続してください。";
+"popover.extra_usage.claude_account_unresolved" = "これは組織全体の合計です。ご自身の使用量をこの組織と照合できませんでした。「設定 → Claude アカウント」でアカウントを再接続してください。";
 "popover.extra_usage.absent.cli_not_linked" = "ご自身の追加使用量は Claude Code から取得されますが、このアカウントにはまだ連携されていません。「設定 → CLI アカウント」で追加してください。";
 "popover.extra_usage.absent.cli_sign_in_expired" = "ご自身の追加使用量を読み取れません。このアカウントの Claude Code のサインインは期限切れです。Claude Code に再度サインインすれば、自動的に再表示されます。";
 "popover.extra_usage.absent.cli_sign_in_has_no_token" = "ご自身の追加使用量を読み取れません。ここにリンクされたアカウントで Claude Code がサインアウトされています。そのアカウントにサインインすれば、自動的に表示されます。";
 "popover.extra_usage.absent.cli_sign_in_unusable" = "ここにリンクされている Claude Code アカウントでは、追加使用量を読み取れませんでした。";
 "popover.extra_usage.absent.cli_temporarily_unavailable" = "今回は追加使用量を読み取れませんでした。自動的に再試行されます。";
 "popover.extra_usage.absent.cli_other_organization" = "ご自身の追加使用量は表示されません。連携されている Claude Code アカウントは別の組織に属しています。";
-"popover.extra_usage.absent.claude_account_unresolved" = "ご自身の追加使用量をこの組織と照合できませんでした。「設定 → Claude.ai」でアカウントを再接続してください。";
+"popover.extra_usage.absent.claude_account_unresolved" = "ご自身の追加使用量をこの組織と照合できませんでした。「設定 → Claude アカウント」でアカウントを再接続してください。";
 "popover.extra_usage.organization_lookup_failed" = "ご自身の追加使用量を今回読み取れませんでした。更新して再試行してください。";
 
 // Claude アカウント設定の概要

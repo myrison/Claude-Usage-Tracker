@@ -516,7 +516,7 @@
 "general.autostart_subtitle" = "Iniciar automáticamente una nueva sesión cuando sea necesario";
 "general.autostart_toggle" = "Inicio Automático de Nueva Sesión";
 "general.autostart_description" = "Enviar automáticamente un mensaje cuando se reinicie la sesión";
-"general.autostart_requirement" = "• Clave de sesión configurada en Credenciales → pestaña Claude.ai";
+"general.autostart_requirement" = "• Clave de sesión configurada en Ajustes → Cuenta Claude";
 "general.notifications_title" = "Notificaciones";
 "general.notifications_subtitle" = "Recibir notificaciones sobre hitos de uso";
 "general.connected" = "Conectado";
@@ -862,7 +862,7 @@
 "feedback.role_other" = "Otro";
 
 // MARK: - Status Banners
-"popover.banner.credentials_expired" = "claude.ai rechazó la clave de sesión. Ajustes → Claude.ai.";
+"popover.banner.credentials_expired" = "Clave de sesión rechazada. Ajustes → Cuenta Claude.";
 "popover.banner.cli_sign_in_expired" = "El inicio de sesión de Claude Code ha caducado. Vuelve a iniciar sesión.";
 "popover.banner.cli_signed_out" = "Claude Code tiene la sesión cerrada en la cuenta vinculada aquí.";
 "popover.banner.cli_sign_in_unusable" = "El inicio de sesión de Claude Code de esta cuenta no funciona.";
@@ -1273,14 +1273,14 @@
 "cli.login_expired_explain" = "Volver a sincronizar no ayudará: copia el inicio de sesión de esta cuenta, y ese inicio de sesión ha caducado. Ejecuta esto en el Terminal para iniciar sesión de nuevo.";
 "cli.login_expired_then_resync" = "Cuando hayas iniciado sesión, vuelve y pulsa Volver a sincronizar.";
 "popover.extra_usage.cli_other_organization" = "Este es el total de tu organización. Tu cuenta de Claude Code vinculada pertenece a otra organización, por lo que su uso no se muestra aquí.";
-"popover.extra_usage.claude_account_unresolved" = "Este es el total de tu organización. Tu propio uso no se pudo asociar a esta organización: vuelve a conectar tu cuenta en Ajustes → Claude.ai.";
+"popover.extra_usage.claude_account_unresolved" = "Este es el total de tu organización. Tu propio uso no se pudo asociar a esta organización: vuelve a conectar tu cuenta en Ajustes → Cuenta Claude.";
 "popover.extra_usage.absent.cli_not_linked" = "Tu uso adicional proviene de Claude Code, que aún no está vinculado a esta cuenta: añádelo en Ajustes → Cuenta CLI.";
 "popover.extra_usage.absent.cli_sign_in_expired" = "No se puede leer tu uso adicional: el inicio de sesión de Claude Code para esta cuenta ha caducado. Vuelve a iniciar sesión en Claude Code y el dato reaparecerá por sí solo.";
 "popover.extra_usage.absent.cli_sign_in_has_no_token" = "No se puede leer tu uso adicional: Claude Code tiene la sesión cerrada en la cuenta vinculada aquí. Inicia sesión en ella y el dato aparecerá por sí solo.";
 "popover.extra_usage.absent.cli_sign_in_unusable" = "No se ha podido leer tu uso adicional con la cuenta de Claude Code vinculada aquí.";
 "popover.extra_usage.absent.cli_temporarily_unavailable" = "No se ha podido leer tu uso adicional esta vez. Se reintentará automáticamente.";
 "popover.extra_usage.absent.cli_other_organization" = "Tu uso adicional no se muestra: la cuenta de Claude Code vinculada pertenece a otra organización.";
-"popover.extra_usage.absent.claude_account_unresolved" = "Tu uso adicional no se pudo asociar a esta organización: vuelve a conectar tu cuenta en Ajustes → Claude.ai.";
+"popover.extra_usage.absent.claude_account_unresolved" = "Tu uso adicional no se pudo asociar a esta organización: vuelve a conectar tu cuenta en Ajustes → Cuenta Claude.";
 "popover.extra_usage.organization_lookup_failed" = "No se ha podido leer tu uso adicional ahora mismo. Actualiza para volver a intentarlo.";
 
 // Resumen de configuración de la cuenta de Claude

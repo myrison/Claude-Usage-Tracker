@@ -523,7 +523,7 @@
 "general.autostart_subtitle" = "需要时自动启动新会话";
 "general.autostart_toggle" = "自动启动新会话";
 "general.autostart_description" = "会话重置时自动发送消息";
-"general.autostart_requirement" = "• 在凭据 → Claude.ai 标签页中配置了会话密钥";
+"general.autostart_requirement" = "• 已在“设置 → Claude 帐户”中配置会话密钥";
 "general.notifications_title" = "通知";
 "general.notifications_subtitle" = "获取使用里程碑通知";
 "general.connected" = "已连接";
@@ -878,7 +878,7 @@
 "feedback.role_other" = "其他";
 
 // MARK: - Status Banners
-"popover.banner.credentials_expired" = "claude.ai 拒绝了会话密钥。请在“设置 → Claude.ai”中更新。";
+"popover.banner.credentials_expired" = "claude.ai 拒绝了会话密钥。请在“设置 → Claude 帐户”中更新。";
 "popover.banner.cli_sign_in_expired" = "此账号的 Claude Code 登录已过期。请重新登录。";
 "popover.banner.cli_signed_out" = "Claude Code 已从此处关联的账号退出登录。";
 "popover.banner.cli_sign_in_unusable" = "此账号的 Claude Code 登录无法使用。";
@@ -1287,14 +1287,14 @@
 "cli.login_expired_explain" = "重新同步无法解决：它只是复制此账号的登录，而该登录已过期。请在终端中运行以下命令重新登录。";
 "cli.login_expired_then_resync" = "登录完成后，回到这里点击“重新同步”。";
 "popover.extra_usage.cli_other_organization" = "这是您所在组织的总量。已关联的 Claude Code 账号属于其他组织，因此不会在此显示其用量。";
-"popover.extra_usage.claude_account_unresolved" = "这是您所在组织的总量。无法将您自己的用量与此组织匹配 — 请在“设置 → Claude.ai”中重新连接您的账号。";
+"popover.extra_usage.claude_account_unresolved" = "这是您所在组织的总量。无法将您自己的用量与此组织匹配 — 请在“设置 → Claude 帐户”中重新连接您的账号。";
 "popover.extra_usage.absent.cli_not_linked" = "您自己的额外用量来自 Claude Code，但尚未关联到此账号 — 请在“设置 → CLI 账号”中添加。";
 "popover.extra_usage.absent.cli_sign_in_expired" = "无法读取您自己的额外用量：此账号的 Claude Code 登录已过期。请重新登录 Claude Code，该数值会自动重新显示。";
 "popover.extra_usage.absent.cli_sign_in_has_no_token" = "无法读取您自己的额外用量：Claude Code 已从此处关联的账号退出登录。请登录该账号，该数值会自动显示。";
 "popover.extra_usage.absent.cli_sign_in_unusable" = "无法使用此处关联的 Claude Code 账号读取您的额外用量。";
 "popover.extra_usage.absent.cli_temporarily_unavailable" = "本次未能读取您的额外用量，稍后将自动重试。";
 "popover.extra_usage.absent.cli_other_organization" = "不会显示您自己的额外用量：已关联的 Claude Code 账号属于其他组织。";
-"popover.extra_usage.absent.claude_account_unresolved" = "无法将您自己的额外用量与此组织匹配 — 请在“设置 → Claude.ai”中重新连接您的账号。";
+"popover.extra_usage.absent.claude_account_unresolved" = "无法将您自己的额外用量与此组织匹配 — 请在“设置 → Claude 帐户”中重新连接您的账号。";
 "popover.extra_usage.organization_lookup_failed" = "此次未能读取您自己的额外用量。请刷新后重试。";
 
 // Claude 账号设置摘要
