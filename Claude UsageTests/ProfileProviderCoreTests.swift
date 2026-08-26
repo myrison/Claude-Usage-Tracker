@@ -213,6 +213,21 @@ final class ProfileProviderCoreTests: HostedAppTestCase {
         )
     }
 
+    func testCodexProfileRejectsClaudeBrowserCredentialSaveMetadata() {
+        let invalid = Profile(
+            name: "Codex with Claude metadata",
+            providerConfiguration: .codex(.init()),
+            claudeBrowserCredentialSavedAt: Date()
+        )
+
+        XCTAssertThrowsError(try JSONEncoder().encode(invalid)) { error in
+            XCTAssertEqual(
+                error as? ProfileProviderConfigurationError,
+                .claudeStateOnCodexProfile(invalid.id)
+            )
+        }
+    }
+
     @MainActor
     func testCanonicalizerExpandsTildeResolvesSymlinkAndDoesNotReadAuth() throws {
         let root = try makeTemporaryDirectory()

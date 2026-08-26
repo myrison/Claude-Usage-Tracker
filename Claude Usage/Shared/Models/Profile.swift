@@ -442,6 +442,7 @@ struct Profile: Codable, Identifiable, Equatable {
             || apiSessionKey != nil
             || apiOrganizationId != nil
             || apiSessionKeyExpiry != nil
+            || claudeBrowserCredentialSavedAt != nil
             || cliCredentialsJSON != nil
             || cliOrganizationId != nil
             || hasCliAccount

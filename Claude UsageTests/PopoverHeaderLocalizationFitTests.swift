@@ -171,32 +171,44 @@ final class PopoverHeaderLocalizationFitTests: XCTestCase {
     }
 
     func testClaudeAccountSidebarBadgeFitsInEveryLocale() throws {
-        // Exact `CredentialMiniCard` geometry: 190pt sidebar, 4pt outer and
-        // 6pt inner padding on both sides, a 12pt icon, three 6pt HStack gaps,
-        // and 4pt capsule padding on each side. What remains is the title and
-        // badge glyph budget; omitting any of this chrome hid real clipping.
+        // Exact production geometry: `ProfileSectionContainer` consumes 12pt
+        // on each sidebar edge; `CredentialMiniCard` adds 4pt outer and 8pt
+        // inner padding on each edge; its leading icon is 12pt; and the
+        // icon/VStack plus VStack/Spacer boundaries each consume the real 8pt
+        // HStack gap. The title and badge are vertically stacked, so each gets
+        // this leading-column width independently. The badge's text also pays
+        // its own 5pt capsule inset on each side.
         let sidebarWidth: CGFloat = 190
-        let outerInsets: CGFloat = 2 * 4
-        let innerInsets: CGFloat = 2 * 6
+        let containerInsets: CGFloat = 2 * 12
+        let cardOuterInsets: CGFloat = 2 * 4
+        let cardInnerInsets: CGFloat = 2 * 8
         let iconWidth: CGFloat = 12
-        let gaps: CGFloat = 3 * 6
-        let badgeInsets: CGFloat = 2 * 4
-        let textBudget = sidebarWidth - outerInsets - innerInsets
-            - iconWidth - gaps - badgeInsets
+        let hStackGaps: CGFloat = 2 * 8
+        let badgeInsets: CGFloat = 2 * 5
+        let leadingColumnWidth = sidebarWidth - containerInsets
+            - cardOuterInsets - cardInnerInsets - iconWidth - hStackGaps
+        let badgeTextWidth = leadingColumnWidth - badgeInsets
         for locale in Self.locales {
             let title = try string("section.claude_account_title", locale)
             let badge = try string(
                 "claude_account.incomplete_badge",
                 locale
             )
-            // Selected rows use `.medium`, which is the wider real state.
-            let measured = width(title, size: 11, weight: .medium)
-                + width(badge, size: 7, weight: .semibold)
+            let titleWidth = width(title, size: 11, weight: .medium)
+            let badgeWidth = width(badge, size: 8, weight: .semibold)
             XCTAssertLessThanOrEqual(
-                measured,
-                textBudget,
-                "\(locale) truncates Claude Account + Incomplete — "
-                    + "\(Int(measured))pt in \(Int(textBudget))pt"
+                titleWidth,
+                leadingColumnWidth,
+                "\(locale) truncates Claude Account — "
+                    + "\(Int(titleWidth))pt in "
+                    + "\(Int(leadingColumnWidth))pt"
+            )
+            XCTAssertLessThanOrEqual(
+                badgeWidth,
+                badgeTextWidth,
+                "\(locale) truncates Incomplete badge — "
+                    + "\(Int(badgeWidth))pt in "
+                    + "\(Int(badgeTextWidth))pt"
             )
         }
     }

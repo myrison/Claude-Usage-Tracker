@@ -428,7 +428,7 @@ struct TrafficLightButtons: View {
     @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             TrafficLightButton(type: .close)
             TrafficLightButton(type: .miniaturize)
         }
@@ -1212,30 +1212,28 @@ struct CredentialMiniCard: View {
                 .foregroundColor(isSelected ? .white : (isConnected ? .green : .gray))
                 .frame(width: 12)
 
-            // Title
-            Text(title)
-                .font(.system(size: 11, weight: isSelected ? .medium : .regular))
-                .foregroundColor(isSelected ? .white : .primary)
-
-            Spacer()
-
             if let badgeText {
-                Text(badgeText)
-                    .font(.system(size: 7, weight: .semibold))
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-                    .background(Color.red.opacity(0.12), in: Capsule())
-            }
-
-            // Status indicator
-            if badgeText == nil {
+                // Stack status below the title so the two localized strings
+                // never compete for the sidebar's fixed horizontal width.
+                VStack(alignment: .leading, spacing: 2) {
+                    credentialTitle
+                    Text(badgeText)
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.red.opacity(0.12), in: Capsule())
+                }
+                Spacer()
+            } else {
+                credentialTitle
+                Spacer()
                 Circle()
                     .fill(isSelected ? Color.white.opacity(0.9) : (isConnected ? Color.green : Color.gray.opacity(0.3)))
                     .frame(width: 5, height: 5)
             }
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(
             RoundedRectangle(cornerRadius: 4)
@@ -1246,6 +1244,17 @@ struct CredentialMiniCard: View {
         .onHover { hovering in
             isHovered = hovering
         }
+    }
+
+    private var credentialTitle: some View {
+        Text(title)
+            .font(
+                .system(
+                    size: 11,
+                    weight: isSelected ? .medium : .regular
+                )
+            )
+            .foregroundColor(isSelected ? .white : .primary)
     }
 }
 

@@ -217,8 +217,12 @@ final class ClaudeSetupStateTests: HostedAppTestCase {
 
     @MainActor
     func testSessionOnlyBrowserSaveStampsOnlyAfterRetrySucceeds() throws {
-        let timestamp = Date(timeIntervalSinceReferenceDate: 9_200)
-        let profile = Profile(name: "Retry save")
+        let oldTimestamp = Date(timeIntervalSinceReferenceDate: 9_100)
+        let retryTimestamp = Date(timeIntervalSinceReferenceDate: 9_200)
+        let profile = Profile(
+            name: "Retry save",
+            claudeBrowserCredentialSavedAt: oldTimestamp
+        )
         let secrets = RetryableBrowserSecretStore()
         let store = retain(
             makeIsolatedProfileStore(
@@ -228,7 +232,7 @@ final class ClaudeSetupStateTests: HostedAppTestCase {
         )
         try seedProfilesForTesting([profile], in: store)
         let manager = retain(
-            ProfileManager(profileStore: store, now: { timestamp })
+            ProfileManager(profileStore: store, now: { retryTimestamp })
         )
         manager.loadProfiles()
 
@@ -245,6 +249,11 @@ final class ClaudeSetupStateTests: HostedAppTestCase {
         XCTAssertNil(
             manager.profiles.first?.claudeBrowserCredentialSavedAt
         )
+        XCTAssertEqual(
+            store.loadProfiles().first?.claudeBrowserCredentialSavedAt,
+            oldTimestamp,
+            "session-only replacement must not rewrite durable metadata"
+        )
         XCTAssertTrue(
             manager.sessionOnlyCredentialProfileIDs.contains(profile.id)
         )
@@ -255,7 +264,11 @@ final class ClaudeSetupStateTests: HostedAppTestCase {
         )
         XCTAssertEqual(
             manager.profiles.first?.claudeBrowserCredentialSavedAt,
-            timestamp
+            retryTimestamp
+        )
+        XCTAssertEqual(
+            store.loadProfiles().first?.claudeBrowserCredentialSavedAt,
+            retryTimestamp
         )
     }
 }

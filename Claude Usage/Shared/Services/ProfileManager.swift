@@ -1287,6 +1287,14 @@ class ProfileManager: ObservableObject {
         profiles[index].cliCredentialsJSON = credentials.cliCredentialsJSON
         if let savedAt {
             profiles[index].claudeBrowserCredentialSavedAt = savedAt
+        } else if browserCredentialSave && acceptingSessionOnly {
+            // The replacement now in use exists only in memory. Keeping the
+            // previous durable credential's date here would label this new,
+            // unsaved sign-in with a save that never happened. The ProfileStore
+            // intentionally retains the old persisted metadata until Retry
+            // Save succeeds, so a failed session-only attempt does not rewrite
+            // durable history.
+            profiles[index].claudeBrowserCredentialSavedAt = nil
         }
 
         if activeProfile?.id == profileId {
