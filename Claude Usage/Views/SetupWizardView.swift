@@ -2,12 +2,10 @@ import SwiftUI
 import AppKit
 import UsageCore
 
-// MARK: - Setup Mode (Auto-detect vs Manual)
+// MARK: - Setup Mode
 
 enum SetupMode {
     case providerSelection
-    case loading
-    case cliDetected(credentials: String)
     case manualSetup
     case codexSetup
 }
@@ -17,11 +15,19 @@ enum SetupMode {
 enum SetupWizardStep: Int, Comparable {
     case enterKey = 1
     case selectOrg = 2
-    case confirm = 3
+    case linkClaudeCode = 3
+    case confirm = 4
 
     static func < (lhs: SetupWizardStep, rhs: SetupWizardStep) -> Bool {
         lhs.rawValue < rhs.rawValue
     }
+}
+
+enum ClaudeCodeDetectionStatus: Equatable {
+    case idle
+    case checking
+    case detected
+    case notDetected
 }
 
 struct SetupWizardState {
@@ -38,6 +44,12 @@ struct SetupWizardState {
     var targetProfileName: String? = nil
     var launchedChromeProfileLabel: String? = nil
     var hasConfirmedChromeContext = false
+    var terminalDetectionStatus: ClaudeCodeDetectionStatus = .idle
+    var detectedTerminalCredentials: String? = nil
+    var detectedTerminalAccountName: String? = nil
+    var detectedTerminalDirectory: String? = nil
+    var detectedTerminalSignedInAt: Date? = nil
+    var shouldLinkTerminalSignIn = false
 }
 
 @MainActor
@@ -71,12 +83,10 @@ private enum SetupTargetFreshness {
     }
 }
 
-/// Professional, native macOS setup wizard with 3-step flow
+/// Professional, native macOS setup wizard with a browser-first four-step flow.
 struct SetupWizardView: View {
     @Environment(\.dismiss) var dismiss
     @State private var wizardState = SetupWizardState()
-    @State private var hasClaudeCodeCredentials = false
-    @State private var detectedCLICredentials: String?
     @State private var isMigrating = false
     @State private var migrationMessage: String?
     @State private var setupMode: SetupMode = .providerSelection
@@ -101,29 +111,12 @@ struct SetupWizardView: View {
                 codexAvailable:
                     dependencies.availability.codexSupportEnabled,
                 onSelectClaude: {
-                    setupMode = .loading
-                    detectCLICredentials()
+                    setupMode = .manualSetup
                 },
                 onSelectCodex: {
                     setupMode = .codexSetup
                 }
             )
-        case .loading:
-            VStack(spacing: 16) {
-                ProgressView()
-                Text("setup.cli_detecting".localized)
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
-            }
-            .frame(width: 580, height: 680)
-
-        case .cliDetected(let credentials):
-            CLIDetectedSetupView(
-                credentials: credentials,
-                onStartTracking: { startTrackingWithCLI(credentials: credentials) },
-                onManualSetup: { setupMode = .manualSetup }
-            )
-
         case .manualSetup:
             manualSetupBody
         case .codexSetup:
@@ -140,46 +133,6 @@ struct SetupWizardView: View {
                     }
                 }
             )
-        }
-    }
-
-    /// Detects CLI credentials and sets the appropriate setup mode
-    private func detectCLICredentials() {
-        Task {
-            do {
-                if let credentials = try ClaudeCodeSyncService.shared.readSystemCredentials(),
-                   let _ = ClaudeCodeSyncService.shared.extractAccessToken(from: credentials),
-                   !ClaudeCodeSyncService.shared.isTokenExpired(credentials) {
-                    await MainActor.run {
-                        hasClaudeCodeCredentials = true
-                        detectedCLICredentials = credentials
-                        setupMode = .cliDetected(credentials: credentials)
-                    }
-                    return
-                }
-            } catch { }
-
-            await MainActor.run {
-                setupMode = .manualSetup
-            }
-        }
-    }
-
-    /// Saves CLI credentials to the active profile and dismisses the wizard
-    private func startTrackingWithCLI(credentials: String) {
-        Task {
-            do {
-                _ = try await dependencies
-                    .completeClaudeCLISetup(
-                        credentials: credentials
-                    )
-                dismiss()
-            } catch {
-                LoggingService.shared.logError(
-                    "Failed to sync CLI credentials: \(error)"
-                )
-                setupMode = .manualSetup
-            }
         }
     }
 
@@ -211,7 +164,9 @@ struct SetupWizardView: View {
                     SetupStepLine(isCompleted: wizardState.currentStep > .enterKey)
                     SetupStepCircle(number: 2, isCurrent: wizardState.currentStep == .selectOrg, isCompleted: wizardState.currentStep > .selectOrg)
                     SetupStepLine(isCompleted: wizardState.currentStep > .selectOrg)
-                    SetupStepCircle(number: 3, isCurrent: wizardState.currentStep == .confirm, isCompleted: false)
+                    SetupStepCircle(number: 3, isCurrent: wizardState.currentStep == .linkClaudeCode, isCompleted: wizardState.currentStep > .linkClaudeCode)
+                    SetupStepLine(isCompleted: wizardState.currentStep > .linkClaudeCode)
+                    SetupStepCircle(number: 4, isCurrent: wizardState.currentStep == .confirm, isCompleted: false)
                     Spacer()
                 }
                 .padding(.horizontal, 32)
@@ -219,43 +174,6 @@ struct SetupWizardView: View {
             }
 
             Divider()
-
-            // Claude Code info section - compact (only show if credentials exist)
-            if hasClaudeCodeCredentials {
-                HStack(spacing: 12) {
-                    Image(systemName: "terminal")
-                        .font(.system(size: 16))
-                        .foregroundColor(.purple)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("wizard.claude_code_info_title".localized)
-                            .font(.system(size: 12, weight: .medium))
-                        Text("wizard.claude_code_info_description".localized)
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                            .lineLimit(2)
-                    }
-
-                    Spacer()
-
-                    Button(action: {
-                        if let detectedCLICredentials {
-                            startTrackingWithCLI(
-                                credentials: detectedCLICredentials
-                            )
-                        }
-                    }) {
-                        Text("wizard.claude_code_skip_setup".localized)
-                            .font(.system(size: 11))
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
-                .background(Color.purple.opacity(0.08))
-
-                Divider()
-            }
 
             // Migration section - compact (only show if migration not completed yet)
             if MigrationService.shared.shouldShowMigrationOption() {
@@ -325,6 +243,8 @@ struct SetupWizardView: View {
                     )
                 case .selectOrg:
                     SelectOrgStepSetup(wizardState: $wizardState)
+                case .linkClaudeCode:
+                    LinkClaudeCodeStepSetup(wizardState: $wizardState)
                 case .confirm:
                     ConfirmStepSetup(
                         wizardState: $wizardState,
@@ -1028,7 +948,10 @@ struct EnterKeyStepSetup: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     // Step header
-                    SetupStepHeader(stepNumber: 1, title: "setup.step.get_session_key".localized)
+                    SetupStepHeader(
+                        stepNumber: 1,
+                        title: "wizard.browser_sign_in.title".localized
+                    )
 
                     Text("setup.step.get_session_key.description".localized)
                         .font(.system(size: 13))
@@ -1296,7 +1219,10 @@ struct SelectOrgStepSetup: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     // Step header
-                    SetupStepHeader(stepNumber: 2, title: "wizard.select_organization".localized)
+                    SetupStepHeader(
+                        stepNumber: 2,
+                        title: "wizard.organization.title".localized
+                    )
 
                     Text("wizard.select_org_title".localized)
                         .font(.system(size: 13))
@@ -1382,7 +1308,7 @@ struct SelectOrgStepSetup: View {
 
                 Button("common.next".localized) {
                     withAnimation {
-                        wizardState.currentStep = .confirm
+                        wizardState.currentStep = .linkClaudeCode
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -1393,7 +1319,326 @@ struct SelectOrgStepSetup: View {
     }
 }
 
-// MARK: - Step 3: Confirm & Save
+// MARK: - Step 3: Link Claude Code
+
+struct LinkClaudeCodeStepSetup: View {
+    @Binding var wizardState: SetupWizardState
+
+    private var profileName: String {
+        wizardState.targetProfileName
+            ?? "chrome_assisted.new_claude_profile".localized
+    }
+
+    private var signInCommand: String {
+        let slug = ClaudeSwitchService.shared.sanitizeProfileName(profileName)
+        return "CLAUDE_CONFIG_DIR=~/.claude-accounts/\(slug) claude"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    SetupStepHeader(
+                        stepNumber: 3,
+                        title: "wizard.link_terminal.title".localized
+                    )
+
+                    Text("wizard.link_terminal.subtitle".localized)
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    switch wizardState.terminalDetectionStatus {
+                    case .idle, .checking:
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("wizard.link_terminal.checking".localized)
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 140)
+
+                    case .detected:
+                        detectedCard
+
+                    case .notDetected:
+                        notDetectedCard
+                    }
+                }
+                .padding(32)
+            }
+
+            Divider()
+
+            HStack {
+                Button("common.back".localized) {
+                    withAnimation {
+                        wizardState.currentStep = .selectOrg
+                    }
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+
+                if wizardState.terminalDetectionStatus == .detected {
+                    Button("wizard.link_terminal.continue_without".localized) {
+                        wizardState.shouldLinkTerminalSignIn = false
+                        withAnimation {
+                            wizardState.currentStep = .confirm
+                        }
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("wizard.link_terminal.link_continue".localized) {
+                        wizardState.shouldLinkTerminalSignIn = true
+                        withAnimation {
+                            wizardState.currentStep = .confirm
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!wizardState.shouldLinkTerminalSignIn)
+                } else if wizardState.terminalDetectionStatus == .notDetected {
+                    Button("wizard.link_terminal.continue_without".localized) {
+                        wizardState.shouldLinkTerminalSignIn = false
+                        withAnimation {
+                            wizardState.currentStep = .confirm
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(20)
+        }
+        .task {
+            guard wizardState.terminalDetectionStatus == .idle else { return }
+            detectTerminalSignIn()
+        }
+    }
+
+    private var detectedCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label(
+                "wizard.link_terminal.detected_title".localized,
+                systemImage: "checkmark.circle.fill"
+            )
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundColor(.green)
+
+            VStack(alignment: .leading, spacing: 5) {
+                if let accountName = wizardState.detectedTerminalAccountName {
+                    Text(
+                        String(
+                            format: "wizard.link_terminal.account".localized,
+                            accountName
+                        )
+                    )
+                }
+                if let directory = wizardState.detectedTerminalDirectory {
+                    Text(
+                        String(
+                            format: "wizard.link_terminal.directory".localized,
+                            directory
+                        )
+                    )
+                    .textSelection(.enabled)
+                }
+                if let signedInAt = wizardState.detectedTerminalSignedInAt {
+                    HStack(spacing: 4) {
+                        Text("wizard.link_terminal.signed_in".localized)
+                        Text(signedInAt, style: .relative)
+                    }
+                }
+            }
+            .font(.system(size: 11))
+            .foregroundColor(.secondary)
+
+            Divider()
+
+            Toggle(isOn: $wizardState.shouldLinkTerminalSignIn) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(
+                        String(
+                            format: "wizard.link_terminal.link_checkbox".localized,
+                            profileName
+                        )
+                    )
+                    .font(.system(size: 12, weight: .medium))
+                    Text("wizard.link_terminal.link_detail".localized)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .toggleStyle(.checkbox)
+        }
+        .padding(16)
+        .background(Color.green.opacity(0.07))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.green.opacity(0.28))
+        )
+        .cornerRadius(10)
+    }
+
+    private var notDetectedCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label(
+                "wizard.link_terminal.not_found_title".localized,
+                systemImage: "terminal"
+            )
+            .font(.system(size: 14, weight: .semibold))
+
+            Text("wizard.link_terminal.not_found_detail".localized)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("wizard.link_terminal.command_label".localized)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+                HStack(spacing: 8) {
+                    Text(signInCommand)
+                        .font(.system(size: 10, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Button("wizard.link_terminal.copy_command".localized) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(
+                            signInCommand,
+                            forType: .string
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(10)
+                .background(Color.secondary.opacity(0.07))
+                .cornerRadius(6)
+            }
+
+            Button("wizard.link_terminal.check_again".localized) {
+                detectTerminalSignIn()
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(16)
+        .background(Color.secondary.opacity(0.04))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.secondary.opacity(0.2))
+        )
+        .cornerRadius(10)
+    }
+
+    private func detectTerminalSignIn() {
+        wizardState.terminalDetectionStatus = .checking
+        wizardState.shouldLinkTerminalSignIn = false
+
+        Task {
+            guard let detection = detectedTerminalSignIn() else {
+                wizardState.detectedTerminalCredentials = nil
+                wizardState.detectedTerminalAccountName = nil
+                wizardState.detectedTerminalDirectory = nil
+                wizardState.detectedTerminalSignedInAt = nil
+                wizardState.terminalDetectionStatus = .notDetected
+                return
+            }
+
+            let accountName = detection.accountName
+            wizardState.detectedTerminalCredentials = detection.credentials
+            wizardState.detectedTerminalAccountName = accountName
+            if let accountName {
+                let directory = ClaudeSwitchService.shared
+                    .accountDirectoryPath(for: accountName)
+                wizardState.detectedTerminalDirectory = directory.path
+                wizardState.detectedTerminalSignedInAt = latestSignInDate(
+                    in: directory
+                )
+            } else {
+                wizardState.detectedTerminalDirectory = nil
+                wizardState.detectedTerminalSignedInAt = nil
+            }
+            wizardState.shouldLinkTerminalSignIn = true
+            wizardState.terminalDetectionStatus = .detected
+        }
+    }
+
+    private func detectedTerminalSignIn() -> (
+        credentials: String,
+        accountName: String?
+    )? {
+        let syncService = ClaudeCodeSyncService.shared
+        if let systemCredentials = try? syncService.readSystemCredentials(),
+           isUsableTerminalSignIn(systemCredentials) {
+            return (
+                systemCredentials,
+                linkedAccountName(matching: systemCredentials)
+            )
+        }
+
+        // The command shown by this step signs into a dedicated account
+        // directory. Check that named login as well as already known linked
+        // directories so “Check again” can see the login it just requested.
+        let switchService = ClaudeSwitchService.shared
+        let commandAccountName = switchService.sanitizeProfileName(profileName)
+        let names = ([commandAccountName, switchService.currentAccountName()]
+            .compactMap { $0 } + switchService.availableAccountNames())
+            .reduce(into: [String]()) { uniqueNames, name in
+                if !uniqueNames.contains(name) { uniqueNames.append(name) }
+            }
+        for name in names {
+            guard let credentials = try? syncService.readSystemCredentials(
+                forAccountNamed: name
+            ),
+            isUsableTerminalSignIn(credentials) else { continue }
+            return (credentials, name)
+        }
+        return nil
+    }
+
+    private func isUsableTerminalSignIn(_ credentials: String) -> Bool {
+        ClaudeCodeSyncService.shared.extractAccessToken(from: credentials) != nil
+            && !ClaudeCodeSyncService.shared.isTokenExpired(credentials)
+    }
+
+    private func linkedAccountName(matching credentials: String) -> String? {
+        let syncService = ClaudeCodeSyncService.shared
+        guard let detectedToken = syncService.extractAccessToken(
+            from: credentials
+        ) else { return nil }
+        let switchService = ClaudeSwitchService.shared
+        let currentName = switchService.currentAccountName()
+        let candidates = ([currentName].compactMap { $0 }
+            + switchService.availableAccountNames())
+            .reduce(into: [String]()) { names, name in
+                if !names.contains(name) { names.append(name) }
+            }
+        return candidates.first { name in
+            guard let linkedCredentials = switchService
+                .readLinkedAccountCredentials(directoryName: name) else {
+                return false
+            }
+            return syncService.extractAccessToken(from: linkedCredentials)
+                == detectedToken
+        }
+    }
+
+    private func latestSignInDate(in directory: URL) -> Date? {
+        [".credentials.json", ".claude.json"]
+            .compactMap { filename -> Date? in
+                let path = directory.appendingPathComponent(filename).path
+                return (try? FileManager.default.attributesOfItem(atPath: path))?[
+                    .modificationDate
+                ] as? Date
+            }
+            .max()
+    }
+}
+
+// MARK: - Step 4: Review & Save
 
 struct ConfirmStepSetup: View {
     @Binding var wizardState: SetupWizardState
@@ -1405,66 +1650,68 @@ struct ConfirmStepSetup: View {
     /// credential, which is the one case the user can knowingly accept.
     @State private var offerSessionOnly = false
 
+    private var willLinkTerminalSignIn: Bool {
+        guard wizardState.shouldLinkTerminalSignIn,
+              let credentials = wizardState.detectedTerminalCredentials else {
+            return false
+        }
+        return ClaudeCodeSyncService.carriesLogin(credentials)
+    }
+
+    private var reviewSetupState: ClaudeSetupState {
+        willLinkTerminalSignIn ? .complete : .browserOnly
+    }
+
+    private var browserReviewDetail: String {
+        let organizationName = wizardState.testedOrganizations.first {
+            $0.uuid == wizardState.selectedOrgId
+        }?.name ?? "wizard.organization".localized
+        return String(
+            format: "wizard.review.browser_detail".localized,
+            organizationName
+        )
+    }
+
+    private var terminalReviewDetail: String {
+        willLinkTerminalSignIn
+            ? "wizard.review.terminal_linked_detail".localized
+            : "wizard.review.terminal_not_linked_detail".localized
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     // Step header
-                    SetupStepHeader(stepNumber: 3, title: "wizard.review_config".localized)
+                    SetupStepHeader(
+                        stepNumber: 4,
+                        title: "wizard.review.title".localized
+                    )
 
-                    // Summary Card
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("wizard.config_summary".localized)
-                            .font(.system(size: 14, weight: .semibold))
+                    ClaudeSignInSummaryView(
+                        state: reviewSetupState,
+                        browserDetail: browserReviewDetail,
+                        terminalDetail: terminalReviewDetail
+                    )
 
-                        // The key itself is never shown after entry.
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("wizard.session_key".localized)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.secondary)
-                            Text("personal.session_key_validated".localized)
-                                .font(.system(size: 11))
-                        }
-
-                        if let chromeLabel = wizardState.launchedChromeProfileLabel {
-                            Divider()
-                            Toggle(
-                                isOn: $wizardState.hasConfirmedChromeContext
-                            ) {
-                                Text(
-                                    String(
-                                        format:
-                                            "chrome_assisted.confirm_context"
-                                                .localized,
-                                        chromeLabel,
-                                        targetProfileName
-                                    )
+                    if let chromeLabel = wizardState.launchedChromeProfileLabel {
+                        Toggle(
+                            isOn: $wizardState.hasConfirmedChromeContext
+                        ) {
+                            Text(
+                                String(
+                                    format:
+                                        "chrome_assisted.confirm_context"
+                                            .localized,
+                                    chromeLabel,
+                                    targetProfileName
                                 )
-                                .font(.system(size: 11))
-                            }
-                            .toggleStyle(.checkbox)
-                            .accessibilityIdentifier("chrome.context_confirmation")
+                            )
+                            .font(.system(size: 11))
                         }
-
-                        Divider()
-
-                        // Selected Organization
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("wizard.organization".localized)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.secondary)
-                            if let selectedOrg = wizardState.testedOrganizations.first(where: { $0.uuid == wizardState.selectedOrgId }) {
-                                Text(selectedOrg.name)
-                                    .font(.system(size: 13))
-                                Text(String(format: "wizard.organization_id".localized, selectedOrg.uuid))
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
+                        .toggleStyle(.checkbox)
+                        .accessibilityIdentifier("chrome.context_confirmation")
                     }
-                    .padding(16)
-                    .background(Color.secondary.opacity(0.05))
-                    .cornerRadius(10)
 
                     // Auto-start session option
                     VStack(alignment: .leading, spacing: 10) {
@@ -1529,7 +1776,7 @@ struct ConfirmStepSetup: View {
                         if case .error = wizardState.validationState {
                             wizardState.validationState = .idle
                         }
-                        wizardState.currentStep = .selectOrg
+                        wizardState.currentStep = .linkClaudeCode
                     }
                 }
                 .buttonStyle(.bordered)
@@ -1543,7 +1790,7 @@ struct ConfirmStepSetup: View {
                             .scaleEffect(0.6)
                             .frame(width: 100)
                     } else {
-                        Text("common.done".localized)
+                        Text("wizard.start_tracking".localized)
                             .frame(width: 100)
                     }
                 }
@@ -1583,6 +1830,14 @@ struct ConfirmStepSetup: View {
                         autoStartSessionEnabled:
                             wizardState
                                 .autoStartSessionEnabled,
+                        terminalCredentialsJSON:
+                            wizardState.shouldLinkTerminalSignIn
+                                ? wizardState.detectedTerminalCredentials
+                                : nil,
+                        terminalAccountName:
+                            wizardState.shouldLinkTerminalSignIn
+                                ? wizardState.detectedTerminalAccountName
+                                : nil,
                         acceptSessionOnlyStorage: acceptSessionOnly,
                         target: target
                     )
@@ -1878,67 +2133,6 @@ struct WizardStatusBox: View {
             RoundedRectangle(cornerRadius: 6)
                 .fill(type.color.opacity(0.1))
         )
-    }
-}
-
-// MARK: - CLI Detected Setup View
-struct CLIDetectedSetupView: View {
-    let credentials: String
-    let onStartTracking: () -> Void
-    let onManualSetup: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
-
-            VStack(spacing: 24) {
-                // Terminal icon
-                ZStack {
-                    Circle()
-                        .fill(Color.green.opacity(0.12))
-                        .frame(width: 80, height: 80)
-
-                    Image(systemName: "terminal.fill")
-                        .font(.system(size: 36))
-                        .foregroundColor(.green)
-                }
-
-                // Title
-                Text("setup.cli_detected.title".localized)
-                    .font(.system(size: 24, weight: .bold))
-
-                // Description
-                Text("setup.cli_detected.description".localized)
-                    .font(.system(size: 14))
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 60)
-
-                // Start tracking button
-                Button(action: onStartTracking) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "chart.bar.fill")
-                        Text("setup.cli_detected.start".localized)
-                    }
-                    .font(.system(size: 14, weight: .semibold))
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, 10)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-
-                // Manual setup link
-                Button(action: onManualSetup) {
-                    Text("setup.cli_detected.manual".localized)
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-
-            Spacer()
-        }
-        .frame(width: 580, height: 680)
     }
 }
 

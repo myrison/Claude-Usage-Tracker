@@ -731,9 +731,6 @@
 "about.reset_confirmation_message" = "これにより、すべてのプロファイル、認証情報、設定が完全に削除されます。アプリは終了し、再度設定する必要があります。この操作は元に戻せません。";
 
 /* Claude Code Info */
-"wizard.claude_code_info_title" = "Claude Codeを使用していますか？";
-"wizard.claude_code_info_description" = "使用状況の追跡は機能しますが、自動セッション開始はセッションキーがないと機能しません";
-"wizard.claude_code_skip_setup" = "セットアップをスキップ";
 
 /* Migration Strings */
 "wizard.migrate_description_short" = "以前のアプリバージョンから古いプロファイルデータをインポート";
@@ -907,11 +904,6 @@
 "popover.overage_balance" = "残高";
 
 // MARK: - Setup Wizard CLI Detection
-"setup.cli_detecting" = "CLI認証情報を確認中...";
-"setup.cli_detected.title" = "CLIを検出しました！";
-"setup.cli_detected.description" = "システムにClaude Code CLIの認証情報が見つかりました。ワンクリックで使用量の追跡を開始できます。";
-"setup.cli_detected.start" = "追跡を開始";
-"setup.cli_detected.manual" = "手動で設定する";
 
 // MARK: - Custom Notification Settings
 "notifications.custom_thresholds" = "カスタムしきい値";
@@ -1323,3 +1315,39 @@
 "popover.extra_usage.absent.claude_account_unresolved" = "ご自身の追加使用量をこの組織と照合できませんでした。「設定 → Claude.ai」でアカウントを再接続してください。";
 "popover.extra_usage.organization_lookup_failed" = "ご自身の追加使用量を今回読み取れませんでした。更新して再試行してください。";
 "cli.connect_extra_usage_hint" = "自分の追加使用を表示するには Claude Code アカウントを接続してください。管理者の場合は、既定で組織の分が表示されます。";
+
+// Claude アカウント設定の概要
+"claude_account.summary.verdict.complete" = "設定完了 — 両方のサインインがリンクされています。RevvyTach はターミナルのサインインを自動更新します。";
+"claude_account.summary.verdict.browser_only" = "ブラウザのサインインのみ — 使用状況の追跡は機能します。自分の追加使用量は表示されず、RevvyTach は Claude Code のアカウントを切り替えられません。";
+"claude_account.summary.verdict.terminal_only" = "設定が不完全です — このプロファイルは報告を停止します。ターミナルのサインインのみがリンクされています。ブラウザのサインインを追加してください。";
+"claude_account.summary.verdict.none" = "設定が不完全です — ブラウザのサインイン（claude.ai）を追加して追跡を開始してください。";
+"claude_account.summary.browser.title" = "ブラウザのサインイン（claude.ai）";
+"claude_account.summary.terminal.title" = "ターミナルのサインイン（Claude Code）";
+"claude_account.summary.status.working" = "動作中";
+"claude_account.summary.status.not_linked" = "未リンク";
+"claude_account.summary.status.missing" = "未設定";
+
+// Claude 設定ウィザード：ターミナルのサインインをリンクして確認
+"wizard.browser_sign_in.title" = "claude.ai にサインイン";
+"wizard.organization.title" = "組織";
+"wizard.link_terminal.title" = "Claude Code をリンク";
+"wizard.link_terminal.subtitle" = "任意ですが推奨します。自分の追加使用量を表示し、Claude Code のアカウントを切り替えられるようになります。";
+"wizard.link_terminal.checking" = "ターミナルのサインインを確認中…";
+"wizard.link_terminal.detected_title" = "この Mac で Claude Code にサインイン済みです";
+"wizard.link_terminal.account" = "アカウント：%@";
+"wizard.link_terminal.directory" = "ディレクトリ：%@";
+"wizard.link_terminal.signed_in" = "サインイン済み";
+"wizard.link_terminal.link_checkbox" = "このサインインをプロファイル「%@」にリンク";
+"wizard.link_terminal.link_detail" = "RevvyTach はブラウザのサインインと一緒に更新し、Claude Code に書き戻すため、このアプリが原因で再サインインを求められることはありません。";
+"wizard.link_terminal.continue_without" = "リンクせずに続ける";
+"wizard.link_terminal.link_continue" = "リンクして続ける";
+"wizard.link_terminal.not_found_title" = "この Mac に Claude Code のサインインがありません";
+"wizard.link_terminal.not_found_detail" = "Claude Code を使用する場合は先にサインインしてください。RevvyTach が検出します。後で「設定 → Claude アカウント」からリンクすることもできます。";
+"wizard.link_terminal.command_label" = "サインインコマンド";
+"wizard.link_terminal.copy_command" = "コマンドをコピー";
+"wizard.link_terminal.check_again" = "再確認";
+"wizard.review.title" = "確認";
+"wizard.review.browser_detail" = "%@ のブラウザサインインを使用できます。";
+"wizard.review.terminal_linked_detail" = "検出されたターミナルのサインインは設定完了時にリンクされます。";
+"wizard.review.terminal_not_linked_detail" = "未リンクです。後で「設定 → Claude アカウント」から追加できます。";
+"wizard.start_tracking" = "追跡を開始";

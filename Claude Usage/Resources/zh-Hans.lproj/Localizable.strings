@@ -731,9 +731,6 @@
 "wizard.skip_migration" = "跳过";
 
 /* Claude Code Info */
-"wizard.claude_code_info_title" = "使用 Claude Code？";
-"wizard.claude_code_info_description" = "使用跟踪将正常工作，但没有会话密钥，自动启动会话将无法工作";
-"wizard.claude_code_skip_setup" = "跳过设置";
 "wizard.migrate_description_short" = "从以前的应用版本导入您的旧配置文件数据";
 
 // History
@@ -905,11 +902,6 @@
 "popover.overage_balance" = "余额";
 
 // MARK: - Setup Wizard CLI Detection
-"setup.cli_detecting" = "正在检查CLI凭证...";
-"setup.cli_detected.title" = "检测到CLI！";
-"setup.cli_detected.description" = "在您的系统上找到了Claude Code CLI凭证。一键开始跟踪您的使用情况。";
-"setup.cli_detected.start" = "开始跟踪";
-"setup.cli_detected.manual" = "手动设置";
 
 // MARK: - Custom Notification Settings
 "notifications.custom_thresholds" = "自定义阈值";
@@ -1319,3 +1311,39 @@
 "popover.extra_usage.absent.claude_account_unresolved" = "无法将您自己的额外用量与此组织匹配 — 请在“设置 → Claude.ai”中重新连接您的账号。";
 "popover.extra_usage.organization_lookup_failed" = "此次未能读取您自己的额外用量。请刷新后重试。";
 "cli.connect_extra_usage_hint" = "连接您的 Claude Code 账号即可查看自己的额外用量。如果您是管理员，默认显示的是组织的用量。";
+
+// Claude 账号设置摘要
+"claude_account.summary.verdict.complete" = "设置完成 — 两种登录均已关联。RevvyTach 会自动续期终端登录。";
+"claude_account.summary.verdict.browser_only" = "仅浏览器登录 — 用量跟踪正常。此处不会显示您自己的额外用量，RevvyTach 也无法将 Claude Code 切换到此账号。";
+"claude_account.summary.verdict.terminal_only" = "设置未完成 — 此配置将停止报告。目前仅关联了终端登录，RevvyTach 无法单独续期。请添加浏览器登录以完成设置。";
+"claude_account.summary.verdict.none" = "设置未完成 — 添加浏览器登录（claude.ai）以开始跟踪用量。";
+"claude_account.summary.browser.title" = "浏览器登录（claude.ai）";
+"claude_account.summary.terminal.title" = "终端登录（Claude Code）";
+"claude_account.summary.status.working" = "正常";
+"claude_account.summary.status.not_linked" = "未关联";
+"claude_account.summary.status.missing" = "缺失";
+
+// Claude 设置向导：关联终端登录并检查
+"wizard.browser_sign_in.title" = "登录 claude.ai";
+"wizard.organization.title" = "组织";
+"wizard.link_terminal.title" = "关联 Claude Code";
+"wizard.link_terminal.subtitle" = "可选但建议。这样 RevvyTach 可以显示您自己的额外用量，并在 Claude Code 账号之间切换。";
+"wizard.link_terminal.checking" = "正在检查终端登录…";
+"wizard.link_terminal.detected_title" = "此 Mac 已登录 Claude Code";
+"wizard.link_terminal.account" = "账号：%@";
+"wizard.link_terminal.directory" = "目录：%@";
+"wizard.link_terminal.signed_in" = "登录于";
+"wizard.link_terminal.link_checkbox" = "将此登录关联到配置“%@”";
+"wizard.link_terminal.link_detail" = "RevvyTach 会随浏览器登录一起续期并写回 Claude Code，因此不会因本应用而再次要求您登录。";
+"wizard.link_terminal.continue_without" = "不关联并继续";
+"wizard.link_terminal.link_continue" = "关联并继续";
+"wizard.link_terminal.not_found_title" = "此 Mac 上未找到 Claude Code 登录";
+"wizard.link_terminal.not_found_detail" = "如果您使用 Claude Code，请先在那里登录，RevvyTach 会找到它。也可以稍后从“设置 → Claude 账号”关联。";
+"wizard.link_terminal.command_label" = "登录命令";
+"wizard.link_terminal.copy_command" = "复制命令";
+"wizard.link_terminal.check_again" = "重新检查";
+"wizard.review.title" = "检查";
+"wizard.review.browser_detail" = "%@ 的浏览器登录已就绪。";
+"wizard.review.terminal_linked_detail" = "检测到的终端登录将在设置完成时关联。";
+"wizard.review.terminal_not_linked_detail" = "未关联。可稍后从“设置 → Claude 账号”添加。";
+"wizard.start_tracking" = "开始跟踪";

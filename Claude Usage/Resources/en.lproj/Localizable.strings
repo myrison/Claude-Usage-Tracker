@@ -809,9 +809,6 @@
 "wizard.migration_skipped" = "Migration skipped. You can manually sync old data later if needed.";
 
 /* Claude Code Info */
-"wizard.claude_code_info_title" = "Using Claude Code?";
-"wizard.claude_code_info_description" = "Usage tracking will work, but auto-start session won't work without session key";
-"wizard.claude_code_skip_setup" = "Skip Setup";
 "wizard.migrate_description_short" = "Import your old profiles data from previous app version";
 
 /* ==================== */
@@ -999,11 +996,6 @@
 "popover.overage_balance" = "Balance";
 
 // MARK: - Setup Wizard CLI Detection
-"setup.cli_detecting" = "Checking for CLI credentials...";
-"setup.cli_detected.title" = "CLI Detected!";
-"setup.cli_detected.description" = "Claude Code CLI credentials found on your system. Start tracking your usage with one click.";
-"setup.cli_detected.start" = "Start Tracking";
-"setup.cli_detected.manual" = "Set Up Manually Instead";
 
 // MARK: - Custom Notification Settings
 "notifications.custom_thresholds" = "Custom Thresholds";
@@ -1337,3 +1329,39 @@
 "popover.extra_usage.absent.claude_account_unresolved" = "Your extra usage couldn't be matched to this organization — reconnect your account in Settings → Claude.ai.";
 "popover.extra_usage.organization_lookup_failed" = "Your extra usage couldn't be read just now. Refresh to try again.";
 "cli.connect_extra_usage_hint" = "Connect your Claude Code account to see your own extra usage. If you're an admin, you'll see your organization's by default.";
+
+// Claude account setup summary
+"claude_account.summary.verdict.complete" = "Fully set up — Both sign-ins linked. RevvyTach renews the terminal sign-in automatically.";
+"claude_account.summary.verdict.browser_only" = "Browser sign-in only — Usage tracking works. You won't see your own extra usage here, and RevvyTach can't switch Claude Code to this account.";
+"claude_account.summary.verdict.terminal_only" = "Setup incomplete — this profile will stop reporting. Only the terminal sign-in is linked. RevvyTach can't renew it on its own, so when Claude Code's sign-in lapses this profile goes silent. Add the browser sign-in to finish setup.";
+"claude_account.summary.verdict.none" = "Setup incomplete — Add the browser sign-in (claude.ai) to start tracking usage.";
+"claude_account.summary.browser.title" = "Browser sign-in (claude.ai)";
+"claude_account.summary.terminal.title" = "Terminal sign-in (Claude Code)";
+"claude_account.summary.status.working" = "Working";
+"claude_account.summary.status.not_linked" = "Not linked";
+"claude_account.summary.status.missing" = "Missing";
+
+// Claude setup wizard: link terminal sign-in and review
+"wizard.browser_sign_in.title" = "Sign in to claude.ai";
+"wizard.organization.title" = "Organization";
+"wizard.link_terminal.title" = "Link Claude Code";
+"wizard.link_terminal.subtitle" = "Optional, recommended. This is what lets RevvyTach show your own extra usage and switch Claude Code between accounts.";
+"wizard.link_terminal.checking" = "Checking this Mac…";
+"wizard.link_terminal.detected_title" = "Claude Code is signed in on this Mac";
+"wizard.link_terminal.account" = "Account: %@";
+"wizard.link_terminal.directory" = "Directory: %@";
+"wizard.link_terminal.signed_in" = "Signed in";
+"wizard.link_terminal.link_checkbox" = "Link this sign-in to the profile “%@”";
+"wizard.link_terminal.link_detail" = "RevvyTach keeps it renewed alongside your browser sign-in, and writes renewals back so Claude Code never asks you to sign in again because of this app.";
+"wizard.link_terminal.continue_without" = "Continue without linking";
+"wizard.link_terminal.link_continue" = "Link and continue";
+"wizard.link_terminal.not_found_title" = "No Claude Code sign-in found on this Mac";
+"wizard.link_terminal.not_found_detail" = "If you use Claude Code, sign in there first and RevvyTach will find it. You can also link it later from Settings → Claude Account.";
+"wizard.link_terminal.command_label" = "Sign-in command";
+"wizard.link_terminal.copy_command" = "Copy command";
+"wizard.link_terminal.check_again" = "Check again";
+"wizard.review.title" = "Review";
+"wizard.review.browser_detail" = "Browser sign-in (claude.ai) is connected to %@.";
+"wizard.review.terminal_linked_detail" = "Terminal sign-in (Claude Code) will be linked to this profile.";
+"wizard.review.terminal_not_linked_detail" = "Terminal sign-in (Claude Code) is not linked. You can add it later from Settings → Claude Account.";
+"wizard.start_tracking" = "Start tracking";

@@ -865,7 +865,7 @@ final class CodexProfileSetupTests: HostedAppTestCase {
         XCTAssertEqual(model.loginState, .idle)
     }
 
-    func testCLIDetectedClaudeSetupFromActiveCodexCreatesAndActivatesClaude()
+    func testManualClaudeSetupWithTerminalLinkFromActiveCodexCreatesAndActivatesClaude()
         async throws
     {
         let context = makeContext()
@@ -884,8 +884,12 @@ final class CodexProfileSetupTests: HostedAppTestCase {
         )
 
         let claude = try await dependencies
-            .completeClaudeCLISetup(
-                credentials: #"{"token":"test-only"}"#
+            .completeClaudeManualSetup(
+                sessionKey: "test-session-key",
+                organizationID: "test-org",
+                autoStartSessionEnabled: false,
+                terminalCredentialsJSON:
+                    #"{"claudeAiOauth":{"accessToken":"test-token"}}"#
             )
 
         XCTAssertEqual(context.manager.profiles.count, 2)
@@ -899,6 +903,7 @@ final class CodexProfileSetupTests: HostedAppTestCase {
             dependencies.profile(id: claude.id)?
                 .cliCredentialsJSON
         )
+        XCTAssertTrue(claude.hasClaudeAI)
         XCTAssertEqual(completion.value, 1)
     }
 
@@ -1287,8 +1292,10 @@ final class CodexProfileSetupTests: HostedAppTestCase {
 
         do {
             _ = try await dependencies
-                .completeClaudeCLISetup(
-                    credentials: "test-only"
+                .completeClaudeManualSetup(
+                    sessionKey: "test-session-key",
+                    organizationID: "test-org",
+                    autoStartSessionEnabled: false
                 )
             XCTFail("Expected credential write failure")
         } catch {}
@@ -1317,8 +1324,10 @@ final class CodexProfileSetupTests: HostedAppTestCase {
 
         do {
             _ = try await dependencies
-                .completeClaudeCLISetup(
-                    credentials: "test-only"
+                .completeClaudeManualSetup(
+                    sessionKey: "test-session-key",
+                    organizationID: "test-org",
+                    autoStartSessionEnabled: false
                 )
             XCTFail("Expected activation failure")
         } catch {

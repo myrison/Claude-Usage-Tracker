@@ -495,22 +495,10 @@ final class ProviderUIDependencies {
         )
     }
 
-    /// One durable completion action shared by CLI detection, manual Claude
-    /// setup, Codex setup, and successful profile migration.
+    /// One durable completion action shared by Claude setup, Codex setup, and
+    /// successful profile migration.
     func markSetupCompleted() {
         setupCompletionWriter()
-    }
-
-    @discardableResult
-    func completeClaudeCLISetup(
-        credentials: String
-    ) async throws -> Profile {
-        var profile = try claudeSetupProfile()
-        profile.cliCredentialsJSON = credentials
-        try profileManager.updateProfileThrowing(profile)
-        try await activateForCompletedSetup(profile.id)
-        markSetupCompleted()
-        return try requiredProfile(profile.id)
     }
 
     @discardableResult
@@ -518,6 +506,8 @@ final class ProviderUIDependencies {
         sessionKey: String,
         organizationID: String?,
         autoStartSessionEnabled: Bool,
+        terminalCredentialsJSON: String? = nil,
+        terminalAccountName: String? = nil,
         acceptSessionOnlyStorage: Bool = false,
         target: ClaudeManualSetupTarget = .compatibilityCurrent
     ) async throws -> Profile {
@@ -527,6 +517,13 @@ final class ProviderUIDependencies {
         )
         credentials.claudeSessionKey = sessionKey
         credentials.organizationId = organizationID
+        let shouldAttemptTerminalLink = terminalCredentialsJSON != nil
+        let validatedTerminalCredentials = terminalCredentialsJSON.flatMap {
+            ClaudeCodeSyncService.carriesLogin($0) ? $0 : nil
+        }
+        if shouldAttemptTerminalLink {
+            credentials.cliCredentialsJSON = validatedTerminalCredentials
+        }
         try profileManager.saveCredentials(
             for: targetProfile.id,
             credentials: credentials,
@@ -535,6 +532,19 @@ final class ProviderUIDependencies {
         var profile = try requiredProfile(targetProfile.id)
         profile.autoStartSessionEnabled =
             autoStartSessionEnabled
+        if shouldAttemptTerminalLink,
+           validatedTerminalCredentials != nil {
+            profile.hasCliAccount = true
+            profile.cliAccountSyncedAt = Date()
+            profile.cliAccountName = terminalAccountName
+        } else if shouldAttemptTerminalLink {
+            // This wizard never manufactures a terminal-only or falsely linked
+            // profile. A detected blob without an access token is ignored and
+            // browser setup still completes normally.
+            profile.hasCliAccount = false
+            profile.cliAccountSyncedAt = nil
+            profile.cliAccountName = nil
+        }
         try profileManager.updateProfileThrowing(profile)
         try await activateForCompletedSetup(profile.id)
         markSetupCompleted()

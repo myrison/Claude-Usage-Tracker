@@ -729,9 +729,6 @@
 "about.reset_confirmation_message" = "Questo eliminerà permanentemente tutti i profili, credenziali e impostazioni. L'app si chiuderà e dovrai configurarla di nuovo. Questa azione non può essere annullata.";
 
 /* Claude Code Info */
-"wizard.claude_code_info_title" = "Stai usando Claude Code?";
-"wizard.claude_code_info_description" = "Il monitoraggio dell'utilizzo funzionerà, ma l'avvio automatico della sessione non funzionerà senza chiave di sessione";
-"wizard.claude_code_skip_setup" = "Salta configurazione";
 
 /* Migration Strings */
 "wizard.migrate_description_short" = "Importa i tuoi vecchi dati dei profili dalla versione precedente dell'app";
@@ -905,11 +902,6 @@
 "popover.overage_balance" = "Saldo";
 
 // MARK: - Setup Wizard CLI Detection
-"setup.cli_detecting" = "Ricerca credenziali CLI...";
-"setup.cli_detected.title" = "CLI Rilevato!";
-"setup.cli_detected.description" = "Credenziali Claude Code CLI trovate nel sistema. Inizia il monitoraggio con un clic.";
-"setup.cli_detected.start" = "Inizia Monitoraggio";
-"setup.cli_detected.manual" = "Configura Manualmente";
 
 // MARK: - Custom Notification Settings
 "notifications.custom_thresholds" = "Soglie Personalizzate";
@@ -1323,3 +1315,39 @@
 "popover.extra_usage.absent.claude_account_unresolved" = "Non è stato possibile abbinare il tuo utilizzo aggiuntivo a questa organizzazione: ricollega il tuo account in Impostazioni → Claude.ai.";
 "popover.extra_usage.organization_lookup_failed" = "Non è stato possibile leggere il tuo utilizzo aggiuntivo in questo momento. Aggiorna per riprovare.";
 "cli.connect_extra_usage_hint" = "Collega il tuo account Claude Code per vedere il tuo utilizzo extra. Se sei un amministratore, per impostazione predefinita vedrai quello della tua organizzazione.";
+
+// Riepilogo della configurazione dell'account Claude
+"claude_account.summary.verdict.complete" = "Configurazione completa — Entrambi gli accessi sono collegati. RevvyTach rinnova automaticamente l'accesso al terminale.";
+"claude_account.summary.verdict.browser_only" = "Solo accesso dal browser — Il monitoraggio funziona. Non vedrai qui il tuo utilizzo aggiuntivo e RevvyTach non potrà passare Claude Code a questo account.";
+"claude_account.summary.verdict.terminal_only" = "Configurazione incompleta — questo profilo smetterà di segnalare. È collegato solo l'accesso al terminale. RevvyTach non può rinnovarlo da solo. Aggiungi l'accesso dal browser.";
+"claude_account.summary.verdict.none" = "Configurazione incompleta — Aggiungi l'accesso dal browser (claude.ai) per iniziare il monitoraggio.";
+"claude_account.summary.browser.title" = "Accesso dal browser (claude.ai)";
+"claude_account.summary.terminal.title" = "Accesso al terminale (Claude Code)";
+"claude_account.summary.status.working" = "Funzionante";
+"claude_account.summary.status.not_linked" = "Non collegato";
+"claude_account.summary.status.missing" = "Mancante";
+
+// Procedura Claude: collega l'accesso al terminale e rivedi
+"wizard.browser_sign_in.title" = "Accedi a claude.ai";
+"wizard.organization.title" = "Organizzazione";
+"wizard.link_terminal.title" = "Collega Claude Code";
+"wizard.link_terminal.subtitle" = "Facoltativo, consigliato. Permette a RevvyTach di mostrare il tuo utilizzo aggiuntivo e passare Claude Code da un account all'altro.";
+"wizard.link_terminal.checking" = "Ricerca di un accesso al terminale…";
+"wizard.link_terminal.detected_title" = "Claude Code ha effettuato l'accesso su questo Mac";
+"wizard.link_terminal.account" = "Account: %@";
+"wizard.link_terminal.directory" = "Directory: %@";
+"wizard.link_terminal.signed_in" = "Accesso effettuato";
+"wizard.link_terminal.link_checkbox" = "Collega questo accesso al profilo “%@”";
+"wizard.link_terminal.link_detail" = "RevvyTach lo rinnova insieme all'accesso dal browser e riscrive i rinnovi, così Claude Code non chiederà di nuovo l'accesso a causa di questa app.";
+"wizard.link_terminal.continue_without" = "Continua senza collegare";
+"wizard.link_terminal.link_continue" = "Collega e continua";
+"wizard.link_terminal.not_found_title" = "Nessun accesso a Claude Code trovato su questo Mac";
+"wizard.link_terminal.not_found_detail" = "Se usi Claude Code, accedi prima da lì e RevvyTach lo troverà. Puoi anche collegarlo più tardi da Impostazioni → Account Claude.";
+"wizard.link_terminal.command_label" = "Comando di accesso";
+"wizard.link_terminal.copy_command" = "Copia comando";
+"wizard.link_terminal.check_again" = "Controlla di nuovo";
+"wizard.review.title" = "Rivedi";
+"wizard.review.browser_detail" = "L'accesso dal browser è pronto per %@.";
+"wizard.review.terminal_linked_detail" = "L'accesso al terminale rilevato verrà collegato al termine.";
+"wizard.review.terminal_not_linked_detail" = "Non collegato. Puoi aggiungerlo più tardi da Impostazioni → Account Claude.";
+"wizard.start_tracking" = "Avvia";
