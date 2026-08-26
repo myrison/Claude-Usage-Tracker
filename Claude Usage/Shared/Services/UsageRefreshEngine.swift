@@ -2,6 +2,35 @@ import Foundation
 import Combine
 import UsageCore
 
+private final class OwnedAsyncPreparation<Value: Sendable>:
+    @unchecked Sendable
+{
+    private let task: Task<Value, Error>
+
+    init(
+        operation: @escaping @MainActor @Sendable () async throws -> Value
+    ) {
+        task = Task { @MainActor in
+            try Task.checkCancellation()
+            let value = try await operation()
+            try Task.checkCancellation()
+            return value
+        }
+    }
+
+    deinit {
+        task.cancel()
+    }
+
+    func value() async throws -> Value {
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+}
+
 extension UsageRefreshTrigger {
     nonisolated var isUserInitiated: Bool {
         self == .manual
@@ -1155,12 +1184,15 @@ final class UsageRefreshRuntime {
                 }
 
                 if profile.claudeSessionKey == nil {
+                    let preparedCoreRequest = OwnedAsyncPreparation {
+                        try await apiService
+                            .captureUsageRequestPreparingTerminalSignIn(
+                                for: profile
+                            )
+                    }
                     return CapturedClaudeProviderRequest(
                         coreFetch: {
-                            let coreRequest = try await apiService
-                                .captureUsageRequestPreparingTerminalSignIn(
-                                    for: profile
-                                )
+                            let coreRequest = try await preparedCoreRequest.value()
                             return try await apiService.fetchUsageData(
                                 using: coreRequest
                             )

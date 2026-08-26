@@ -1051,6 +1051,7 @@ class ClaudeAPIService: APIServiceProtocol {
         credentialsJSON: String,
         logNoBrowserRenewal: Bool = false
     ) async -> (credentialsJSON: String, accessToken: String)? {
+        guard !Task.isCancelled else { return nil }
         let sync = ClaudeCodeSyncService.shared
         if !sync.isTokenExpired(credentialsJSON),
            let accessToken = sync.extractAccessToken(from: credentialsJSON) {
@@ -1077,6 +1078,7 @@ class ClaudeAPIService: APIServiceProtocol {
             from: credentialsJSON,
             forAccountNamed: profile.cliAccountName
         )
+        guard !Task.isCancelled else { return nil }
         guard
             case .renewed(let refreshed) = outcome,
             let accessToken = sync.extractAccessToken(from: refreshed)
@@ -1221,6 +1223,7 @@ class ClaudeAPIService: APIServiceProtocol {
         replacing stale: String,
         logNoBrowserRenewal: Bool = false
     ) async -> (credentialsJSON: String, accessToken: String)? {
+        guard !Task.isCancelled else { return nil }
         guard let accountName = profile.cliAccountName else { return nil }
 
         let key = AdoptionAttemptKey(
@@ -1252,6 +1255,7 @@ class ClaudeAPIService: APIServiceProtocol {
               !sync.isTokenExpired(live),
               let accessToken = sync.extractAccessToken(from: live)
         else { return nil }
+        guard !Task.isCancelled else { return nil }
 
         do {
             // No refresh token was spent here — this credential is Claude
@@ -1272,15 +1276,16 @@ class ClaudeAPIService: APIServiceProtocol {
             )
         }
 
-        LoggingService.shared.log(
-            "Recovered the member's own extra usage for profile "
-            + "'\(profile.name)' by adopting the login Claude Code is "
-            + "currently holding; the stored copy could no longer be renewed."
-        )
         if logNoBrowserRenewal {
             loggingService.log(
                 "Adopted Claude Code's live login for profile "
                 + "'\(profile.name)' without a browser sign-in."
+            )
+        } else {
+            LoggingService.shared.log(
+                "Recovered the member's own extra usage for profile "
+                + "'\(profile.name)' by adopting the login Claude Code is "
+                + "currently holding; the stored copy could no longer be renewed."
             )
         }
 
